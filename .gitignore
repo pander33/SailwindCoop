@@ -1,0 +1,19 @@
+# Build intermediates / output
+[Bb]in/
+[Oo]bj/
+*.dll.config
+
+# Build artifacts that land outside this repo (BepInEx/plugins) are not tracked here.
+
+# IDE / editor
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
