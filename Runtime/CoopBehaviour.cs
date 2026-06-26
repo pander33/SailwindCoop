@@ -15,6 +15,9 @@ namespace SailwindCoop.Runtime
         public static CoopBehaviour Instance { get; private set; }
         public CoopNet Net { get; private set; }
         public PlayerSync Players { get; private set; }
+        public BoatSync Boats { get; private set; }
+        public EnvironmentSync Env { get; private set; }
+        public ControlsSync Controls { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -36,6 +39,15 @@ namespace SailwindCoop.Runtime
                 SnapshotHz = Plugin.Cfg.SnapshotHz.Value,
             };
 
+            Boats = new BoatSync(Net)
+            {
+                InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value,
+                SnapshotHz = Plugin.Cfg.SnapshotHz.Value,
+            };
+
+            Env = new EnvironmentSync(Net);
+            Controls = new ControlsSync(Net);
+
             Net.OnAccepted += ack =>
                 Plugin.Logger.LogInfo("[Coop] Подключение принято, NetId=" + ack.AssignedNetId);
             Net.OnClientReady += s =>
@@ -50,7 +62,14 @@ namespace SailwindCoop.Runtime
         {
             HandleHotkeys();
             Net.PollEvents();
-            Players.Tick(Time.deltaTime);
+            float dt = Time.deltaTime;
+            // Boat first: the slaved deck moves, then players (children) settle on it.
+            Boats.Tick(dt);
+            Boats.ApplyRemote();
+            Env.Tick(dt);
+            Controls.Tick(dt);
+            Controls.ApplyClient(dt);
+            Players.Tick(dt);
             Players.ApplyRemotes();
         }
 
@@ -60,6 +79,18 @@ namespace SailwindCoop.Runtime
             {
                 case MsgType.PlayerState:
                     Players.OnPlayerState((PlayerStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.BoatState:
+                    Boats.OnBoatState((BoatStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.EnvState:
+                    Env.OnEnvState((EnvStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.ControlState:
+                    Controls.OnControlState((ControlStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.ControlRequest:
+                    Controls.OnControlRequest((ControlRequestMsg)msg, fromPeer);
                     break;
             }
         }
@@ -71,6 +102,9 @@ namespace SailwindCoop.Runtime
 
         private void OnDestroy()
         {
+            Controls?.Clear();
+            Env?.Clear();
+            Boats?.Clear();
             Players?.Clear();
             Net?.Stop();
         }
@@ -103,6 +137,9 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 Net.Stop();
+                Controls.Clear();
+                Env.Clear();
+                Boats.Clear();
                 Players.Clear();
             }
         }
