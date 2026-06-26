@@ -48,6 +48,7 @@ namespace SailwindCoop.Runtime
                      (coop.Players.LocalPlayerFound ? "найден" : "—"));
                 float d = coop.Players.NearestRemoteDistance;
                 if (d >= 0f) Line("До аватара", d.ToString("0.0") + " м");
+                Line("Анимация", coop.Players.NearestRemoteAnim);
 
                 if (coop.Boats != null)
                 {
@@ -60,8 +61,12 @@ namespace SailwindCoop.Runtime
                 Line("Среда", EnvText());
 
                 if (coop.Controls != null)
+                {
                     Line("Управление", coop.Controls.RopeCount + " тросов, " +
+                         coop.Controls.WinchCount + " леб., " +
                          coop.Controls.NodeCount + " узлов");
+                    Line("ControlRequest", coop.Controls.LastControlRequestText);
+                }
 
                 Line("Прицел", InteractText());
             }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using SailwindCoop.Net;
 using UnityEngine;
 
@@ -15,11 +16,57 @@ namespace SailwindCoop.Sync
         private sealed class RemoteAvatar
         {
             public GameObject Go;
+            public Transform Body;
+            public Transform Head;
+            public TextMesh NameText;
+            public Animator Animator;
+            public AvatarPoseDriver PoseDriver;
             public readonly NetTransform Net = new NetTransform();
+            public Quaternion HeadWorldRot = Quaternion.identity;
+            public bool HeadDrivenByAnimator;
+            public float AnimSpeed;
+            public float AnimTurn;
+            public float AnimTargetSpeed;
+            public float AnimTargetTurn;
+            public bool AnimMoving;
+            public Quaternion LastAnimRot;
+            public long LastAnimTick;
+            public CoordFrame LastAnimFrame;
+            public bool HasAnimSnapshot;
+            public bool HasSpeedParam;
+            public bool HasTurnParam;
+        }
+
+        private sealed class AvatarPoseDriver : MonoBehaviour
+        {
+            public Transform Spine;
+            public Transform Chest;
+            public Transform Neck;
+            public float TargetPitch;
+
+            private bool _ready;
+
+            public void CaptureBase()
+            {
+                _ready = Spine != null || Chest != null || Neck != null;
+            }
+
+            private void LateUpdate()
+            {
+                if (!_ready) return;
+
+                float pitch = Mathf.Clamp(TargetPitch, -35f, 45f);
+                if (Spine != null) Spine.localRotation = Spine.localRotation * Quaternion.Euler(-pitch * 0.25f, 0f, 0f);
+                if (Chest != null) Chest.localRotation = Chest.localRotation * Quaternion.Euler(-pitch * 0.35f, 0f, 0f);
+                if (Neck != null) Neck.localRotation = Neck.localRotation * Quaternion.Euler(-pitch * 0.20f, 0f, 0f);
+            }
         }
 
         private readonly CoopNet _net;
         private readonly Dictionary<uint, RemoteAvatar> _remotes = new Dictionary<uint, RemoteAvatar>();
+        private AssetBundle _avatarBundle;
+        private GameObject _avatarPrefab;
+        private bool _avatarBundleTried;
 
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
@@ -35,6 +82,29 @@ namespace SailwindCoop.Sync
 
         public int RemoteCount => _remotes.Count;
         public bool LocalPlayerFound => _localPlayer != null;
+        public string NearestRemoteAnim
+        {
+            get
+            {
+                RemoteAvatar best = null;
+                float bestDist = -1f;
+                foreach (var a in _remotes.Values)
+                {
+                    if (a.Go == null) continue;
+                    float d = _localPlayer != null ? Vector3.Distance(_localPlayer.position, a.Go.transform.position) : 0f;
+                    if (best == null || d < bestDist)
+                    {
+                        best = a;
+                        bestDist = d;
+                    }
+                }
+                if (best == null || best.Animator == null) return "—";
+                return "Speed " + best.AnimSpeed.ToString("0.00") +
+                       " -> " + best.AnimTargetSpeed.ToString("0.0") +
+                       ", Turn " + best.AnimTurn.ToString("0.00") +
+                       ", moving " + (best.AnimMoving ? "ДА" : "—");
+            }
+        }
 
         /// <summary>Distance from the local player to the nearest remote avatar, or -1 if none.</summary>
         public float NearestRemoteDistance
@@ -81,17 +151,22 @@ namespace SailwindCoop.Sync
             CoordFrame frame;
             Vector3 pos;
             Quaternion rot;
+            Quaternion headRot;
+            Camera renderCamera = PickRenderCamera();
+            Transform head = renderCamera != null ? renderCamera.transform : pl;
             if (boat != null)
             {
                 frame = CoordFrame.Boat;
                 pos = boat.InverseTransformPoint(pl.position);
                 rot = Quaternion.Inverse(boat.rotation) * pl.rotation;
+                headRot = Quaternion.Inverse(boat.rotation) * head.rotation;
             }
             else
             {
                 frame = CoordFrame.World;
                 pos = CoordSpace.LocalToReal(pl.position);
                 rot = pl.rotation;
+                headRot = head.rotation;
             }
 
             // Velocity in the same frame (reset when the frame changes).
@@ -113,6 +188,7 @@ namespace SailwindCoop.Sync
                 Frame = frame,
                 Pos = pos,
                 Rot = rot,
+                HeadRot = headRot,
                 Vel = vel,
             }, LiteNetLib.DeliveryMethod.Unreliable);
         }
@@ -145,6 +221,7 @@ namespace SailwindCoop.Sync
                 {
                     a.Net.ToWorldPos = p => boat.TransformPoint(p);
                     a.Net.ToWorldRot = q => boat.rotation * q;
+                    a.HeadWorldRot = boat.rotation * msg.HeadRot;
                 }
                 // If we have no boat yet, leave the previous converter; the avatar will
                 // settle once we're aboard.
@@ -153,9 +230,11 @@ namespace SailwindCoop.Sync
             {
                 a.Net.ToWorldPos = CoordSpace.RealToLocal;
                 a.Net.ToWorldRot = q => q;
+                a.HeadWorldRot = msg.HeadRot;
             }
 
             a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            UpdateAnimatorTargets(a, msg);
         }
 
         // -----------------------------------------------------------------
@@ -167,7 +246,11 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready) return;
             long now = _net.Clock.ServerTick;
             foreach (var a in _remotes.Values)
-                if (a.Go != null) a.Net.Apply(a.Go.transform, now);
+            {
+                if (a.Go == null) continue;
+                a.Net.Apply(a.Go.transform, now);
+                ApplyAvatarPolish(a);
+            }
         }
 
         public void RemoveRemote(uint netId)
@@ -186,6 +269,13 @@ namespace SailwindCoop.Sync
             _remotes.Clear();
             _localPlayer = null;
             _haveLast = false;
+            if (_avatarBundle != null)
+            {
+                _avatarBundle.Unload(false);
+                _avatarBundle = null;
+                _avatarPrefab = null;
+                _avatarBundleTried = false;
+            }
         }
 
         // -----------------------------------------------------------------
@@ -210,6 +300,90 @@ namespace SailwindCoop.Sync
 
         /// <summary>The boat the local player is currently standing on, or null.</summary>
         private Transform CurrentBoat => _emb != null ? _emb.debugOutCurrentBoat : null;
+
+        private void ApplyAvatarPolish(RemoteAvatar a)
+        {
+            if (a.Go == null) return;
+
+            ApplyAnimatorParams(a);
+            ApplyLookPitch(a);
+
+            if (a.Head != null && !a.HeadDrivenByAnimator)
+            {
+                Quaternion localHead = Quaternion.Inverse(a.Go.transform.rotation) * a.HeadWorldRot;
+                a.Head.localRotation = Quaternion.Slerp(a.Head.localRotation, localHead, 0.35f);
+            }
+
+            if (a.NameText != null)
+            {
+                Camera cam = PickRenderCamera();
+                if (cam != null)
+                    a.NameText.transform.rotation = Quaternion.LookRotation(a.NameText.transform.position - cam.transform.position, Vector3.up);
+            }
+        }
+
+        private void ApplyLookPitch(RemoteAvatar a)
+        {
+            if (a.PoseDriver == null) return;
+            Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
+            float pitch = Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg;
+            a.PoseDriver.TargetPitch = Mathf.Clamp(pitch, -35f, 45f);
+        }
+
+        private void ApplyAnimatorParams(RemoteAvatar a)
+        {
+            if (a.Animator == null) return;
+
+            float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+            a.AnimSpeed = Mathf.Lerp(a.AnimSpeed, a.AnimTargetSpeed, 1f - Mathf.Exp(-12f * dt));
+            a.AnimTurn = Mathf.Lerp(a.AnimTurn, a.AnimTargetTurn, 1f - Mathf.Exp(-10f * dt));
+
+            if (a.HasSpeedParam) a.Animator.SetFloat("Speed", a.AnimSpeed);
+            if (a.HasTurnParam) a.Animator.SetFloat("Turn", a.AnimTurn);
+        }
+
+        private void UpdateAnimatorTargets(RemoteAvatar a, PlayerStateMsg msg)
+        {
+            Vector3 planarVel = msg.Vel;
+            planarVel.y = 0f; // ignore camera/head bob and small deck height corrections
+            float speed = planarVel.magnitude;
+
+            // Feed the animator an intent value, not raw metres/sec. This matches simple
+            // controllers where Speed=0 is idle and Speed around 3 is run, and avoids
+            // half-blends after the walk clip was removed.
+            if (a.AnimMoving)
+            {
+                if (speed < 0.08f) a.AnimMoving = false;
+            }
+            else
+            {
+                if (speed > 0.18f) a.AnimMoving = true;
+            }
+            a.AnimTargetSpeed = a.AnimMoving ? 3f : 0f;
+
+            if (!a.HasAnimSnapshot || a.LastAnimFrame != msg.Frame)
+            {
+                a.LastAnimRot = msg.Rot;
+                a.LastAnimTick = msg.Tick;
+                a.LastAnimFrame = msg.Frame;
+                a.HasAnimSnapshot = true;
+                a.AnimTargetTurn = 0f;
+                return;
+            }
+
+            float secs = (msg.Tick - a.LastAnimTick) / 1000f;
+            if (secs > 0.0001f)
+            {
+                Vector3 prevForward = a.LastAnimRot * Vector3.forward;
+                Vector3 nextForward = msg.Rot * Vector3.forward;
+                float yawPerSec = Vector3.SignedAngle(prevForward, nextForward, Vector3.up) / secs;
+                a.AnimTargetTurn = Mathf.Abs(yawPerSec) < 15f ? 0f : Mathf.Clamp(yawPerSec / 180f, -1f, 1f);
+            }
+
+            a.LastAnimRot = msg.Rot;
+            a.LastAnimTick = msg.Tick;
+            a.LastAnimFrame = msg.Frame;
+        }
 
         /// <summary>One-time hierarchy dump to understand which transform = visible player.</summary>
         private void DumpHierarchy()
@@ -236,12 +410,11 @@ namespace SailwindCoop.Sync
 
         private RemoteAvatar CreateAvatar(uint netId)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            RemoteAvatar bundled = TryCreateBundledAvatar(netId);
+            if (bundled != null) return bundled;
+
+            var go = new GameObject("CoopPlayer_" + netId);
             go.name = "CoopPlayer_" + netId;
-            // No physics: it's a visual proxy driven entirely by the network.
-            var col = go.GetComponent<Collider>();
-            if (col != null) Object.Destroy(col);
-            go.transform.localScale = new Vector3(0.5f, 0.9f, 0.5f);
 
             // Put the avatar on a layer the render camera actually draws. The local
             // player sits on a "Player" layer the first-person camera culls (so you
@@ -250,25 +423,279 @@ namespace SailwindCoop.Sync
             go.layer = PickVisibleLayer();
 
             // CreatePrimitive's Standard material doesn't render reliably in the shipped
-            // build. Use an unlit, always-visible shader and a bright colour.
-            var rend = go.GetComponent<Renderer>();
-            if (rend != null)
+            // build. Use unlit, always-visible materials for the simple Stage 3 proxy.
+            Shader sh = Shader.Find("Sprites/Default");
+            if (sh == null) sh = Shader.Find("Unlit/Color");
+            if (sh == null) sh = Shader.Find("Standard");
+
+            var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            body.name = "Body";
+            body.transform.SetParent(go.transform, false);
+            body.transform.localPosition = new Vector3(0f, -0.45f, 0f);
+            body.transform.localScale = new Vector3(0.45f, 0.65f, 0.45f);
+            body.layer = go.layer;
+            var bodyCol = body.GetComponent<Collider>();
+            if (bodyCol != null) Object.Destroy(bodyCol);
+            SetUnlit(body.GetComponent<Renderer>(), sh, new Color(0.15f, 0.6f, 1f));
+
+            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(go.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.35f, 0f);
+            head.transform.localScale = new Vector3(0.32f, 0.32f, 0.32f);
+            head.layer = go.layer;
+            var headCol = head.GetComponent<Collider>();
+            if (headCol != null) Object.Destroy(headCol);
+            SetUnlit(head.GetComponent<Renderer>(), sh, new Color(0.95f, 0.85f, 0.65f));
+
+            var look = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            look.name = "LookDir";
+            look.transform.SetParent(head.transform, false);
+            look.transform.localPosition = new Vector3(0f, 0f, 0.28f);
+            look.transform.localScale = new Vector3(0.08f, 0.08f, 0.22f);
+            look.layer = go.layer;
+            var lookCol = look.GetComponent<Collider>();
+            if (lookCol != null) Object.Destroy(lookCol);
+            SetUnlit(look.GetComponent<Renderer>(), sh, new Color(0.1f, 0.1f, 0.12f));
+
+            var nameGo = new GameObject("Name");
+            nameGo.transform.SetParent(go.transform, false);
+            nameGo.transform.localPosition = new Vector3(0f, 0.9f, 0f);
+            nameGo.layer = go.layer;
+            var text = nameGo.AddComponent<TextMesh>();
+            text.text = _net.GetPlayerName(netId);
+            text.anchor = TextAnchor.MiddleCenter;
+            text.alignment = TextAlignment.Center;
+            text.characterSize = 0.18f;
+            text.fontSize = 48;
+            text.color = Color.white;
+            var textRenderer = nameGo.GetComponent<Renderer>();
+            if (textRenderer != null)
             {
-                Shader sh = Shader.Find("Sprites/Default");
-                if (sh == null) sh = Shader.Find("Unlit/Color");
-                if (sh == null) sh = Shader.Find("Standard");
-                var mat = new Material(sh) { color = new Color(0.15f, 0.6f, 1f) };
-                rend.material = mat;
-                rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                rend.receiveShadows = false;
-                Plugin.Logger.LogInfo("[PlayerSync] Аватар NetId=" + netId +
-                                      " шейдер='" + (sh != null ? sh.name : "НЕТ") +
-                                      "' слой=" + go.layer);
+                textRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                textRenderer.receiveShadows = false;
             }
+
+            Plugin.Logger.LogInfo("[PlayerSync] Аватар NetId=" + netId +
+                                  " шейдер='" + (sh != null ? sh.name : "НЕТ") +
+                                  "' слой=" + go.layer);
 
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Создан аватар игрока NetId=" + netId);
-            return new RemoteAvatar { Go = go };
+            return new RemoteAvatar { Go = go, Body = body.transform, Head = head.transform, NameText = text };
+        }
+
+        private RemoteAvatar TryCreateBundledAvatar(uint netId)
+        {
+            GameObject prefab = GetAvatarPrefab();
+            if (prefab == null) return null;
+
+            var go = Object.Instantiate(prefab);
+            go.name = "CoopPlayer_" + netId;
+            int layer = PickVisibleLayer();
+            SetLayerRecursive(go.transform, layer);
+            StripColliders(go);
+
+            var animator = go.GetComponentInChildren<Animator>(true);
+            bool hasSpeed = false;
+            bool hasTurn = false;
+            if (animator != null)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                animator.updateMode = AnimatorUpdateMode.Normal;
+                animator.enabled = true;
+                foreach (var p in animator.parameters)
+                {
+                    if (p.type != AnimatorControllerParameterType.Float) continue;
+                    if (p.name == "Speed") hasSpeed = true;
+                    if (p.name == "Turn") hasTurn = true;
+                }
+                Plugin.Logger.LogInfo("[PlayerSync] Animator params: Speed=" + hasSpeed + ", Turn=" + hasTurn);
+            }
+
+            Transform head = FindChildRecursive(go.transform, "Head");
+            if (head == null) head = FindChildRecursive(go.transform, "Neck");
+            Transform spine = FindChildRecursive(go.transform, "Spine");
+            Transform chest = FindChildRecursive(go.transform, "Spine1");
+            if (chest == null) chest = FindChildRecursive(go.transform, "Chest");
+            Transform neck = FindChildRecursive(go.transform, "Neck");
+            var pose = go.AddComponent<AvatarPoseDriver>();
+            pose.Spine = spine;
+            pose.Chest = chest;
+            pose.Neck = neck;
+            pose.CaptureBase();
+
+            var nameGo = new GameObject("Name");
+            nameGo.transform.SetParent(go.transform, false);
+            nameGo.transform.localPosition = new Vector3(0f, 2.05f, 0f);
+            nameGo.layer = layer;
+            var text = nameGo.AddComponent<TextMesh>();
+            text.text = _net.GetPlayerName(netId);
+            text.anchor = TextAnchor.MiddleCenter;
+            text.alignment = TextAlignment.Center;
+            text.characterSize = 0.18f;
+            text.fontSize = 48;
+            text.color = Color.white;
+            var textRenderer = nameGo.GetComponent<Renderer>();
+            if (textRenderer != null)
+            {
+                textRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                textRenderer.receiveShadows = false;
+            }
+
+            Object.DontDestroyOnLoad(go);
+            Plugin.Logger.LogInfo("[PlayerSync] Создан avatar.bundle аватар NetId=" + netId +
+                                  ", head=" + (head != null ? head.name : "нет"));
+            Plugin.Logger.LogInfo("[PlayerSync] Pose bones: spine=" + (spine != null ? spine.name : "нет") +
+                                  ", chest=" + (chest != null ? chest.name : "нет") +
+                                  ", neck=" + (neck != null ? neck.name : "нет"));
+            return new RemoteAvatar
+            {
+                Go = go,
+                Body = go.transform,
+                Head = head,
+                NameText = text,
+                Animator = animator,
+                PoseDriver = pose,
+                HeadDrivenByAnimator = animator != null,
+                HasSpeedParam = hasSpeed,
+                HasTurnParam = hasTurn,
+            };
+        }
+
+        private GameObject GetAvatarPrefab()
+        {
+            if (_avatarBundleTried) return _avatarPrefab;
+            _avatarBundleTried = true;
+
+            string path = Plugin.AvatarBundlePath;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle не найден, используется примитивный аватар");
+                return null;
+            }
+
+            _avatarBundle = AssetBundle.LoadFromFile(path);
+            if (_avatarBundle == null)
+            {
+                Plugin.Logger.LogWarning("[PlayerSync] Не удалось загрузить avatar.bundle: " + path +
+                                         " (" + ReadBundleHeader(path) + ")");
+                return null;
+            }
+
+            _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Modular Fantasy Character");
+            if (_avatarPrefab == null)
+                _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Modular Fantasy Character.prefab");
+            if (_avatarPrefab == null)
+                _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Cowboy");
+            var names = _avatarBundle.GetAllAssetNames();
+            string listed = names != null && names.Length > 0 ? string.Join(", ", names) : "<empty>";
+            Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle assets: " + listed);
+
+            if (_avatarPrefab == null && names != null)
+                _avatarPrefab = PickAvatarPrefab(names, "modular fantasy character");
+
+            if (_avatarPrefab == null && names != null)
+                _avatarPrefab = PickAvatarPrefab(names, preferCowboy: true);
+
+            if (_avatarPrefab == null && names != null)
+                _avatarPrefab = PickAvatarPrefab(names, preferCowboy: false);
+
+            if (_avatarPrefab == null)
+            {
+                Plugin.Logger.LogWarning("[PlayerSync] В avatar.bundle не найден GameObject prefab");
+                _avatarBundle.Unload(false);
+                _avatarBundle = null;
+                return null;
+            }
+
+            Plugin.Logger.LogInfo("[PlayerSync] Загружен avatar.bundle prefab '" + _avatarPrefab.name + "'");
+            return _avatarPrefab;
+        }
+
+        private GameObject PickAvatarPrefab(string[] names, string contains)
+        {
+            foreach (string name in names)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+                if (name.ToLowerInvariant().IndexOf(contains) < 0) continue;
+
+                var go = _avatarBundle.LoadAsset<GameObject>(name);
+                if (go != null)
+                {
+                    Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle выбран asset '" + name + "' -> '" + go.name + "'");
+                    return go;
+                }
+            }
+            return null;
+        }
+
+        private GameObject PickAvatarPrefab(string[] names, bool preferCowboy)
+        {
+            foreach (string name in names)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+                if (preferCowboy && name.ToLowerInvariant().IndexOf("cowboy") < 0) continue;
+
+                var go = _avatarBundle.LoadAsset<GameObject>(name);
+                if (go != null)
+                {
+                    Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle выбран asset '" + name + "' -> '" + go.name + "'");
+                    return go;
+                }
+            }
+            return null;
+        }
+
+        private string ReadBundleHeader(string path)
+        {
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                int n = Mathf.Min(bytes.Length, 96);
+                string header = System.Text.Encoding.ASCII.GetString(bytes, 0, n).Replace('\0', ' ');
+                return header.Trim();
+            }
+            catch (System.Exception e)
+            {
+                return "header read failed: " + e.Message;
+            }
+        }
+
+        private void SetUnlit(Renderer rend, Shader sh, Color color)
+        {
+            if (rend == null) return;
+            var mat = new Material(sh) { color = color };
+            rend.material = mat;
+            rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            rend.receiveShadows = false;
+        }
+
+        private void SetLayerRecursive(Transform root, int layer)
+        {
+            if (root == null) return;
+            root.gameObject.layer = layer;
+            for (int i = 0; i < root.childCount; i++)
+                SetLayerRecursive(root.GetChild(i), layer);
+        }
+
+        private void StripColliders(GameObject root)
+        {
+            if (root == null) return;
+            foreach (var col in root.GetComponentsInChildren<Collider>(true))
+                if (col != null) Object.Destroy(col);
+        }
+
+        private Transform FindChildRecursive(Transform root, string name)
+        {
+            if (root == null) return null;
+            if (root.name == name) return root;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform found = FindChildRecursive(root.GetChild(i), name);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         /// <summary>The highest-depth enabled camera — usually the one drawing the main view.</summary>

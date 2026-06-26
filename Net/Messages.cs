@@ -195,6 +195,7 @@ namespace SailwindCoop.Net
         public CoordFrame Frame;
         public Vector3 Pos;       // meaning depends on Frame (real space, or boat-local)
         public Quaternion Rot;    // world rotation, or boat-local rotation
+        public Quaternion HeadRot; // world rotation, or boat-local head/camera rotation
         public Vector3 Vel;       // velocity in the same frame, for extrapolation (may be zero)
 
         public MsgType Type => MsgType.PlayerState;
@@ -206,6 +207,7 @@ namespace SailwindCoop.Net
             w.Put((byte)Frame);
             w.PutVector3(Pos);
             w.PutQuaternion(Rot);
+            w.PutQuaternion(HeadRot);
             w.PutVector3(Vel);
         }
 
@@ -216,6 +218,7 @@ namespace SailwindCoop.Net
             Frame = (CoordFrame)r.GetByte();
             Pos = r.GetVector3();
             Rot = r.GetQuaternion();
+            HeadRot = r.GetQuaternion();
             Vel = r.GetVector3();
         }
     }

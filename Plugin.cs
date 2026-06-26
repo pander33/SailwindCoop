@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using System.IO;
 using UnityEngine;
 
 namespace SailwindCoop
@@ -18,6 +19,7 @@ namespace SailwindCoop
         internal static Plugin Instance { get; private set; }
         internal new static ManualLogSource Logger { get; private set; }
         internal static CoopConfig Cfg { get; private set; }
+        internal static string AvatarBundlePath => Path.Combine(Path.GetDirectoryName(Instance.Info.Location), "avatar.bundle");
 
         private void Awake()
         {

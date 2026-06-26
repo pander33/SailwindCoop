@@ -49,6 +49,7 @@ namespace SailwindCoop.Net
 
         // Host: connected client sessions, keyed by peer id. Client: single host peer.
         private readonly Dictionary<int, PeerSession> _sessions = new Dictionary<int, PeerSession>();
+        private readonly Dictionary<uint, string> _playerNames = new Dictionary<uint, string>();
         private NetPeer _hostPeer;            // client side: the host
         private long _lastTimeSyncTick;
 
@@ -78,6 +79,15 @@ namespace SailwindCoop.Net
 
         public int PeerCount => _sessions.Count;
         public double RttMs => Clock.RttMs;
+
+        public string GetPlayerName(uint netId)
+        {
+            if (_playerNames.TryGetValue(netId, out string name) && !string.IsNullOrEmpty(name))
+                return name;
+            if (netId == MyNetId && !string.IsNullOrEmpty(PlayerName))
+                return PlayerName;
+            return "Player " + netId;
+        }
 
         // -----------------------------------------------------------------
         // Lifecycle
@@ -208,6 +218,7 @@ namespace SailwindCoop.Net
                 if (_sessions.TryGetValue(peer.Id, out var s) && s.HandshakeDone)
                 {
                     Registry.Remove(s.PlayerNetId);
+                    _playerNames.Remove(s.PlayerNetId);
                     OnPlayerLeft?.Invoke(s.PlayerNetId);
                 }
                 _sessions.Remove(peer.Id);
@@ -281,6 +292,8 @@ namespace SailwindCoop.Net
             session.HandshakeDone = true;
             session.PlayerNetId = assigned;
             session.PlayerName = string.IsNullOrEmpty(hello.PlayerName) ? ("Player" + assigned) : hello.PlayerName;
+            _playerNames[assigned] = session.PlayerName;
+            _playerNames[NetRegistry.HostPlayerNetId] = PlayerName;
 
             peer.Send(new HelloAckMsg
             {
@@ -329,6 +342,8 @@ namespace SailwindCoop.Net
             Clock.OnReply(Clock.LocalTick, ack.ServerTick);
             Registry.Register(ack.AssignedNetId, NetObjKind.Player, ack.AssignedNetId);
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
+            _playerNames[ack.AssignedNetId] = PlayerName;
+            _playerNames[NetRegistry.HostPlayerNetId] = string.IsNullOrEmpty(ack.HostPlayerName) ? "Host" : ack.HostPlayerName;
             _log("[CoopNet] Принят хостом. Мой NetId=" + ack.AssignedNetId + ", хост='" + ack.HostPlayerName + "'");
             OnAccepted?.Invoke(ack);
         }

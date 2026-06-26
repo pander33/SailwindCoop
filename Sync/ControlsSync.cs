@@ -56,6 +56,12 @@ namespace SailwindCoop.Sync
         private const float LocalHoldMs = 600f;   // keep ownership this long after the last local change
         private const float LenEps = 1e-5f;
 
+        private int _lastReqIndex = -1;
+        private float _lastReqLength;
+        private bool _lastReqHasWinchRotation;
+        private bool _lastReqIncoming;
+        private long _lastReqTick;
+
         private float _sendTimer;
         private bool _warnedMismatch;
 
@@ -70,6 +76,20 @@ namespace SailwindCoop.Sync
 
         public int RopeCount => _ropes.Length;
         public int NodeCount => _nodes.Length;
+        public int WinchCount => _winches.Length;
+
+        public string LastControlRequestText
+        {
+            get
+            {
+                if (_lastReqIndex < 0) return "—";
+                long age = _net.Clock.ServerTick - _lastReqTick;
+                if (age < 0) age = 0;
+                string dir = _lastReqIncoming ? "вх" : "исх";
+                string rot = _lastReqHasWinchRotation ? "+ручка" : "без ручки";
+                return dir + " #" + _lastReqIndex + " len=" + _lastReqLength.ToString("0.00") + " " + rot + " " + age + "мс";
+            }
+        }
 
         public ControlsSync(CoopNet net) { _net = net; }
 
@@ -240,6 +260,7 @@ namespace SailwindCoop.Sync
                     }
 
                     _net.Broadcast(req, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    RememberControlRequest(i, rc.currentLength, req.HasWinchRotation, incoming: false);
                     _lastSentLen[i] = rc.currentLength;
                 }
             }
@@ -257,6 +278,8 @@ namespace SailwindCoop.Sync
             if (i < 0 || i >= _ropes.Length) return;
             var rc = _ropes[i];
             if (rc == null) return;
+
+            RememberControlRequest(i, msg.Length, msg.HasWinchRotation, incoming: true);
 
             // F3 authority point — future: reject if another actor owns this node, enforce
             // per-node locks, etc. For now the host trusts and applies; its physics produces
@@ -367,6 +390,15 @@ namespace SailwindCoop.Sync
             return null;
         }
 
+        private void RememberControlRequest(int index, float length, bool hasWinchRotation, bool incoming)
+        {
+            _lastReqIndex = index;
+            _lastReqLength = length;
+            _lastReqHasWinchRotation = hasWinchRotation;
+            _lastReqIncoming = incoming;
+            _lastReqTick = _net.Clock.ServerTick;
+        }
+
         public void Clear()
         {
             RestoreKinematic();
@@ -381,6 +413,11 @@ namespace SailwindCoop.Sync
             _haveTargets = false;
             _sendTimer = 0f;
             _reqTimer = 0f;
+            _lastReqIndex = -1;
+            _lastReqLength = 0f;
+            _lastReqHasWinchRotation = false;
+            _lastReqIncoming = false;
+            _lastReqTick = 0L;
             _warnedMismatch = false;
         }
     }
