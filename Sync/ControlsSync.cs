@@ -13,12 +13,12 @@ namespace SailwindCoop.Sync
     /// <item><b>Rope lengths</b> — every <c>RopeController.currentLength</c>. Drives the
     /// rope-state visuals that follow length directly: sail reef/furl, anchor payout.</item>
     /// <item><b>Node rotations</b> — the local rotation of each moving mechanical part:
-    /// sail booms (on a <c>HingeJoint</c>), the rudder, and the winch cranks
-    /// (<c>GPButtonRopeWinch</c>). A boom's angle is physics/wind-driven within limits set
+    /// sail booms (on a <c>HingeJoint</c>) and the rudder. A boom's angle is physics/wind-driven within limits set
     /// by the rope, so it diverges on the kinematic client; we replicate the real rotation
     /// instead. Boom/rudder rigidbodies are made kinematic on the client so the simulation
-    /// stops fighting the value (restored on disconnect); winch cranks have no rigidbody
-    /// and don't self-rotate without input, so a plain transform set sticks.</item>
+    /// stops fighting the value (restored on disconnect). Winch cranks are intentionally
+    /// not synced as transforms: rope length is the authoritative state, and host crank
+    /// pose is only cosmetic.</item>
     /// </list>
     ///
     /// Both lists are enumerated identically on host and client (same boat → same order);
@@ -38,6 +38,7 @@ namespace SailwindCoop.Sync
 
         private Transform _cachedBoat;
         private RopeController[] _ropes = System.Array.Empty<RopeController>();
+        private GPButtonRopeWinch[] _winches = System.Array.Empty<GPButtonRopeWinch>();
         private Node[] _nodes = System.Array.Empty<Node>();
 
         // Client: latest rotation targets + which rigidbodies we forced kinematic.
@@ -230,8 +231,15 @@ namespace SailwindCoop.Sync
                 if (rc == null) continue;
                 if (now < _localUntil[i] && Mathf.Abs(rc.currentLength - _lastSentLen[i]) > LenEps)
                 {
-                    _net.Broadcast(new ControlRequestMsg { Index = (ushort)i, Length = rc.currentLength },
-                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    var req = new ControlRequestMsg { Index = (ushort)i, Length = rc.currentLength };
+                    var winch = FindWinchForRope(rc);
+                    if (winch != null)
+                    {
+                        req.HasWinchRotation = true;
+                        req.WinchRotation = winch.transform.localRotation;
+                    }
+
+                    _net.Broadcast(req, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     _lastSentLen[i] = rc.currentLength;
                 }
             }
@@ -258,6 +266,13 @@ namespace SailwindCoop.Sync
                 rc.currentLength = msg.Length;
                 rc.changed = true;
             }
+
+            if (msg.HasWinchRotation)
+            {
+                var winch = FindWinchForRope(rc);
+                if (winch != null)
+                    winch.transform.localRotation = msg.WinchRotation;
+            }
         }
 
         // -----------------------------------------------------------------
@@ -278,6 +293,7 @@ namespace SailwindCoop.Sync
             if (boat == null)
             {
                 _ropes = System.Array.Empty<RopeController>();
+                _winches = System.Array.Empty<GPButtonRopeWinch>();
                 _nodes = System.Array.Empty<Node>();
                 _hostLen = System.Array.Empty<float>();
                 _localUntil = System.Array.Empty<long>();
@@ -286,6 +302,7 @@ namespace SailwindCoop.Sync
             }
 
             _ropes = boat.GetComponentsInChildren<RopeController>(true);
+            _winches = boat.GetComponentsInChildren<GPButtonRopeWinch>(true);
 
             // Stage 2 bookkeeping, seeded from current values so we don't false-trigger.
             _hostLen = new float[_ropes.Length];
@@ -299,12 +316,12 @@ namespace SailwindCoop.Sync
             }
 
             // Moving parts whose rotation we replicate, in a stable enumeration order:
-            // every hinge (sail booms + rudder), then every winch crank.
+            // every hinge (sail booms + rudder). Winch cranks are excluded because a
+            // host-side neutral crank pose can snap the client's local handle back after
+            // a successful ControlRequest; rope length already carries the real state.
             var nodes = new List<Node>();
             foreach (var h in boat.GetComponentsInChildren<HingeJoint>(true))
                 nodes.Add(new Node { T = h.transform, Rb = h.GetComponent<Rigidbody>() });
-            foreach (var w in boat.GetComponentsInChildren<GPButtonRopeWinch>(true))
-                nodes.Add(new Node { T = w.transform, Rb = null });
             _nodes = nodes.ToArray();
 
             Plugin.Logger.LogInfo("[ControlsSync] Корабль сменился: тросов=" + _ropes.Length +
@@ -339,11 +356,23 @@ namespace SailwindCoop.Sync
                                      ", клиент=" + client + " — эта часть не применяется");
         }
 
+        private GPButtonRopeWinch FindWinchForRope(RopeController rope)
+        {
+            if (rope == null) return null;
+            for (int i = 0; i < _winches.Length; i++)
+            {
+                var w = _winches[i];
+                if (w != null && w.rope == rope) return w;
+            }
+            return null;
+        }
+
         public void Clear()
         {
             RestoreKinematic();
             _cachedBoat = null;
             _ropes = System.Array.Empty<RopeController>();
+            _winches = System.Array.Empty<GPButtonRopeWinch>();
             _nodes = System.Array.Empty<Node>();
             _targetRots = System.Array.Empty<Quaternion>();
             _hostLen = System.Array.Empty<float>();

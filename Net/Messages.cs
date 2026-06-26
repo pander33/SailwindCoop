@@ -325,10 +325,11 @@ namespace SailwindCoop.Net
     /// discrete/continuous rope state: sail reef (furl amount), anchor payout, etc.</para>
     ///
     /// <para><b>Rotations</b> — the local rotation of every moving mechanical part
-    /// (sail booms on their <c>HingeJoint</c>, the rudder, the winch cranks) in a fixed
+    /// (sail booms on their <c>HingeJoint</c> and the rudder) in a fixed
     /// enumeration order. The rope length only sets a boom's swing <i>limits</i>; the
     /// actual angle is physics/wind-driven and diverges on the kinematic client, so we
-    /// replicate the real rotation instead of hoping the simulation matches.</para>
+    /// replicate the real rotation instead of hoping the simulation matches. Winch crank
+    /// transforms are not included; rope length is the authoritative winch state.</para>
     ///
     /// Identity-by-index is safe because both machines load the same boat; a count
     /// mismatch on either array is detected and that part is skipped.
@@ -372,12 +373,15 @@ namespace SailwindCoop.Net
     /// physics produces the result, and the normal <c>ControlState</c> broadcast carries
     /// the outcome back to everyone. Index matches the host's rope enumeration order
     /// (the same list <c>ControlState.Lengths</c> uses). Reliable so the final value on
-    /// release is guaranteed to land.
+    /// release is guaranteed to land. The optional winch rotation is cosmetic host-side
+    /// feedback so the host sees the client's hand turning the handle.
     /// </summary>
     public sealed class ControlRequestMsg : INetMessage
     {
         public ushort Index;
         public float Length;
+        public bool HasWinchRotation;
+        public Quaternion WinchRotation;
 
         public MsgType Type => MsgType.ControlRequest;
 
@@ -385,12 +389,16 @@ namespace SailwindCoop.Net
         {
             w.Put(Index);
             w.Put(Length);
+            w.Put(HasWinchRotation);
+            if (HasWinchRotation) w.PutQuaternion(WinchRotation);
         }
 
         public void Deserialize(NetDataReader r)
         {
             Index = r.GetUShort();
             Length = r.GetFloat();
+            HasWinchRotation = r.GetBool();
+            WinchRotation = HasWinchRotation ? r.GetQuaternion() : Quaternion.identity;
         }
     }
 
