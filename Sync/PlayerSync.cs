@@ -18,7 +18,6 @@ namespace SailwindCoop.Sync
             public GameObject Go;
             public Transform Body;
             public Transform Head;
-            public TextMesh NameText;
             public Animator Animator;
             public AvatarPoseDriver PoseDriver;
             public readonly NetTransform Net = new NetTransform();
@@ -330,12 +329,6 @@ namespace SailwindCoop.Sync
                 a.Head.localRotation = Quaternion.Slerp(a.Head.localRotation, localHead, 0.35f);
             }
 
-            if (a.NameText != null)
-            {
-                Camera cam = PickRenderCamera();
-                if (cam != null)
-                    a.NameText.transform.rotation = Quaternion.LookRotation(a.NameText.transform.position - cam.transform.position, Vector3.up);
-            }
         }
 
         private void ApplyLookPitch(RemoteAvatar a)
@@ -481,31 +474,13 @@ namespace SailwindCoop.Sync
             if (lookCol != null) Object.Destroy(lookCol);
             SetUnlit(look.GetComponent<Renderer>(), sh, new Color(0.1f, 0.1f, 0.12f));
 
-            var nameGo = new GameObject("Name");
-            nameGo.transform.SetParent(go.transform, false);
-            nameGo.transform.localPosition = new Vector3(0f, 0.9f, 0f);
-            nameGo.layer = go.layer;
-            var text = nameGo.AddComponent<TextMesh>();
-            text.text = _net.GetPlayerName(netId);
-            text.anchor = TextAnchor.MiddleCenter;
-            text.alignment = TextAlignment.Center;
-            text.characterSize = 0.18f;
-            text.fontSize = 48;
-            text.color = Color.white;
-            var textRenderer = nameGo.GetComponent<Renderer>();
-            if (textRenderer != null)
-            {
-                textRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                textRenderer.receiveShadows = false;
-            }
-
             Plugin.Logger.LogInfo("[PlayerSync] Аватар NetId=" + netId +
                                   " шейдер='" + (sh != null ? sh.name : "НЕТ") +
                                   "' слой=" + go.layer);
 
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Создан аватар игрока NetId=" + netId);
-            return new RemoteAvatar { Go = go, Body = body.transform, Head = head.transform, NameText = text };
+            return new RemoteAvatar { Go = go, Body = body.transform, Head = head.transform };
         }
 
         private RemoteAvatar TryCreateBundledAvatar(uint netId)
@@ -558,24 +533,6 @@ namespace SailwindCoop.Sync
             pose.Neck = neck;
             pose.CaptureBase();
 
-            var nameGo = new GameObject("Name");
-            nameGo.transform.SetParent(go.transform, false);
-            nameGo.transform.localPosition = new Vector3(0f, 2.05f, 0f);
-            nameGo.layer = layer;
-            var text = nameGo.AddComponent<TextMesh>();
-            text.text = _net.GetPlayerName(netId);
-            text.anchor = TextAnchor.MiddleCenter;
-            text.alignment = TextAlignment.Center;
-            text.characterSize = 0.18f;
-            text.fontSize = 48;
-            text.color = Color.white;
-            var textRenderer = nameGo.GetComponent<Renderer>();
-            if (textRenderer != null)
-            {
-                textRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                textRenderer.receiveShadows = false;
-            }
-
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Создан avatar.bundle аватар NetId=" + netId +
                                   ", head=" + (head != null ? head.name : "нет") +
@@ -588,7 +545,6 @@ namespace SailwindCoop.Sync
                 Go = go,
                 Body = model.transform,
                 Head = head,
-                NameText = text,
                 Animator = animator,
                 PoseDriver = pose,
                 HeadDrivenByAnimator = animator != null,
