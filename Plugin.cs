@@ -49,6 +49,8 @@ namespace SailwindCoop
         public readonly ConfigEntry<string> PlayerName;
         public readonly ConfigEntry<int> SnapshotHz;
         public readonly ConfigEntry<float> InterpDelayMs;
+        public readonly ConfigEntry<float> AvatarVerticalOffset;
+        public readonly ConfigEntry<float> HostAvatarVerticalOffset;
 
         public readonly ConfigEntry<KeyCode> HostKey;
         public readonly ConfigEntry<KeyCode> JoinKey;
@@ -63,6 +65,8 @@ namespace SailwindCoop
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Отображаемое имя игрока.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "Частота отправки снапшотов состояния (Гц), этап 1+.");
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Задержка буфера интерполяции (мс), этап 1+.");
+            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели относительно сетевой позиции игрока. Отрицательное значение опускает модель.");
+            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели хоста. Нужен отдельно, потому что root-поза хоста в Sailwind обычно выше клиентской.");
 
             HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Запустить хост.");
             JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Подключиться к JoinIp.");

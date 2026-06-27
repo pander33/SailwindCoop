@@ -35,6 +35,7 @@ namespace SailwindCoop.Sync
             public bool HasAnimSnapshot;
             public bool HasSpeedParam;
             public bool HasTurnParam;
+            public float VisualOffsetY;
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -59,6 +60,17 @@ namespace SailwindCoop.Sync
                 if (Spine != null) Spine.localRotation = Spine.localRotation * Quaternion.Euler(-pitch * 0.25f, 0f, 0f);
                 if (Chest != null) Chest.localRotation = Chest.localRotation * Quaternion.Euler(-pitch * 0.35f, 0f, 0f);
                 if (Neck != null) Neck.localRotation = Neck.localRotation * Quaternion.Euler(-pitch * 0.20f, 0f, 0f);
+            }
+        }
+
+        private sealed class AvatarVisualOffsetDriver : MonoBehaviour
+        {
+            public float OffsetY;
+
+            private void LateUpdate()
+            {
+                transform.localPosition = new Vector3(0f, OffsetY, 0f);
+                transform.localRotation = Quaternion.identity;
             }
         }
 
@@ -307,6 +319,7 @@ namespace SailwindCoop.Sync
 
             ApplyAnimatorParams(a);
             ApplyLookPitch(a);
+            ApplyVisualOffset(a);
 
             if (a.Head != null && !a.HeadDrivenByAnimator)
             {
@@ -328,6 +341,13 @@ namespace SailwindCoop.Sync
             Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
             float pitch = Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg;
             a.PoseDriver.TargetPitch = Mathf.Clamp(pitch, -35f, 45f);
+        }
+
+        private void ApplyVisualOffset(RemoteAvatar a)
+        {
+            if (a.Body == null || a.Body == a.Go.transform) return;
+            a.Body.localPosition = new Vector3(0f, a.VisualOffsetY, 0f);
+            a.Body.localRotation = Quaternion.identity;
         }
 
         private void ApplyAnimatorParams(RemoteAvatar a)
@@ -490,19 +510,29 @@ namespace SailwindCoop.Sync
             GameObject prefab = GetAvatarPrefab();
             if (prefab == null) return null;
 
-            var go = Object.Instantiate(prefab);
-            go.name = "CoopPlayer_" + netId;
+            var go = new GameObject("CoopPlayer_" + netId);
+            var model = Object.Instantiate(prefab);
+            model.name = prefab.name;
+            model.transform.SetParent(go.transform, false);
+            float verticalOffset = ResolveAvatarVerticalOffset(netId);
+            model.transform.localPosition = new Vector3(0f, verticalOffset, 0f);
+            model.transform.localRotation = Quaternion.identity;
+            model.transform.localScale = Vector3.one;
+            var offsetDriver = model.AddComponent<AvatarVisualOffsetDriver>();
+            offsetDriver.OffsetY = verticalOffset;
             int layer = PickVisibleLayer();
             SetLayerRecursive(go.transform, layer);
             StripColliders(go);
+            StripRigidbodies(go);
 
-            var animator = go.GetComponentInChildren<Animator>(true);
+            var animator = model.GetComponentInChildren<Animator>(true);
             bool hasSpeed = false;
             bool hasTurn = false;
             if (animator != null)
             {
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 animator.updateMode = AnimatorUpdateMode.Normal;
+                animator.applyRootMotion = false;
                 animator.enabled = true;
                 foreach (var p in animator.parameters)
                 {
@@ -513,13 +543,13 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.LogInfo("[PlayerSync] Animator params: Speed=" + hasSpeed + ", Turn=" + hasTurn);
             }
 
-            Transform head = FindChildRecursive(go.transform, "Head");
-            if (head == null) head = FindChildRecursive(go.transform, "Neck");
-            Transform spine = FindChildRecursive(go.transform, "Spine");
-            Transform chest = FindChildRecursive(go.transform, "Spine1");
-            if (chest == null) chest = FindChildRecursive(go.transform, "Chest");
-            Transform neck = FindChildRecursive(go.transform, "Neck");
-            var pose = go.AddComponent<AvatarPoseDriver>();
+            Transform head = FindChildRecursive(model.transform, "Head");
+            if (head == null) head = FindChildRecursive(model.transform, "Neck");
+            Transform spine = FindChildRecursive(model.transform, "Spine");
+            Transform chest = FindChildRecursive(model.transform, "Spine1");
+            if (chest == null) chest = FindChildRecursive(model.transform, "Chest");
+            Transform neck = FindChildRecursive(model.transform, "Neck");
+            var pose = model.AddComponent<AvatarPoseDriver>();
             pose.Spine = spine;
             pose.Chest = chest;
             pose.Neck = neck;
@@ -545,14 +575,15 @@ namespace SailwindCoop.Sync
 
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Создан avatar.bundle аватар NetId=" + netId +
-                                  ", head=" + (head != null ? head.name : "нет"));
+                                  ", head=" + (head != null ? head.name : "нет") +
+                                  ", offsetY=" + verticalOffset.ToString("F2"));
             Plugin.Logger.LogInfo("[PlayerSync] Pose bones: spine=" + (spine != null ? spine.name : "нет") +
                                   ", chest=" + (chest != null ? chest.name : "нет") +
                                   ", neck=" + (neck != null ? neck.name : "нет"));
             return new RemoteAvatar
             {
                 Go = go,
-                Body = go.transform,
+                Body = model.transform,
                 Head = head,
                 NameText = text,
                 Animator = animator,
@@ -560,6 +591,7 @@ namespace SailwindCoop.Sync
                 HeadDrivenByAnimator = animator != null,
                 HasSpeedParam = hasSpeed,
                 HasTurnParam = hasTurn,
+                VisualOffsetY = verticalOffset,
             };
         }
 
@@ -611,6 +643,29 @@ namespace SailwindCoop.Sync
 
             Plugin.Logger.LogInfo("[PlayerSync] Загружен avatar.bundle prefab '" + _avatarPrefab.name + "'");
             return _avatarPrefab;
+        }
+
+        private float ResolveAvatarVerticalOffset(uint netId)
+        {
+            const float defaultOffset = -0.65f;
+            if (Plugin.Cfg == null) return defaultOffset;
+
+            if (netId == NetRegistry.HostPlayerNetId)
+            {
+                float hostOffset = Plugin.Cfg.HostAvatarVerticalOffset.Value;
+                if (Mathf.Abs(hostOffset - (-0.25f)) < 0.001f)
+                    return -1.15f;
+                return hostOffset;
+            }
+
+            float offset = Plugin.Cfg.AvatarVerticalOffset.Value;
+            if (Mathf.Abs(offset - (-0.25f)) < 0.001f)
+            {
+                Plugin.Logger.LogInfo("[PlayerSync] Avatar.VerticalOffset=-0.25 устарел, применяется " + defaultOffset.ToString("F2"));
+                return defaultOffset;
+            }
+
+            return offset;
         }
 
         private GameObject PickAvatarPrefab(string[] names, string contains)
@@ -684,6 +739,13 @@ namespace SailwindCoop.Sync
             if (root == null) return;
             foreach (var col in root.GetComponentsInChildren<Collider>(true))
                 if (col != null) Object.Destroy(col);
+        }
+
+        private void StripRigidbodies(GameObject root)
+        {
+            if (root == null) return;
+            foreach (var rb in root.GetComponentsInChildren<Rigidbody>(true))
+                if (rb != null) Object.Destroy(rb);
         }
 
         private Transform FindChildRecursive(Transform root, string name)
