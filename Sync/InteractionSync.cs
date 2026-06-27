@@ -39,6 +39,13 @@ namespace SailwindCoop.Sync
 
         private GoPointer _hostPointer;
         private bool _replaying;          // guard so the host's replay doesn't re-forward
+        private GoPointer _gp;
+        private FieldInfo _fClicked;
+        private float _pushTimer;
+        private float _pushAccumDt;
+        private string _lastPush = "—";
+        private long _lastPushTick;
+        private const float PushHz = 20f;
 
         // Overlay diagnostics.
         private string _lastEvent = "—";
@@ -50,7 +57,14 @@ namespace SailwindCoop.Sync
                 if (_lastEventTick == 0) return "—";
                 long age = _net.Clock.ServerTick - _lastEventTick;
                 if (age < 0) age = 0;
-                return _lastEvent + " " + age + "мс";
+                string push = "—";
+                if (_lastPushTick != 0)
+                {
+                    long pushAge = _net.Clock.ServerTick - _lastPushTick;
+                    if (pushAge < 0) pushAge = 0;
+                    push = _lastPush + " " + pushAge + "мс";
+                }
+                return _lastEvent + " " + age + "мс" + " · push " + push;
             }
         }
         public int ButtonCount => _buttons.Length;
@@ -81,6 +95,7 @@ namespace SailwindCoop.Sync
         {
             if (_net.State != LinkState.Connected) return;
             RefreshButtons();
+            ForwardPushRequests(dt);
         }
 
         private void RefreshButtons()
@@ -129,6 +144,26 @@ namespace SailwindCoop.Sync
             Remember("исх " + kind + " #" + idx + " '" + ButtonLabel(btn) + "'");
         }
 
+        /// <summary>
+        /// Forward held-button transitions. This is intentionally narrower than the generic
+        /// click relay: only known held mechanics are sent, and the host applies domain logic
+        /// instead of replaying <c>OnActivate</c> with its own pointer.
+        /// </summary>
+        public void NotifyLocalHold(GoPointerButton btn, InteractKind kind, bool down)
+        {
+            if (_replaying) return;
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (btn == null || !HasHeldChannel(btn, kind)) return;
+            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;
+
+            RefreshButtons();
+            if (!_index.TryGetValue(btn, out int idx)) return;
+
+            _net.Broadcast(new HoldRequestMsg { Index = (ushort)idx, Kind = kind, Down = down },
+                           LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
+        }
+
         // -----------------------------------------------------------------
         // Host: replay a client's interaction authoritatively
         // -----------------------------------------------------------------
@@ -150,17 +185,19 @@ namespace SailwindCoop.Sync
 
             try
             {
-                if (_hostPointer == null) _hostPointer = UnityEngine.Object.FindObjectOfType<GoPointer>();
+                Type[] args = msg.Kind == InteractKind.ActivateNoArg ? Type.EmptyTypes : new[] { typeof(GoPointer) };
+                object[] invokeArgs = msg.Kind == InteractKind.ActivateNoArg ? null : new object[] { HostPointer() };
                 var mi = btn.GetType().GetMethod(method,
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null, new[] { typeof(GoPointer) }, null);
+                    null, args, null);
                 if (mi == null)
                 {
-                    Plugin.Logger.LogWarning("[InteractionSync] У '" + btn.GetType().Name + "' нет " + method + "(GoPointer)");
+                    Plugin.Logger.LogWarning("[InteractionSync] У '" + btn.GetType().Name + "' нет " + method +
+                                             (msg.Kind == InteractKind.ActivateNoArg ? "()" : "(GoPointer)"));
                     return;
                 }
                 _replaying = true;
-                mi.Invoke(btn, new object[] { _hostPointer });
+                mi.Invoke(btn, invokeArgs);
             }
             catch (Exception e)
             {
@@ -171,6 +208,49 @@ namespace SailwindCoop.Sync
             {
                 _replaying = false;
             }
+        }
+
+        /// <summary>Host: apply a client's held interaction request through the owning sync domain.</summary>
+        public void OnHoldRequest(HoldRequestMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Host) return;
+            RefreshButtons();
+
+            int i = msg.Index;
+            if (i < 0 || i >= _buttons.Length) return;
+            var btn = _buttons[i];
+            if (btn == null) return;
+            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;
+            if (!HasHeldChannel(btn, msg.Kind)) return;
+
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (btn is BilgePump)
+            {
+                BoatDamageSync.Instance?.SetRemotePump(msg.Index, msg.Down, actor);
+                Remember("вх hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
+            }
+        }
+
+        /// <summary>Host: apply one continuous push sample to the authoritative rigidbody.</summary>
+        public void OnPushRequest(PushRequestMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Host) return;
+            if (!CoordSpace.Ready) return;
+            RefreshButtons();
+
+            int i = msg.Index;
+            if (i < 0 || i >= _buttons.Length) return;
+            var btn = _buttons[i];
+            if (btn == null || !IsPushButton(btn)) return;
+            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;
+
+            Rigidbody body = PushTargetBody(btn);
+            if (body == null) return;
+
+            Vector3 pos = CoordSpace.RealToLocal(msg.RealPos);
+            float dt = Mathf.Clamp(msg.DeltaTime, 0.001f, 0.2f);
+            body.AddForceAtPosition(msg.Force * dt, pos, ForceMode.Impulse);
+            RememberPush("вх #" + i + " '" + ButtonLabel(btn) + "'");
         }
 
         // -----------------------------------------------------------------
@@ -187,7 +267,182 @@ namespace SailwindCoop.Sync
             if (kind != InteractKind.Activate) return false;
             return btn is GPButtonRopeWinch
                 || btn is GPButtonSteeringWheel
+                || btn is BilgePump
                 || btn is PickupableItem;
+        }
+
+        private static bool HasHeldChannel(GoPointerButton btn, InteractKind kind)
+        {
+            return kind == InteractKind.Activate && btn is BilgePump;
+        }
+
+        private void ForwardPushRequests(float dt)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (!CoordSpace.Ready) return;
+
+            _pushAccumDt += dt;
+            _pushTimer += dt;
+            float interval = 1f / PushHz;
+            if (_pushTimer < interval) return;
+            _pushTimer = 0f;
+
+            GoPointerButton btn = ClickedButton();
+            if (btn == null || !IsPushButton(btn))
+            {
+                _pushAccumDt = 0f;
+                return;
+            }
+            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared)
+            {
+                _pushAccumDt = 0f;
+                return;
+            }
+
+            RefreshButtons();
+            if (!_index.TryGetValue(btn, out int idx))
+            {
+                _pushAccumDt = 0f;
+                return;
+            }
+
+            if (!TryBuildPush(btn, out Vector3 force, out Vector3 atPos))
+            {
+                _pushAccumDt = 0f;
+                return;
+            }
+
+            float sampleDt = Mathf.Clamp(_pushAccumDt, 0.001f, 0.2f);
+            _pushAccumDt = 0f;
+
+            _net.Broadcast(new PushRequestMsg
+            {
+                Index = (ushort)idx,
+                RealPos = CoordSpace.LocalToReal(atPos),
+                Force = force,
+                DeltaTime = sampleDt,
+            }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            RememberPush("исх #" + idx + " '" + ButtonLabel(btn) + "'");
+        }
+
+        private GoPointerButton ClickedButton()
+        {
+            try
+            {
+                if (_gp == null) _gp = UnityEngine.Object.FindObjectOfType<GoPointer>();
+                if (_gp == null) return null;
+                if (_fClicked == null)
+                    _fClicked = typeof(GoPointer).GetField("clickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
+                return _fClicked != null ? _fClicked.GetValue(_gp) as GoPointerButton : null;
+            }
+            catch { return null; }
+        }
+
+        private GoPointer HostPointer()
+        {
+            if (_hostPointer == null) _hostPointer = UnityEngine.Object.FindObjectOfType<GoPointer>();
+            return _hostPointer;
+        }
+
+        private bool TryBuildPush(GoPointerButton btn, out Vector3 force, out Vector3 atPos)
+        {
+            force = Vector3.zero;
+            atPos = Vector3.zero;
+            if (_gp == null) _gp = UnityEngine.Object.FindObjectOfType<GoPointer>();
+            if (_gp == null) return false;
+
+            Transform p = _gp.movement != null ? _gp.movement.transform : _gp.transform;
+            atPos = p.position;
+
+            if (btn is GPButtonSailPusher sail)
+            {
+                force = sail.pushForceMult * p.forward * 2.5f;
+                return force.sqrMagnitude > 0.000001f;
+            }
+
+            if (btn is GPButtonBoatPushCol)
+            {
+                Rigidbody rb = PushTargetBody(btn);
+                if (rb == null) return false;
+                float speed = Mathf.Max(1f, rb.velocity.magnitude);
+                float push = GetField(btn, "pushForceMult", 3f);
+                float up = GetField(btn, "upForceMult", 1f);
+                float vertical = GetField(btn, "verticalOffset", -2f);
+                float swimMult = PlayerSwimming.swimming ? 0f : 1f;
+                force = (push * rb.mass * p.forward + up * rb.mass * Vector3.up) * swimMult / speed;
+                atPos = p.position + Vector3.up * vertical;
+                return force.sqrMagnitude > 0.000001f;
+            }
+
+            if (btn is DockPushCol)
+            {
+                Rigidbody rb = GameState.currentBoat != null && GameState.currentBoat.parent != null
+                    ? GameState.currentBoat.parent.GetComponent<Rigidbody>()
+                    : null;
+                if (rb == null) return false;
+                float speed = Mathf.Max(1f, rb.velocity.magnitude);
+                float push = GetField(btn, "pushForceMult", -0.55f);
+                float up = GetField(btn, "upForceMult", 0f);
+                float vertical = GetField(btn, "verticalOffset", 0f);
+                force = (push * rb.mass * p.forward + up * rb.mass * Vector3.up) / speed;
+                atPos = p.position + Vector3.up * vertical;
+                return force.sqrMagnitude > 0.000001f;
+            }
+
+            return false;
+        }
+
+        private static bool IsPushButton(GoPointerButton btn)
+        {
+            return btn is GPButtonBoatPushCol || btn is DockPushCol || btn is GPButtonSailPusher;
+        }
+
+        private static Rigidbody PushTargetBody(GoPointerButton btn)
+        {
+            if (btn == null) return null;
+            if (btn is GPButtonSailPusher)
+            {
+                var body = GetField<Rigidbody>(btn, "body");
+                return body != null ? body : btn.transform.parent != null ? btn.transform.parent.GetComponent<Rigidbody>() : null;
+            }
+            if (btn is GPButtonBoatPushCol)
+            {
+                Transform t = btn.transform;
+                if (t.parent != null && t.parent.parent != null)
+                {
+                    var rb = t.parent.parent.GetComponent<Rigidbody>();
+                    if (rb != null) return rb;
+                    if (t.parent.parent.parent != null) return t.parent.parent.parent.GetComponent<Rigidbody>();
+                }
+                return null;
+            }
+            if (btn is DockPushCol)
+            {
+                return GameState.currentBoat != null && GameState.currentBoat.parent != null
+                    ? GameState.currentBoat.parent.GetComponent<Rigidbody>()
+                    : null;
+            }
+            return null;
+        }
+
+        private static float GetField(object obj, string name, float fallback)
+        {
+            try
+            {
+                var fi = obj.GetType().GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                return fi != null ? (float)fi.GetValue(obj) : fallback;
+            }
+            catch { return fallback; }
+        }
+
+        private static T GetField<T>(object obj, string name) where T : class
+        {
+            try
+            {
+                var fi = obj.GetType().GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                return fi != null ? fi.GetValue(obj) as T : null;
+            }
+            catch { return null; }
         }
 
         private static string ButtonLabel(GoPointerButton btn)
@@ -202,6 +457,12 @@ namespace SailwindCoop.Sync
             _lastEventTick = _net.Clock.ServerTick;
         }
 
+        private void RememberPush(string text)
+        {
+            _lastPush = text;
+            _lastPushTick = _net.Clock.ServerTick;
+        }
+
         public void Clear()
         {
             _cachedBoat = null;
@@ -209,6 +470,12 @@ namespace SailwindCoop.Sync
             _index.Clear();
             _hostPointer = null;
             _replaying = false;
+            _gp = null;
+            _fClicked = null;
+            _pushTimer = 0f;
+            _pushAccumDt = 0f;
+            _lastPush = "—";
+            _lastPushTick = 0L;
             _lastEvent = "—";
             _lastEventTick = 0L;
         }
@@ -224,16 +491,21 @@ namespace SailwindCoop.Sync
     {
         public static void Apply(Harmony harmony)
         {
+            PatchAll(harmony, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
             PatchAll(harmony, "OnActivate", nameof(PostActivate));
             PatchAll(harmony, "OnAltActivate", nameof(PostAltActivate));
+            PatchAll(harmony, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
         }
 
-        private static void PatchAll(Harmony harmony, string gameMethod, string postfixName)
+        private static void PatchAll(Harmony harmony, string gameMethod, string postfixName, Type[] args = null, bool withBlockPrefix = true)
         {
+            if (args == null) args = new[] { typeof(GoPointer) };
             var postfix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
                 postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-            var prefix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
-                nameof(PreBlock), BindingFlags.Static | BindingFlags.NonPublic));
+            var prefix = withBlockPrefix
+                ? new HarmonyMethod(typeof(InteractionPatches).GetMethod(
+                    nameof(PreBlock), BindingFlags.Static | BindingFlags.NonPublic))
+                : null;
 
             int patched = 0;
             var baseType = typeof(GoPointerButton);
@@ -245,7 +517,7 @@ namespace SailwindCoop.Sync
                 {
                     mi = t.GetMethod(gameMethod,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly,
-                        null, new[] { typeof(GoPointer) }, null);
+                        null, args, null);
                 }
                 catch { continue; }
                 if (mi == null || mi.IsAbstract) continue;
@@ -260,15 +532,25 @@ namespace SailwindCoop.Sync
                                              t.Name + "." + gameMethod + ": " + e.Message);
                 }
             }
-            Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + "(GoPointer): пропатчено " + patched + " методов");
+            string sig = args.Length == 0 ? "()" : "(GoPointer)";
+            Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + sig + ": пропатчено " + patched + " методов");
         }
 
         // The first GoPointer parameter is __0 (its name varies across overrides).
+        private static void PostActivateNoArg(GoPointerButton __instance)
+            => InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.ActivateNoArg);
+
         private static void PostActivate(GoPointerButton __instance)
-            => InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.Activate);
+        {
+            InteractionSync.Instance?.NotifyLocalHold(__instance, InteractKind.Activate, down: true);
+            InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.Activate);
+        }
 
         private static void PostAltActivate(GoPointerButton __instance)
             => InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.AltActivate);
+
+        private static void PostUnactivate(GoPointerButton __instance)
+            => InteractionSync.Instance?.NotifyLocalHold(__instance, InteractKind.Activate, down: false);
 
         /// <summary>Block HOST-ONLY actions on the client: returning false skips the original handler.</summary>
         private static bool PreBlock(GoPointerButton __instance)

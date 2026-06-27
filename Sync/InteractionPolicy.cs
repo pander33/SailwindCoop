@@ -55,6 +55,8 @@ namespace SailwindCoop.Sync
                 "GPButtonControlToggle", "GPButtonLogMode", "GPButtonDayLogDay",
                 "GPButtonMapZoom", "StartMenuButton", "GPButtonInventorySlot",
                 "MouseoverTextTrigger",
+                // player movement only; the resulting player pose is already local/player-sync
+                "BoatLadder", "GPButtonRatlines",
             };
 
         // PickupableItems that are actually shared ship mechanisms handled by a dedicated sync

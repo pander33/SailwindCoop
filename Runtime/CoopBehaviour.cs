@@ -21,6 +21,8 @@ namespace SailwindCoop.Runtime
         public ControlsSync Controls { get; private set; }
         public AnchorSync Anchor { get; private set; }
         public MooringSync Mooring { get; private set; }
+        public BoatDamageSync Damage { get; private set; }
+        public LightSync Lights { get; private set; }
         public InteractionSync Interactions { get; private set; }
 
         private DebugOverlay _overlay;
@@ -54,11 +56,13 @@ namespace SailwindCoop.Runtime
             Controls = new ControlsSync(Net);
             Anchor = new AnchorSync(Net);
             Mooring = new MooringSync(Net);
+            Damage = new BoatDamageSync(Net);
+            Lights = new LightSync(Net);
             Interactions = new InteractionSync(Net);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
 
             Net.OnAccepted += ack =>
@@ -66,7 +70,11 @@ namespace SailwindCoop.Runtime
             Net.OnClientReady += s =>
                 Plugin.Logger.LogInfo("[Coop] Клиент готов: " + s.PlayerName);
             Net.OnGameMessage += OnGameMessage;
-            Net.OnPlayerLeft += netId => Players.RemoveRemote(netId);
+            Net.OnPlayerLeft += netId =>
+            {
+                Players.RemoveRemote(netId);
+                Damage.ClearRemoteActor(netId);
+            };
 
             _overlay = new DebugOverlay(Net);
         }
@@ -85,6 +93,8 @@ namespace SailwindCoop.Runtime
             Anchor.Tick(dt);
             Anchor.ApplyRemote();
             Mooring.Tick(dt);
+            Damage.Tick(dt);
+            Lights.Tick(dt);
             Interactions.Tick(dt);
             Players.Tick(dt);
             Players.ApplyRemotes();
@@ -112,6 +122,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.MooringState:
                     Mooring.OnMooringState((MooringStateMsg)msg, fromPeer);
                     break;
+                case MsgType.BoatDamageState:
+                    Damage.OnDamageState((BoatDamageStateMsg)msg, fromPeer);
+                    break;
                 case MsgType.MooringRequest:
                     Mooring.OnMooringRequest((MooringRequestMsg)msg, fromPeer);
                     break;
@@ -124,6 +137,21 @@ namespace SailwindCoop.Runtime
                 case MsgType.ControlEvent:
                     Interactions.OnControlEvent((ControlEventMsg)msg, fromPeer);
                     break;
+                case MsgType.HoldRequest:
+                    Interactions.OnHoldRequest((HoldRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.DamageRequest:
+                    Damage.OnDamageRequest((DamageRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.PushRequest:
+                    Interactions.OnPushRequest((PushRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.LightState:
+                    Lights.OnLightState((LightStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.LightRequest:
+                    Lights.OnLightRequest((LightRequestMsg)msg, fromPeer);
+                    break;
             }
         }
 
@@ -135,6 +163,8 @@ namespace SailwindCoop.Runtime
         private void OnDestroy()
         {
             Interactions?.Clear();
+            Lights?.Clear();
+            Damage?.Clear();
             Mooring?.Clear();
             Anchor?.Clear();
             Controls?.Clear();
@@ -174,6 +204,8 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 Net.Stop();
                 Interactions.Clear();
+                Lights.Clear();
+                Damage.Clear();
                 Mooring.Clear();
                 Anchor.Clear();
                 Controls.Clear();

@@ -89,6 +89,13 @@ namespace SailwindCoop.Net
             return "Player " + netId;
         }
 
+        public uint PlayerNetIdForPeer(NetPeer peer)
+        {
+            if (peer != null && _sessions.TryGetValue(peer.Id, out var session) && session.HandshakeDone)
+                return session.PlayerNetId;
+            return 0;
+        }
+
         // -----------------------------------------------------------------
         // Lifecycle
         // -----------------------------------------------------------------

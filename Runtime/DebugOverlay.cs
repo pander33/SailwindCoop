@@ -53,9 +53,10 @@ namespace SailwindCoop.Runtime
                 if (coop.Boats != null)
                 {
                     if (_net.Role == Role.Host)
-                        Line("Корабль", coop.Boats.BoatNetId != 0 ? "хост NetId=" + coop.Boats.BoatNetId : "—");
+                        Line("Корабли", coop.Boats.BoatCount + " шт" +
+                             (coop.Boats.BoatNetId != 0 ? ", первый NetId=" + coop.Boats.BoatNetId : ""));
                     else
-                        Line("Корабль", coop.Boats.IsSlaving ? "ведомый" : "ждёт посадки");
+                        Line("Корабли", coop.Boats.IsSlaving ? "ведомых " + coop.Boats.BoatCount : "ждёт лодку");
                 }
 
                 Line("Среда", EnvText());
@@ -74,6 +75,12 @@ namespace SailwindCoop.Runtime
 
                 if (coop.Mooring != null)
                     Line("Швартовы", coop.Mooring.MooringText);
+
+                if (coop.Damage != null)
+                    Line("Повреждения", coop.Damage.DamageText);
+
+                if (coop.Lights != null)
+                    Line("Свет", coop.Lights.LightText);
 
                 if (coop.Interactions != null)
                     Line("Событие", coop.Interactions.ButtonCount + " кн · " + coop.Interactions.LastEventText);

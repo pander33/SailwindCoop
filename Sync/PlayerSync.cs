@@ -161,6 +161,7 @@ namespace SailwindCoop.Sync
             // On a boat: send pose in BOAT-LOCAL space — identical on both machines and
             // immune to floating origin. Otherwise fall back to origin-stable real space.
             CoordFrame frame;
+            ushort boatIndex = BoatLocator.NoBoat;
             Vector3 pos;
             Quaternion rot;
             Quaternion headRot;
@@ -169,6 +170,7 @@ namespace SailwindCoop.Sync
             if (boat != null)
             {
                 frame = CoordFrame.Boat;
+                boatIndex = BoatLocator.IndexOf(boat);
                 pos = boat.InverseTransformPoint(pl.position);
                 rot = Quaternion.Inverse(boat.rotation) * pl.rotation;
                 headRot = Quaternion.Inverse(boat.rotation) * head.rotation;
@@ -198,6 +200,7 @@ namespace SailwindCoop.Sync
                 NetId = _net.MyNetId,
                 Tick = tick,
                 Frame = frame,
+                BoatIndex = boatIndex,
                 Pos = pos,
                 Rot = rot,
                 HeadRot = headRot,
@@ -228,7 +231,7 @@ namespace SailwindCoop.Sync
             // Pick how this remote's buffered pose converts to local world space.
             if (msg.Frame == CoordFrame.Boat)
             {
-                Transform boat = CurrentBoat;   // our own copy of the shared ship
+                Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
                 if (boat != null)
                 {
                     a.Net.ToWorldPos = p => boat.TransformPoint(p);

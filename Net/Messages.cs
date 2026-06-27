@@ -30,6 +30,7 @@ namespace SailwindCoop.Net
         ControlState = 33,
         AnchorState = 34,
         MooringState = 35,
+        BoatDamageState = 36,
 
         // --- discrete control events (ReliableOrdered) — Stage 1+ ---
         ControlEvent = 40,
@@ -39,6 +40,11 @@ namespace SailwindCoop.Net
         ControlRequest = 51,   // client -> host : "I adjusted rope #i to this length"
         SteerRequest = 52,     // client -> host : "I turned wheel #i to this input"
         MooringRequest = 53,   // client -> host : "I unmoored rope #i"
+        HoldRequest = 54,      // client -> host : "I started/stopped holding button #i"
+        DamageRequest = 55,    // client -> host : "I repaired/bailed the boat damage state"
+        PushRequest = 56,      // client -> host : "I pushed a boat/sail/dock collider this frame"
+        LightState = 57,       // host -> client : shared lantern/light state
+        LightRequest = 58,     // client -> host : requested lantern/light state change
     }
 
     /// <summary>Why the host refused a client (sent in Reject).</summary>
@@ -197,6 +203,7 @@ namespace SailwindCoop.Net
         public uint NetId;
         public long Tick;
         public CoordFrame Frame;
+        public ushort BoatIndex;  // valid when Frame == Boat, else NoBoat/ushort.MaxValue
         public Vector3 Pos;       // meaning depends on Frame (real space, or boat-local)
         public Quaternion Rot;    // world rotation, or boat-local rotation
         public Quaternion HeadRot; // world rotation, or boat-local head/camera rotation
@@ -209,6 +216,7 @@ namespace SailwindCoop.Net
             w.Put(NetId);
             w.Put(Tick);
             w.Put((byte)Frame);
+            w.Put(BoatIndex);
             w.PutVector3(Pos);
             w.PutQuaternion(Rot);
             w.PutQuaternion(HeadRot);
@@ -220,6 +228,7 @@ namespace SailwindCoop.Net
             NetId = r.GetUInt();
             Tick = r.GetLong();
             Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort();
             Pos = r.GetVector3();
             Rot = r.GetQuaternion();
             HeadRot = r.GetQuaternion();
@@ -240,6 +249,7 @@ namespace SailwindCoop.Net
     public sealed class BoatStateMsg : INetMessage
     {
         public uint NetId;
+        public ushort BoatIndex;
         public long Tick;
         public Vector3 RealPos;   // CoordSpace.LocalToReal(boat.position)
         public Quaternion Rot;    // boat world rotation
@@ -250,6 +260,7 @@ namespace SailwindCoop.Net
         public void Serialize(NetDataWriter w)
         {
             w.Put(NetId);
+            w.Put(BoatIndex);
             w.Put(Tick);
             w.PutVector3(RealPos);
             w.PutQuaternion(Rot);
@@ -259,6 +270,7 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r)
         {
             NetId = r.GetUInt();
+            BoatIndex = r.GetUShort();
             Tick = r.GetLong();
             RealPos = r.GetVector3();
             Rot = r.GetQuaternion();
@@ -518,11 +530,52 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); }
     }
 
+    // ---------------------------------------------------------------------
+    // Boat damage / bilge water (Stage 2) — host -> client snapshot
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Host-authoritative boat damage state. The host owns flooding/sinking and bilge pump
+    /// effects; clients mirror these scalar fields so water visuals and drag/sink state converge.
+    /// </summary>
+    public sealed class BoatDamageStateMsg : INetMessage
+    {
+        public long Tick;
+        public float WaterLevel;
+        public float HullDamage;
+        public float Oakum;
+        public float WaterIntakeChunk;
+        public bool Sunk;
+
+        public MsgType Type => MsgType.BoatDamageState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Tick);
+            w.Put(WaterLevel);
+            w.Put(HullDamage);
+            w.Put(Oakum);
+            w.Put(WaterIntakeChunk);
+            w.Put(Sunk);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Tick = r.GetLong();
+            WaterLevel = r.GetFloat();
+            HullDamage = r.GetFloat();
+            Oakum = r.GetFloat();
+            WaterIntakeChunk = r.GetFloat();
+            Sunk = r.GetBool();
+        }
+    }
+
     /// <summary>Discrete interaction kind, mirrored from the game's <c>GoPointerButton</c> handlers.</summary>
     public enum InteractKind : byte
     {
         Activate = 0,      // OnActivate(GoPointer) — primary click (toggles, presses)
         AltActivate = 1,   // OnAltActivate(GoPointer) — secondary action (untie, quick-release, unmoor)
+        ActivateNoArg = 2, // OnActivate() — simple toggles such as trapdoors
     }
 
     /// <summary>
@@ -551,6 +604,144 @@ namespace SailwindCoop.Net
         {
             Index = r.GetUShort();
             Kind = (InteractKind)r.GetByte();
+        }
+    }
+
+    /// <summary>
+    /// A client's held-button transition. This is for interactions whose meaning is not a
+    /// one-shot click but "keep doing this until released" (currently BilgePump). The button
+    /// index uses the same boat-local <c>GoPointerButton</c> order as <see cref="ControlEventMsg"/>.
+    /// </summary>
+    public sealed class HoldRequestMsg : INetMessage
+    {
+        public ushort Index;
+        public InteractKind Kind;
+        public bool Down;
+
+        public MsgType Type => MsgType.HoldRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.Put((byte)Kind);
+            w.Put(Down);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            Kind = (InteractKind)r.GetByte();
+            Down = r.GetBool();
+        }
+    }
+
+    public enum DamageAction : byte
+    {
+        AddOakum = 0,
+        BailWater = 1,
+    }
+
+    /// <summary>
+    /// A client's damage-domain item action. Until full item replication exists, the client
+    /// applies vanilla local item logic and forwards only the authoritative scalar delta.
+    /// Host clamps the result against its own <c>BoatDamage</c>.
+    /// </summary>
+    public sealed class DamageRequestMsg : INetMessage
+    {
+        public DamageAction Action;
+        public float Amount;
+
+        public MsgType Type => MsgType.DamageRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Action);
+            w.Put(Amount);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Action = (DamageAction)r.GetByte();
+            Amount = r.GetFloat();
+        }
+    }
+
+    /// <summary>
+    /// A client's continuous push against a shared physics object. The client computes the
+    /// same force vector Sailwind would apply locally while the push collider is clicked;
+    /// the host applies it to the authoritative rigidbody at the real-space contact point.
+    /// </summary>
+    public sealed class PushRequestMsg : INetMessage
+    {
+        public ushort Index;
+        public Vector3 RealPos;
+        public Vector3 Force;
+        public float DeltaTime;
+
+        public MsgType Type => MsgType.PushRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.PutVector3(RealPos);
+            w.PutVector3(Force);
+            w.Put(DeltaTime);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            RealPos = r.GetVector3();
+            Force = r.GetVector3();
+            DeltaTime = r.GetFloat();
+        }
+    }
+
+    /// <summary>Shared lantern/light state, indexed by stable scene hierarchy order.</summary>
+    public sealed class LightStateMsg : INetMessage
+    {
+        public ushort Index;
+        public bool On;
+        public float Health;
+
+        public MsgType Type => MsgType.LightState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.Put(On);
+            w.Put(Health);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            On = r.GetBool();
+            Health = r.GetFloat();
+        }
+    }
+
+    /// <summary>Client -> host light change request; same payload as <see cref="LightStateMsg"/>.</summary>
+    public sealed class LightRequestMsg : INetMessage
+    {
+        public ushort Index;
+        public bool On;
+        public float Health;
+
+        public MsgType Type => MsgType.LightRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.Put(On);
+            w.Put(Health);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            On = r.GetBool();
+            Health = r.GetFloat();
         }
     }
 

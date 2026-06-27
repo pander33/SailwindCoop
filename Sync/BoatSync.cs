@@ -1,77 +1,70 @@
 using System;
+using System.Collections.Generic;
 using SailwindCoop.Net;
 using UnityEngine;
 
 namespace SailwindCoop.Sync
 {
     /// <summary>
-    /// Stage 1 — the host's controlled boat is replicated to clients. The host
-    /// authors the boat's pose in REAL (origin-stable) space at the snapshot rate;
-    /// each client makes its own copy of the same ship <b>kinematic</b> and drives
-    /// its transform from that stream through a <see cref="NetTransform"/> (smooth
-    /// interpolation + bounded extrapolation by velocity).
-    ///
-    /// Why this works without matching object identity yet: in the "Passenger" model
-    /// there is exactly one controlled ship — the one the local player stands on
-    /// (<see cref="PlayerEmbarkerNew.debugOutCurrentBoat"/>). The client slaves that
-    /// boat. Because the player is a child of the boat, riding the deck comes for
-    /// free, and the host's avatar (sent boat-local by <see cref="PlayerSync"/>)
-    /// lands correctly on the now-synced deck. The boat carries a host-allocated
-    /// <c>NetId</c> (registered both sides) so 2+ ships / ownership extend cleanly.
+    /// Host-authoritative boat transform sync. P2 extends the original single-current-boat
+    /// model to all embarkable boats in the loaded save (main ship + dinghies), addressed by
+    /// <see cref="BoatLocator"/> index. This keeps the host boat moving for a guest who has
+    /// disembarked and gives remote player poses an unambiguous boat-local frame.
     /// </summary>
     public sealed class BoatSync
     {
+        private sealed class HostBoat
+        {
+            public ushort Index;
+            public uint NetId;
+            public Transform Boat;
+            public Vector3 LastRealPos;
+            public long LastRealTick;
+            public bool HaveLast;
+        }
+
+        private sealed class ClientBoat
+        {
+            public ushort Index;
+            public Transform Boat;
+            public readonly NetTransform Net = new NetTransform();
+            public Rigidbody Rb;
+            public bool PrevKinematic;
+            public RigidbodyInterpolation PrevInterp;
+            public Component PhysSwitcher;
+            public bool PrevPaused;
+        }
+
         private readonly CoopNet _net;
-        private readonly NetTransform _slave = new NetTransform();   // client-side: drives the slaved boat
+        private readonly Dictionary<ushort, HostBoat> _hostBoats = new Dictionary<ushort, HostBoat>();
+        private readonly Dictionary<ushort, ClientBoat> _clientBoats = new Dictionary<ushort, ClientBoat>();
 
-        private PlayerEmbarkerNew _emb;
-
-        // Host outbound state.
-        private uint _boatNetId;
         private float _sendTimer;
-        private Vector3 _lastRealPos;
-        private long _lastRealTick;
-        private bool _haveLast;
-
-        // Client slave bookkeeping (so we can restore single-player physics on leave).
-        private Transform _slavedBoat;
-        private Rigidbody _slavedRb;
-        private bool _prevKinematic;
-        private RigidbodyInterpolation _prevInterp;
-        private Component _physSwitcher;
-        private bool _prevPaused;
+        private float _refreshTimer;
+        private uint _firstBoatNetId;
         private static Type _physSwitcherType;
 
         public float InterpDelayMs = 100f;
         public int SnapshotHz = 20;
 
-        public bool IsSlaving => _slavedBoat != null;
-        public uint BoatNetId => _boatNetId;
+        public bool IsSlaving => _clientBoats.Count > 0;
+        public uint BoatNetId => _firstBoatNetId;
+        public int BoatCount => _net.Role == Role.Host ? _hostBoats.Count : _clientBoats.Count;
 
         public BoatSync(CoopNet net) { _net = net; }
 
         // -----------------------------------------------------------------
-        // Host: author the boat pose
+        // Host: author all embarkable boats
         // -----------------------------------------------------------------
 
         public void Tick(float dt)
         {
-            if (_net.Role != Role.Host) return;            // only the host sails (Stage 1)
+            if (_net.Role != Role.Host) return;
             if (_net.State != LinkState.Connected) return;
             if (!CoordSpace.Ready) return;
 
-            EnsureEmb();
-            Transform boat = CurrentBoat;
-            if (boat == null) { _haveLast = false; return; }
-
-            // Allocate + register the boat's NetId once it exists.
-            if (_boatNetId == 0)
-            {
-                _boatNetId = _net.Registry.AllocateId();
-                _net.Registry.Register(_boatNetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
-                Plugin.Logger.LogInfo("[BoatSync] Корабль хоста зарегистрирован NetId=" + _boatNetId +
-                                      " ('" + boat.name + "')");
-            }
+            RefreshHostBoats(dt);
+            if (_hostBoats.Count == 0) return;
 
             float interval = 1f / Mathf.Max(1, SnapshotHz);
             _sendTimer += dt;
@@ -79,167 +72,215 @@ namespace SailwindCoop.Sync
             _sendTimer = 0f;
 
             long tick = _net.Clock.ServerTick;
-            Vector3 real = CoordSpace.LocalToReal(boat.position);
-            Quaternion rot = boat.rotation;
-
-            Vector3 vel = Vector3.zero;
-            if (_haveLast)
+            foreach (var hb in _hostBoats.Values)
             {
-                float secs = (tick - _lastRealTick) / 1000f;
-                if (secs > 0.0001f) vel = (real - _lastRealPos) / secs;
+                if (hb.Boat == null) continue;
+
+                Vector3 real = CoordSpace.LocalToReal(hb.Boat.position);
+                Vector3 vel = Vector3.zero;
+                if (hb.HaveLast)
+                {
+                    float secs = (tick - hb.LastRealTick) / 1000f;
+                    if (secs > 0.0001f) vel = (real - hb.LastRealPos) / secs;
+                }
+                hb.LastRealPos = real;
+                hb.LastRealTick = tick;
+                hb.HaveLast = true;
+
+                _net.Broadcast(new BoatStateMsg
+                {
+                    NetId = hb.NetId,
+                    BoatIndex = hb.Index,
+                    Tick = tick,
+                    RealPos = real,
+                    Rot = hb.Boat.rotation,
+                    RealVel = vel,
+                }, LiteNetLib.DeliveryMethod.Unreliable);
             }
-            _lastRealPos = real;
-            _lastRealTick = tick;
-            _haveLast = true;
-
-            _net.Broadcast(new BoatStateMsg
-            {
-                NetId = _boatNetId,
-                Tick = tick,
-                RealPos = real,
-                Rot = rot,
-                RealVel = vel,
-            }, LiteNetLib.DeliveryMethod.Unreliable);
         }
 
         // -----------------------------------------------------------------
-        // Client: receive the boat pose
+        // Client: receive/apply boat poses
         // -----------------------------------------------------------------
 
         public void OnBoatState(BoatStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
-            if (_net.Role != Role.Client) return;          // clients don't author boat motion
-            EnsureEmb();
-            Transform boat = CurrentBoat;
-            if (boat == null) return;                      // not aboard yet; ignore until we are
+            if (_net.Role != Role.Client) return;
 
-            EnsureSlaved(boat, msg.NetId);
-            _slave.InterpDelayMs = InterpDelayMs;
-            _slave.Push(msg.Tick, msg.RealPos, msg.Rot, msg.RealVel);
+            Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
+            if (boat == null) return;
+
+            var cb = EnsureClientBoat(msg.BoatIndex, msg.NetId, boat);
+            cb.Net.InterpDelayMs = InterpDelayMs;
+            cb.Net.Push(msg.Tick, msg.RealPos, msg.Rot, msg.RealVel);
         }
 
-        /// <summary>Client per-frame: drive the slaved boat from its interpolation buffer.</summary>
         public void ApplyRemote()
         {
             if (_net.Role != Role.Client) return;
-            if (_slavedBoat == null || !_slave.HasData) return;
             if (!CoordSpace.Ready) return;
-
-            // While the local player has the game paused (ESC menu sets Time.timeScale = 0),
-            // the world is meant to be frozen, but our interpolation clock is real-time
-            // (Stopwatch) and would keep driving the boat — sailing the camera (a child of
-            // the boat) out from under the world-anchored pause panel, so the menu appears
-            // to "fly away". Freeze the deck while paused; we re-sync to the host on resume
-            // (the interpolation buffer absorbs the catch-up).
             if (Time.timeScale <= 0.0001f) return;
 
-            // Default NetTransform converters = real-space (RealToLocal / identity rot),
-            // exactly what a world-frame boat needs; no per-frame converter swap required.
-            _slave.Apply(_slavedBoat, _net.Clock.ServerTick);
+            foreach (var cb in _clientBoats.Values)
+            {
+                if (cb.Boat == null || !cb.Net.HasData) continue;
+                cb.Net.Apply(cb.Boat, _net.Clock.ServerTick);
+            }
+        }
+
+        public Transform GetBoatByIndex(ushort index)
+        {
+            if (_net.Role == Role.Client && _clientBoats.TryGetValue(index, out var cb) && cb.Boat != null)
+                return cb.Boat;
+            if (_net.Role == Role.Host && _hostBoats.TryGetValue(index, out var hb) && hb.Boat != null)
+                return hb.Boat;
+            return BoatLocator.FindByIndex(index);
         }
 
         // -----------------------------------------------------------------
-        // Slave / restore the client's boat physics
+        // Host boat discovery
         // -----------------------------------------------------------------
 
-        private void EnsureSlaved(Transform boat, uint netId)
+        private void RefreshHostBoats(float dt)
         {
-            if (_slavedBoat == boat) return;
-            RestoreSlaved();                               // release a previous boat, if any
+            _refreshTimer += dt;
+            if (_refreshTimer < 1f && _hostBoats.Count > 0) return;
+            _refreshTimer = 0f;
 
-            _slavedBoat = boat;
-            _slave.Clear();
-
-            _slavedRb = boat.GetComponent<Rigidbody>();
-            if (_slavedRb != null)
+            var boats = BoatLocator.FindBoats();
+            var seen = new HashSet<ushort>();
+            for (int i = 0; i < boats.Count && i <= ushort.MaxValue - 1; i++)
             {
-                _prevKinematic = _slavedRb.isKinematic;
-                _prevInterp = _slavedRb.interpolation;
-                _slavedRb.isKinematic = true;              // network drives the transform now
-                _slavedRb.interpolation = RigidbodyInterpolation.None;
+                var boat = boats[i];
+                if (boat == null) continue;
+                ushort idx = (ushort)i;
+                seen.Add(idx);
+
+                if (!_hostBoats.TryGetValue(idx, out var hb))
+                {
+                    hb = new HostBoat
+                    {
+                        Index = idx,
+                        NetId = _net.Registry.AllocateId(),
+                        Boat = boat,
+                    };
+                    _hostBoats[idx] = hb;
+                    _net.Registry.Register(hb.NetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
+                    if (_firstBoatNetId == 0) _firstBoatNetId = hb.NetId;
+                    Plugin.Logger.LogInfo("[BoatSync] Лодка #" + idx + " зарегистрирована NetId=" + hb.NetId +
+                                          " ('" + BoatLocator.PathOf(boat) + "')");
+                }
+                else if (hb.Boat != boat)
+                {
+                    hb.Boat = boat;
+                    hb.HaveLast = false;
+                    _net.Registry.Register(hb.NetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
+                    Plugin.Logger.LogInfo("[BoatSync] Лодка #" + idx + " перепривязана ('" + BoatLocator.PathOf(boat) + "')");
+                }
             }
 
-            TrySetPhysicsPaused(boat, true);
+            var remove = new List<ushort>();
+            foreach (var kv in _hostBoats)
+                if (!seen.Contains(kv.Key)) remove.Add(kv.Key);
+            foreach (ushort idx in remove)
+            {
+                _net.Registry.Remove(_hostBoats[idx].NetId);
+                _hostBoats.Remove(idx);
+            }
+        }
 
+        // -----------------------------------------------------------------
+        // Client slave / restore
+        // -----------------------------------------------------------------
+
+        private ClientBoat EnsureClientBoat(ushort index, uint netId, Transform boat)
+        {
+            if (_clientBoats.TryGetValue(index, out var cb))
+            {
+                if (cb.Boat == boat) return cb;
+                RestoreClientBoat(cb);
+                _clientBoats.Remove(index);
+            }
+
+            cb = new ClientBoat { Index = index, Boat = boat };
+            cb.Rb = boat.GetComponent<Rigidbody>();
+            if (cb.Rb != null)
+            {
+                cb.PrevKinematic = cb.Rb.isKinematic;
+                cb.PrevInterp = cb.Rb.interpolation;
+                cb.Rb.isKinematic = true;
+                cb.Rb.interpolation = RigidbodyInterpolation.None;
+            }
+
+            TrySetPhysicsPaused(cb, true);
+            _clientBoats[index] = cb;
             _net.Registry.Register(netId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
-            Plugin.Logger.LogInfo("[BoatSync] Корабль клиента в ведомом режиме: NetId=" + netId +
-                                  " ('" + boat.name + "'), rb=" + (_slavedRb != null) +
-                                  ", physSwitcher=" + (_physSwitcher != null));
+            if (_firstBoatNetId == 0) _firstBoatNetId = netId;
+
+            Plugin.Logger.LogInfo("[BoatSync] Лодка клиента #" + index + " в ведомом режиме: NetId=" + netId +
+                                  " ('" + BoatLocator.PathOf(boat) + "'), rb=" + (cb.Rb != null) +
+                                  ", physSwitcher=" + (cb.PhysSwitcher != null));
+            return cb;
         }
 
-        private void RestoreSlaved()
+        private void RestoreClientBoat(ClientBoat cb)
         {
-            if (_slavedBoat == null) return;
+            if (cb == null) return;
 
-            if (_slavedRb != null)
+            if (cb.Rb != null)
             {
-                _slavedRb.isKinematic = _prevKinematic;
-                _slavedRb.interpolation = _prevInterp;
+                cb.Rb.isKinematic = cb.PrevKinematic;
+                cb.Rb.interpolation = cb.PrevInterp;
             }
-            TrySetPhysicsPaused(_slavedBoat, false, restore: true);
 
-            _slavedRb = null;
-            _physSwitcher = null;
-            _slavedBoat = null;
-            _slave.Clear();
+            TrySetPhysicsPaused(cb, false, restore: true);
+            cb.Net.Clear();
+            cb.Rb = null;
+            cb.PhysSwitcher = null;
+            cb.Boat = null;
         }
 
-        public void Clear()
-        {
-            RestoreSlaved();
-            _boatNetId = 0;
-            _haveLast = false;
-            _sendTimer = 0f;
-        }
-
-        // -----------------------------------------------------------------
-        // Helpers
-        // -----------------------------------------------------------------
-
-        private void EnsureEmb()
-        {
-            if (_emb != null) return;
-            _emb = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
-        }
-
-        /// <summary>The boat the local player currently stands on, or null.</summary>
-        private Transform CurrentBoat => _emb != null ? _emb.debugOutCurrentBoat : null;
-
-        /// <summary>
-        /// Best-effort: pause/unpause the boat's own physics driver so it doesn't fight the
-        /// network-driven transform. Uses reflection so a changed/absent signature only logs,
-        /// never breaks the build or the run. The kinematic Rigidbody is the real guarantee;
-        /// this is belt-and-suspenders for any script that pushes the transform directly.
-        /// </summary>
-        private void TrySetPhysicsPaused(Transform boat, bool paused, bool restore = false)
+        private void TrySetPhysicsPaused(ClientBoat cb, bool paused, bool restore = false)
         {
             try
             {
+                if (cb == null || cb.Boat == null) return;
                 if (_physSwitcherType == null)
                     _physSwitcherType = Type.GetType("BoatPhysicsSwitcher, Assembly-CSharp");
                 if (_physSwitcherType == null) return;
 
-                if (_physSwitcher == null)
-                    _physSwitcher = boat.GetComponentInChildren(_physSwitcherType);
-                if (_physSwitcher == null) return;
+                if (cb.PhysSwitcher == null)
+                    cb.PhysSwitcher = cb.Boat.GetComponentInChildren(_physSwitcherType);
+                if (cb.PhysSwitcher == null) return;
 
                 var field = _physSwitcherType.GetField("paused");
                 var prop = field == null ? _physSwitcherType.GetProperty("paused") : null;
                 if (field == null && prop == null) return;
 
-                if (!restore)   // remember the original value the first time we touch it
-                    _prevPaused = field != null
-                        ? (bool)field.GetValue(_physSwitcher)
-                        : (bool)prop.GetValue(_physSwitcher, null);
+                if (!restore)
+                    cb.PrevPaused = field != null
+                        ? (bool)field.GetValue(cb.PhysSwitcher)
+                        : (bool)prop.GetValue(cb.PhysSwitcher, null);
 
-                bool target = restore ? _prevPaused : paused;
-                if (field != null) field.SetValue(_physSwitcher, target);
-                else prop.SetValue(_physSwitcher, target, null);
+                bool target = restore ? cb.PrevPaused : paused;
+                if (field != null) field.SetValue(cb.PhysSwitcher, target);
+                else prop.SetValue(cb.PhysSwitcher, target, null);
             }
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[BoatSync] BoatPhysicsSwitcher.paused недоступен: " + e.Message);
             }
+        }
+
+        public void Clear()
+        {
+            foreach (var cb in _clientBoats.Values)
+                RestoreClientBoat(cb);
+            _clientBoats.Clear();
+            _hostBoats.Clear();
+            _firstBoatNetId = 0;
+            _sendTimer = 0f;
+            _refreshTimer = 0f;
         }
     }
 }
