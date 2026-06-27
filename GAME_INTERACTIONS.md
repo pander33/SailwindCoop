@@ -338,6 +338,13 @@ Throw/drop:
 
 - `Awake` делает collider trigger, rigidbody continuous speculative, запускает delayed load.
 - delayed load создаёт отдельный `ItemRigidbody`, collision checker и LOD.
+- Важно для лодки: визуальный `ShipItem.transform` и физический proxy `ItemRigidbody.transform`
+  живут в разных кадрах. `ShipItem` на лодке parent-ится к `currentActualBoat`, а `ItemRigidbody`
+  parent-ится к `currentWalkCol`. Ванильные пересчёты:
+  - `MoveRigidbodyToWalkCol`: `currentActualBoat.InverseTransformPoint(item.position)` →
+    `currentWalkCol.TransformPoint(...)`;
+  - `MoveItemToWalkColRigidbody`: `currentWalkCol.InverseTransformPoint(proxy.position)` →
+    `currentActualBoat.TransformPoint(...)`.
 - `ExtraFixedUpdate` отслеживает вход/выход из boat embark collider и вызывает `EnterBoat` / `ExitBoat`.
 - `EnterBoat`:
   - берёт `BoatEmbarkCollider.walkCollider`;
@@ -361,6 +368,10 @@ Throw/drop:
 - Клиентский pickup должен быть request: item NetId, action pickup/drop/place/throw/scroll.
 - Для предметов на лодке позицию лучше слать boat-local; вне лодки - real-space.
 - Нельзя отключать `ShipItem` физику без понимания `ItemRigidbody`: игра использует отдельный proxy rigidbody.
+- При сетевом drop на лодке нельзя ставить proxy в ту же world-позицию, что и визуальный предмет.
+  Нужно ставить `ItemRigidbody` в `currentWalkCol`-кадре по формуле `MoveRigidbodyToWalkCol`, иначе
+  следующий `ItemRigidbody.FixedUpdate` пересчитает `ShipItem` из неверного proxy-кадра и предмет
+  мгновенно "пропадёт" / улетит с палубы.
 
 ### `ShipItemCrate` / `CrateInventory`
 

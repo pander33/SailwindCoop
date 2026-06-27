@@ -41,6 +41,7 @@ namespace SailwindCoop.Sync
         private bool _replaying;          // guard so the host's replay doesn't re-forward
         private GoPointer _gp;
         private FieldInfo _fClicked;
+        private FieldInfo _fHeldItem;
         private float _pushTimer;
         private float _pushAccumDt;
         private string _lastPush = "—";
@@ -84,6 +85,18 @@ namespace SailwindCoop.Sync
             if (InteractionPolicy.Classify(btn) != InteractPolicy.HostOnly) return false;
 
             self.Remember("блок(host-only) '" + ButtonLabel(btn) + "'");
+            return true;
+        }
+
+        public static bool ShouldBlockPushWhileHolding(GoPointerButton btn)
+        {
+            var self = Instance;
+            if (self == null || btn == null) return false;
+            if (self._net.Role != Role.Client || self._net.State != LinkState.Connected) return false;
+            if (!IsPushButton(btn)) return false;
+            if (!self.HasHeldItem()) return false;
+
+            self.RememberPush("блок held '" + ButtonLabel(btn) + "'");
             return true;
         }
 
@@ -280,6 +293,12 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (!CoordSpace.Ready) return;
+            if (HasHeldItem())
+            {
+                _pushAccumDt = 0f;
+                _pushTimer = 0f;
+                return;
+            }
 
             _pushAccumDt += dt;
             _pushTimer += dt;
@@ -336,6 +355,19 @@ namespace SailwindCoop.Sync
                 return _fClicked != null ? _fClicked.GetValue(_gp) as GoPointerButton : null;
             }
             catch { return null; }
+        }
+
+        private bool HasHeldItem()
+        {
+            try
+            {
+                if (_gp == null) _gp = UnityEngine.Object.FindObjectOfType<GoPointer>();
+                if (_gp == null) return false;
+                if (_fHeldItem == null)
+                    _fHeldItem = typeof(GoPointer).GetField("heldItem", BindingFlags.NonPublic | BindingFlags.Instance);
+                return _fHeldItem != null && _fHeldItem.GetValue(_gp) != null;
+            }
+            catch { return false; }
         }
 
         private GoPointer HostPointer()
@@ -495,6 +527,31 @@ namespace SailwindCoop.Sync
             PatchAll(harmony, "OnActivate", nameof(PostActivate));
             PatchAll(harmony, "OnAltActivate", nameof(PostAltActivate));
             PatchAll(harmony, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
+            PatchPushFixedUpdate(harmony, typeof(GPButtonBoatPushCol));
+            PatchPushFixedUpdate(harmony, typeof(DockPushCol));
+            PatchPushFixedUpdate(harmony, typeof(GPButtonSailPusher));
+        }
+
+        private static void PatchPushFixedUpdate(Harmony harmony, Type type)
+        {
+            try
+            {
+                var mi = type.GetMethod("ExtraFixedUpdate", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (mi == null)
+                {
+                    Plugin.Logger.LogWarning("[InteractionPatches] У " + type.Name + " нет ExtraFixedUpdate");
+                    return;
+                }
+                var prefix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
+                    nameof(PrePushFixedUpdate), BindingFlags.Static | BindingFlags.NonPublic));
+                harmony.Patch(mi, prefix: prefix);
+                Plugin.Logger.LogInfo("[InteractionPatches] " + type.Name + ".ExtraFixedUpdate: push-block patched");
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[InteractionPatches] Не удалось пропатчить " + type.Name +
+                                         ".ExtraFixedUpdate: " + e.Message);
+            }
         }
 
         private static void PatchAll(Harmony harmony, string gameMethod, string postfixName, Type[] args = null, bool withBlockPrefix = true)
@@ -555,5 +612,8 @@ namespace SailwindCoop.Sync
         /// <summary>Block HOST-ONLY actions on the client: returning false skips the original handler.</summary>
         private static bool PreBlock(GoPointerButton __instance)
             => !InteractionSync.ShouldBlockLocally(__instance);
+
+        private static bool PrePushFixedUpdate(GoPointerButton __instance)
+            => !InteractionSync.ShouldBlockPushWhileHolding(__instance);
     }
 }

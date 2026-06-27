@@ -28,6 +28,7 @@ namespace SailwindCoop.Sync
             public Vector3 LastPos;
             public long LastTick;
             public bool HaveLast;
+            public bool WasActive;   // host: was streaming this item last tick (to send a final resting pose)
         }
 
         private readonly CoopNet _net;
@@ -39,6 +40,10 @@ namespace SailwindCoop.Sync
         private GoPointer _gp;
         private FieldInfo _fHeldItem;
         private static FieldInfo _fBoatCachedItems;
+        private static FieldInfo _fShipItemCurrentBoatCollider;
+        private static FieldInfo _fItemRigidbodyOnBoat;
+        private static FieldInfo _fColCheckerCollidedCols;
+        private static MethodInfo _mShipItemExitBoat;
         private float _refreshTimer;
         private float _sendTimer;
         private float _heldPoseTimer;
@@ -103,10 +108,11 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Host) return;
             SendExtraState(dt);
 
-            // Interaction-driven model: do NOT stream every item (that fought local physics and made
-            // resting items jitter). Free items are simulated locally on each machine; only items
-            // currently held by someone are streamed so the pose follows the holder's hand. Pickup/
-            // drop/throw transitions ride their own reliable events (OnItemRequest / NotifyDrop).
+            // Host is the sole simulator; clients are kinematic puppets (see ApplyRemote). Stream an item
+            // only while it is "active" — physically in the host's hand, or free and still moving. When it
+            // settles we send one last pose and stop, so a resting item costs no bandwidth and the client
+            // just holds the last boat-local pose (riding the boat). Client-held items are relayed via
+            // OnItemRequest(Pose), not here.
             float interval = 1f / Mathf.Max(1f, HeldPoseHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
@@ -116,10 +122,29 @@ namespace SailwindCoop.Sync
             foreach (var e in _items)
             {
                 if (e.Item == null || !ShouldReplicate(e.Item)) continue;
-                if (e.Item.held == null) continue;   // only items physically in the host's hand; client-held
-                                                     // items are echoed by OnItemRequest(Pose) relay instead
-                _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.Unreliable);
+                bool hostHeld = e.Item.held != null;
+                bool freeMoving = e.HolderNetId == 0 && IsMoving(e.Item);
+                if (hostHeld || freeMoving)
+                {
+                    _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.Unreliable);
+                    e.WasActive = true;
+                }
+                else if (e.WasActive && e.HolderNetId == 0)
+                {
+                    _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);   // final resting pose
+                    e.WasActive = false;
+                }
             }
+        }
+
+        private static bool IsMoving(ShipItem item)
+        {
+            try
+            {
+                var body = item != null && item.GetItemRigidbody() != null ? item.GetItemRigidbody().GetBody() : null;
+                return body != null && body.velocity.sqrMagnitude > 0.0025f;   // > 0.05 m/s
+            }
+            catch { return false; }
         }
 
         public void ApplyRemote()
@@ -131,15 +156,64 @@ namespace SailwindCoop.Sync
             foreach (var e in _items)
             {
                 if (e.Item == null) continue;
-                // Only items currently held by a REMOTE player are network-driven (follow the hand).
-                // Free items (HolderNetId == 0) are simulated locally and never touched here — that's
-                // what stops resting items from jittering. Items I hold are driven by the game.
-                if (e.HolderNetId == 0 || e.HolderNetId == _net.MyNetId) continue;
+                if (e.HolderNetId == _net.MyNetId) continue;   // I hold it → the game drives it locally
                 if (!e.Net.HasData) continue;
-                PrepareForRemotePose(e.Item, held: true);
+
+                // Every other item (free OR held by a remote player) is a kinematic PUPPET driven purely
+                // by the host's stream. We disable the game's own ItemRigidbody so it can't fight the
+                // network transform (the old jitter) or drift/destroy the item; the client never
+                // simulates item physics, so piles can't diverge and a placed item can't end up inside
+                // another collider and vanish. The last received pose is boat-local, so a settled item
+                // keeps riding the boat after the host stops streaming it.
+                bool held = e.HolderNetId != 0;
+                PrepareForRemotePose(e.Item, held);   // layer 2 while in a hand, else 0
+                SetPuppet(e.Item, true);
                 e.Net.Apply(e.Item.transform, _net.Clock.ServerTick);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
+        }
+
+        /// <summary>
+        /// Turn the game's own physics for an item on/off. As a puppet (true) its ItemRigidbody is
+        /// disabled, its body is kinematic, and collision detection is off. This is used for remote
+        /// network puppets and for items carried by a client: GoPointer still moves item.transform
+        /// locally, but the item cannot push the client-side kinematic boat or local props.
+        /// </summary>
+        private static void SetPuppet(ShipItem item, bool puppet)
+        {
+            try
+            {
+                var irb = item != null ? item.GetItemRigidbody() : null;
+                if (irb != null && irb.enabled == puppet) irb.enabled = !puppet;
+                if (irb != null)
+                {
+                    irb.ToggleCollider(!puppet);
+                    foreach (var col in irb.GetComponentsInChildren<Collider>(true))
+                        if (col != null) col.enabled = !puppet;
+                }
+                var body = irb != null ? irb.GetBody() : null;
+                if (body != null)
+                {
+                    if (body.isKinematic != puppet)
+                    {
+                        body.isKinematic = puppet;
+                        if (puppet) { body.velocity = Vector3.zero; body.angularVelocity = Vector3.zero; }
+                    }
+                    // A kinematic puppet still shoves dynamic items; keep it purely visual so it can't
+                    // push the client's other items out of sync with the host.
+                    if (body.detectCollisions == puppet) body.detectCollisions = !puppet;
+                }
+                if (puppet && item != null && item.colChecker != null)
+                {
+                    item.colChecker.collisions = 0;
+                    item.colChecker.allowObstructedDropping = true;
+                    if (_fColCheckerCollidedCols == null)
+                        _fColCheckerCollidedCols = typeof(PickupableItemCollisionChecker).GetField("collidedCols", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var list = _fColCheckerCollidedCols != null ? _fColCheckerCollidedCols.GetValue(item.colChecker) as System.Collections.IList : null;
+                    list?.Clear();
+                }
+            }
+            catch { }
         }
 
         public void NotifyPickup(GoPointer pointer, PickupableItem pickup)
@@ -150,6 +224,9 @@ namespace SailwindCoop.Sync
             RefreshItems(force: true);
             if (!_byItem.TryGetValue(item, out var e)) return;
 
+            SetPuppet(item, true);    // client-held items are visual only; no collision/boat push
+            e.HolderNetId = _net.MyNetId;
+            e.Net.Clear();
             _localHeld[item] = _net.MyNetId;
             SendRequest(e, ItemAction.Pickup, reliable: true);
             Remember("исх pickup #" + e.Index + " '" + item.name + "'");
@@ -166,8 +243,12 @@ namespace SailwindCoop.Sync
 
             if (_net.Role == Role.Client)
             {
-                SendRequest(e, ItemAction.Drop, reliable: true);
-                Remember("исх drop #" + e.Index + " '" + item.name + "'");
+                var msg = BuildRequest(e, ItemAction.Drop, _net.Clock.ServerTick);
+                _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                e.HolderNetId = _net.MyNetId;  // keep ApplyRemote off until the host sends the free state
+                e.Net.Clear();
+                SetPuppet(item, true);    // wait for the host's authoritative free pose
+                Remember("исх drop #" + e.Index + " '" + item.name + "' " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
             }
             else if (_net.Role == Role.Host)
             {
@@ -226,15 +307,24 @@ namespace SailwindCoop.Sync
             {
                 e.HolderNetId = actor;
                 _localHeld[e.Item] = actor;
+                // Disable the host's own item physics while a CLIENT holds it — otherwise the game's
+                // ItemRigidbody keeps running and fights our hand-following positioning, which corrupts
+                // the item's state and makes it vanish on drop. The item is a clean kinematic puppet
+                // driven by the client's Pose stream, exactly like remote-held items on a client.
+                SetPuppet(e.Item, true);
             }
             else if (msg.Action == ItemAction.Drop)
             {
                 e.HolderNetId = 0;
                 _localHeld.Remove(e.Item);
+                // Give the host's physics back; it now simulates the fall authoritatively (lands, enters
+                // the boat, settles) and streams the result — same path as the host's own drop.
+                SetPuppet(e.Item, false);
             }
-            else if (e.HolderNetId != actor)
+            else
             {
-                return;
+                if (e.HolderNetId != actor) return;   // Pose from a non-owner
+                SetPuppet(e.Item, true);              // keep it a clean puppet while held
             }
 
             ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel, e.Item.amount, e.Item.health, e.Item.sold, e.Item.nailed, e.HolderNetId != 0);
@@ -244,7 +334,7 @@ namespace SailwindCoop.Sync
             // instead, or the dropped item would be flung off the ship on every receiver.
             if (msg.Action == ItemAction.Drop) state.Vel = msg.Vel;
             _net.Broadcast(state, msg.Action == ItemAction.Pose ? LiteNetLib.DeliveryMethod.Unreliable : LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("вх " + msg.Action + " #" + e.Index + " actor=" + actor);
+            Remember("вх " + msg.Action + " #" + e.Index + " actor=" + actor + " " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
         }
 
         public void OnItemState(ItemStateMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -269,27 +359,13 @@ namespace SailwindCoop.Sync
                 return;
             }
 
-            if (msg.HolderNetId != 0)
-            {
-                // Remote-held: drive the pose through NetTransform (ApplyRemote follows the hand).
-                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
-                e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
-                Remember("вх held #" + e.Index + " от " + msg.HolderNetId);
-            }
-            else if (prevHolder == _net.MyNetId)
-            {
-                // This is the echo of MY OWN drop — the game already placed and launched the item
-                // locally. Don't teleport it to the host's pose (that's what made it vanish); just
-                // stop any held interpolation.
+            // Free OR remote-held: feed the pose into NetTransform; ApplyRemote drives the item as a
+            // kinematic puppet (game physics disabled), so it can't diverge / be ejected / vanish.
+            ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
+            if (prevHolder == _net.MyNetId && msg.HolderNetId == 0)
                 e.Net.Clear();
-                Remember("drop(свой) #" + e.Index);
-            }
-            else
-            {
-                // Someone else's drop: place once at the release point + velocity, then local physics.
-                ApplyFreePose(e, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
-                Remember("вх drop #" + e.Index);
-            }
+            e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            Remember("вх " + (msg.HolderNetId != 0 ? "held " + msg.HolderNetId : "free") + " #" + e.Index);
         }
 
         private void SendLocalHeldPose(float dt)
@@ -307,6 +383,7 @@ namespace SailwindCoop.Sync
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
             _localHeld[item] = _net.MyNetId;
+            SetPuppet(item, true);    // keep collisions disabled for the whole carry window
             SendRequest(e, ItemAction.Pose, reliable: false);
         }
 
@@ -373,6 +450,8 @@ namespace SailwindCoop.Sync
         private void BuildPose(ShipItem item, long tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel)
         {
             Transform boat = item.currentActualBoat != null ? item.currentActualBoat : ParentBoat(item.transform);
+            if (boat == null && item.held != null)
+                boat = LocalPlayerBoat();
             if (boat != null)
             {
                 frame = CoordFrame.Boat;
@@ -403,6 +482,16 @@ namespace SailwindCoop.Sync
             }
         }
 
+        private static Transform LocalPlayerBoat()
+        {
+            try
+            {
+                var emb = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
+                return emb != null ? emb.debugOutCurrentBoat : null;
+            }
+            catch { return null; }
+        }
+
         private void ApplyWirePose(ShipItem item, CoordFrame frame, ushort boatIndex, Vector3 pos, Quaternion rot, Vector3 vel, float amount, float health, bool sold, bool nailed, bool held)
         {
             if (item == null) return;
@@ -423,8 +512,13 @@ namespace SailwindCoop.Sync
 
             item.transform.position = worldPos;
             item.transform.rotation = worldRot;
+            if (frame == CoordFrame.Boat)
+                EnsureBoatParentState(item, boatIndex);
+            else
+                EnsureWorldParentState(item);
             ApplyScalarState(item, amount, health, sold, nailed);
-            MoveProxyToItem(item, kinematic: held || _net.Role == Role.Client, vel);
+            // Host simulates authoritatively (never a client here): drop → dynamic, held → kinematic puppet.
+            MoveProxyToItem(item, kinematic: held, vel);
         }
 
         private void ApplyScalarState(ShipItem item, float amount, float health, bool sold, bool nailed)
@@ -472,7 +566,8 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private const float MaxDropSpeed = 15f;   // clamp so a bad/teleport-derived velocity can't launch an item off the ship
+        private const float MaxDropSpeed = 15f;        // clamp so a bad/teleport-derived velocity can't launch an item off the ship
+        private const float SettleDepenetration = 1f;  // cap overlap-resolution speed so dropping into a pile can't fling the item away
 
         private static void MoveProxyToItem(ShipItem item, bool kinematic, Vector3 vel)
         {
@@ -481,8 +576,18 @@ namespace SailwindCoop.Sync
                 var proxy = item != null ? item.GetItemRigidbody() : null;
                 var body = proxy != null ? proxy.GetBody() : null;
                 if (proxy == null || body == null) return;
-                proxy.transform.position = item.transform.position;
-                proxy.transform.rotation = item.transform.rotation;
+                if (item.currentActualBoat != null && item.currentWalkCol != null)
+                {
+                    Vector3 boatLocalPos = item.currentActualBoat.InverseTransformPoint(item.transform.position);
+                    Quaternion boatLocalRot = Quaternion.Inverse(item.currentActualBoat.rotation) * item.transform.rotation;
+                    proxy.transform.position = item.currentWalkCol.TransformPoint(boatLocalPos);
+                    proxy.transform.rotation = item.currentWalkCol.rotation * boatLocalRot;
+                }
+                else
+                {
+                    proxy.transform.position = item.transform.position;
+                    proxy.transform.rotation = item.transform.rotation;
+                }
                 body.isKinematic = kinematic;
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
@@ -495,10 +600,83 @@ namespace SailwindCoop.Sync
                 }
                 else
                 {
+                    // A dropped item is snapped to the authoritative drop point, which may overlap other
+                    // items whose local pile differs from the sender's. Re-enabling collisions then makes
+                    // Unity eject it at high speed. Cap the depenetration speed and clamp the throw velocity.
+                    body.maxDepenetrationVelocity = SettleDepenetration;
                     body.velocity = Vector3.ClampMagnitude(vel, MaxDropSpeed);
+                    body.angularVelocity = Vector3.zero;
                 }
             }
             catch { }
+        }
+
+        private static void EnsureBoatParentState(ShipItem item, ushort boatIndex)
+        {
+            if (item == null) return;
+            try
+            {
+                Transform boat = BoatLocator.FindByIndex(boatIndex);
+                if (boat == null) return;
+
+                BoatEmbarkCollider embark = null;
+                foreach (var candidate in boat.GetComponentsInChildren<BoatEmbarkCollider>(true))
+                {
+                    if (candidate != null && candidate.transform.parent == boat)
+                    {
+                        embark = candidate;
+                        break;
+                    }
+                    if (embark == null) embark = candidate;
+                }
+                if (embark == null || embark.walkCollider == null) return;
+
+                item.currentActualBoat = boat;
+                item.currentWalkCol = embark.walkCollider;
+                item.transform.parent = boat;
+
+                var embarkCollider = embark.GetComponent<Collider>();
+                if (embarkCollider != null)
+                {
+                    if (_fShipItemCurrentBoatCollider == null)
+                        _fShipItemCurrentBoatCollider = typeof(ShipItem).GetField("currentBoatCollider", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (_fShipItemCurrentBoatCollider != null)
+                        _fShipItemCurrentBoatCollider.SetValue(item, embarkCollider);
+                }
+
+                var saveable = item.GetComponent<SaveablePrefab>();
+                var boatSaveable = boat.parent != null ? boat.parent.GetComponent<SaveableObject>() : null;
+                if (saveable != null && boatSaveable != null)
+                    saveable.SetParentObject(boatSaveable.sceneIndex);
+
+                var irb = item.GetItemRigidbody();
+                if (irb == null) return;
+                if (_fItemRigidbodyOnBoat == null)
+                    _fItemRigidbodyOnBoat = typeof(ItemRigidbody).GetField("onBoat", BindingFlags.NonPublic | BindingFlags.Instance);
+                bool onBoat = _fItemRigidbodyOnBoat != null && (bool)_fItemRigidbodyOnBoat.GetValue(irb);
+                if (!onBoat)
+                    irb.EnterBoat();
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] Не удалось привязать предмет к лодке: " + e.Message);
+            }
+        }
+
+        private static void EnsureWorldParentState(ShipItem item)
+        {
+            if (item == null || item.currentActualBoat == null) return;
+            try
+            {
+                if (_mShipItemExitBoat == null)
+                    _mShipItemExitBoat = typeof(ShipItem).GetMethod("ExitBoat", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (_mShipItemExitBoat != null)
+                    _mShipItemExitBoat.Invoke(item, null);
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] Не удалось вывести предмет из лодки: " + e.Message);
+            }
         }
 
         // -----------------------------------------------------------------
@@ -985,32 +1163,6 @@ namespace SailwindCoop.Sync
             Remember("ремап id " + oldId + "→" + hostId + " '" + local.name + "'");
         }
 
-        /// <summary>Client: place a freed/dropped item once and hand it back to local physics (stop driving it).</summary>
-        private void ApplyFreePose(ItemEntry e, CoordFrame frame, ushort boatIndex, Vector3 pos, Quaternion rot, Vector3 vel)
-        {
-            if (e == null || e.Item == null) return;
-            Vector3 worldPos;
-            Quaternion worldRot;
-            if (frame == CoordFrame.Boat)
-            {
-                Transform boat = BoatLocator.FindByIndex(boatIndex);
-                if (boat == null) return;
-                worldPos = boat.TransformPoint(pos);
-                worldRot = boat.rotation * rot;
-            }
-            else
-            {
-                worldPos = CoordSpace.Ready ? CoordSpace.RealToLocal(pos) : pos;
-                worldRot = rot;
-            }
-
-            e.Item.transform.position = worldPos;
-            e.Item.transform.rotation = worldRot;
-            PrepareForRemotePose(e.Item, held: false);     // restore raycast layer
-            MoveProxyToItem(e.Item, kinematic: false, vel); // release to local physics with the throw impulse
-            e.Net.Clear();
-        }
-
         /// <summary>Host: send a SpawnObject for every replicated item so a freshly-ready client can match/spawn.</summary>
         private void SendManifest()
         {
@@ -1066,6 +1218,11 @@ namespace SailwindCoop.Sync
         {
             var s = item != null ? item.GetComponent<SaveablePrefab>() : null;
             return s != null ? s.prefabIndex : 0;
+        }
+
+        private static string PoseLabel(CoordFrame frame, ushort boatIndex, Vector3 pos)
+        {
+            return "frame=" + frame + " boat=" + boatIndex + " pos=" + pos.ToString("F2");
         }
 
         private ShipItem SpawnClientItem(int instanceId, int prefabIndex, CoordFrame frame, ushort boatIndex,
@@ -1175,6 +1332,10 @@ namespace SailwindCoop.Sync
         {
             _last = text;
             _lastEventTick = _net.Clock.ServerTick;
+            if (text != null &&
+                text.IndexOf("Pose", StringComparison.OrdinalIgnoreCase) < 0 &&
+                text.IndexOf("held ", StringComparison.OrdinalIgnoreCase) < 0)
+                Plugin.Logger.LogInfo("[ItemSync] " + text);
         }
 
         public void Clear()
