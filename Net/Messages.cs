@@ -28,6 +28,8 @@ namespace SailwindCoop.Net
         BoatState = 31,
         EnvState = 32,
         ControlState = 33,
+        AnchorState = 34,
+        MooringState = 35,
 
         // --- discrete control events (ReliableOrdered) — Stage 1+ ---
         ControlEvent = 40,
@@ -35,6 +37,8 @@ namespace SailwindCoop.Net
         // --- interaction (ReliableOrdered) — Stage 2 ---
         InteractRequest = 50,
         ControlRequest = 51,   // client -> host : "I adjusted rope #i to this length"
+        SteerRequest = 52,     // client -> host : "I turned wheel #i to this input"
+        MooringRequest = 53,   // client -> host : "I unmoored rope #i"
     }
 
     /// <summary>Why the host refused a client (sent in Reject).</summary>
@@ -317,6 +321,52 @@ namespace SailwindCoop.Net
     }
 
     // ---------------------------------------------------------------------
+    // Anchor (Stage 2) — Unreliable, host -> client only
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// The boat anchor's pose + set-state. Anchor payout is already carried by the anchor
+    /// rope's length (ControlState), but on the client the anchor is a free rigidbody jointed
+    /// to a now-kinematic boat, so it drifts from the host. We slave it like the boat.
+    ///
+    /// <para>Frame matters: <b>stowed</b> the anchor is fixed to the deck → <see cref="CoordFrame.Boat"/>
+    /// (boat-local, immune to the floating origin and to interp lag while sailing); <b>deployed/set</b>
+    /// it sits at a world seabed point the boat swings around → <see cref="CoordFrame.World"/>
+    /// (origin-stable real space). The host picks the frame; the client switches converters on change.</para>
+    /// </summary>
+    public sealed class AnchorStateMsg : INetMessage
+    {
+        public long Tick;
+        public CoordFrame Frame;
+        public Vector3 Pos;       // real space (World) or boat-local (Boat), per Frame
+        public Quaternion Rot;    // world rotation (World) or boat-local rotation (Boat)
+        public Vector3 Vel;       // real-space velocity for extrapolation (World only; else zero)
+        public bool Set;          // Anchor.IsSet() — dug into the seabed
+
+        public MsgType Type => MsgType.AnchorState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Tick);
+            w.Put((byte)Frame);
+            w.PutVector3(Pos);
+            w.PutQuaternion(Rot);
+            w.PutVector3(Vel);
+            w.Put(Set);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Tick = r.GetLong();
+            Frame = (CoordFrame)r.GetByte();
+            Pos = r.GetVector3();
+            Rot = r.GetQuaternion();
+            Vel = r.GetVector3();
+            Set = r.GetBool();
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Controls (Stage 1) — Unreliable, host -> client only
     // ---------------------------------------------------------------------
 
@@ -402,6 +452,105 @@ namespace SailwindCoop.Net
             Length = r.GetFloat();
             HasWinchRotation = r.GetBool();
             WinchRotation = HasWinchRotation ? r.GetQuaternion() : Quaternion.identity;
+        }
+    }
+
+    /// <summary>
+    /// A client's request to set one steering wheel's input (it turned the wheel). The boat
+    /// steers off the old <c>Rudder</c>: the wheel's <c>currentInput</c> drives the rudder
+    /// hinge's spring target. The host sets the same wheel's <c>currentInput</c> and re-applies
+    /// the rudder rotation, so the host's boat actually turns and BoatSync carries the new
+    /// heading back to everyone. Index = position in the boat's steering-wheel enumeration.
+    /// </summary>
+    public sealed class SteerRequestMsg : INetMessage
+    {
+        public ushort Index;
+        public float Input;
+
+        public MsgType Type => MsgType.SteerRequest;
+
+        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put(Input); }
+        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Input = r.GetFloat(); }
+    }
+
+    /// <summary>Mooring action on one rope.</summary>
+    public enum MooringKind : byte
+    {
+        Unmoor = 0,   // PickupableBoatMooringRope.Unmoor()
+        Moor = 1,     // MoorTo(dock) — dock found by DockReal position
+        Length = 2,   // adjusted rope length — LengthSq is the new currentRopeLengthSquared
+    }
+
+    /// <summary>
+    /// One mooring action, mirrored both ways and relayed by the host. The rope is referenced by
+    /// its index in <c>BoatMooringRopes.ropes</c> (identical on both machines — same ship).
+    /// For <see cref="MooringKind.Moor"/> the target dock is given by its real-space position;
+    /// the receiver finds the nearest <c>GPButtonDockMooring</c> (docks are static world objects).
+    ///
+    /// <para>Host→client uses <see cref="MooringStateMsg"/>; client→host uses
+    /// <see cref="MooringRequestMsg"/>. Same payload, two directions, so the host stays the
+    /// authority (the only spring that holds the authoritative boat is the host's).</para>
+    /// </summary>
+    public sealed class MooringStateMsg : INetMessage
+    {
+        public ushort Index;
+        public MooringKind Kind;
+        public Vector3 DockReal;   // real-space dock position (Moor only)
+        public float LengthSq;     // new currentRopeLengthSquared (Length only)
+
+        public MsgType Type => MsgType.MooringState;
+
+        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); }
+        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); }
+    }
+
+    /// <summary>Client -> host mooring action (see <see cref="MooringStateMsg"/>). Host applies + relays.</summary>
+    public sealed class MooringRequestMsg : INetMessage
+    {
+        public ushort Index;
+        public MooringKind Kind;
+        public Vector3 DockReal;
+        public float LengthSq;
+
+        public MsgType Type => MsgType.MooringRequest;
+
+        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); }
+        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); }
+    }
+
+    /// <summary>Discrete interaction kind, mirrored from the game's <c>GoPointerButton</c> handlers.</summary>
+    public enum InteractKind : byte
+    {
+        Activate = 0,      // OnActivate(GoPointer) — primary click (toggles, presses)
+        AltActivate = 1,   // OnAltActivate(GoPointer) — secondary action (untie, quick-release, unmoor)
+    }
+
+    /// <summary>
+    /// A client's discrete interaction with one of the boat's <c>GoPointerButton</c>s
+    /// (anything that isn't a continuous winch/wheel drag): toggling a cleat, quick-release,
+    /// untying a mooring line, etc. The button is referenced by its index in the boat's
+    /// <c>GetComponentsInChildren&lt;GoPointerButton&gt;</c> order — identical on both machines
+    /// because they load the same ship. The host replays the same handler authoritatively (F3),
+    /// so its game logic (and the resulting state sync) is the source of truth. ReliableOrdered:
+    /// these are one-shot events that must not be dropped.
+    /// </summary>
+    public sealed class ControlEventMsg : INetMessage
+    {
+        public ushort Index;
+        public InteractKind Kind;
+
+        public MsgType Type => MsgType.ControlEvent;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.Put((byte)Kind);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            Kind = (InteractKind)r.GetByte();
         }
     }
 

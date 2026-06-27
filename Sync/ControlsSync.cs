@@ -41,6 +41,25 @@ namespace SailwindCoop.Sync
         private GPButtonRopeWinch[] _winches = System.Array.Empty<GPButtonRopeWinch>();
         private Node[] _nodes = System.Array.Empty<Node>();
 
+        // Steering wheels on the boat. The rudder each one drives is a HingeJoint, so it's in
+        // _nodes and follows the host through the normal rotation sync — the client's wheel visual
+        // rides that. We don't drive the rudder locally; we only forward the wheel input (below).
+        private GPButtonSteeringWheel[] _wheels = System.Array.Empty<GPButtonSteeringWheel>();
+
+        // Steering forward (client -> host): the boat steers off the old Rudder, where the wheel's
+        // public currentInput drives the rudder hinge spring. We forward that value when the local
+        // player turns a wheel; the host applies it so its boat actually turns (BoatSync echoes back).
+        private float[] _steerLastSent = System.Array.Empty<float>();
+        private float _steerTimer;
+        private MethodInfo _miApplyRudder;
+        private const float SteerEps = 0.01f;
+
+        // Diagnostics: steering-rope length + rudder angle, shown in the overlay so we can see
+        // the steering channel move on both machines.
+        private RopeControllerSteeringWheel _steerRope;
+        private RudderNew _rudderNew;
+        private Rudder _rudderOld;
+
         // Client: latest rotation targets + which rigidbodies we forced kinematic.
         private Quaternion[] _targetRots = System.Array.Empty<Quaternion>();
         private bool _haveTargets;
@@ -78,6 +97,18 @@ namespace SailwindCoop.Sync
         public int NodeCount => _nodes.Length;
         public int WinchCount => _winches.Length;
 
+        /// <summary>Steering readout: wheels found, steering-rope length, rudder angle. Compare host vs client.</summary>
+        public string SteeringText
+        {
+            get
+            {
+                if (_wheels.Length == 0) return "нет штурвала";
+                string len = _steerRope != null ? _steerRope.currentLength.ToString("0.000") : "—";
+                string ang = RudderAngleText();
+                return _wheels.Length + "шт len=" + len + " угол=" + ang;
+            }
+        }
+
         public string LastControlRequestText
         {
             get
@@ -92,6 +123,29 @@ namespace SailwindCoop.Sync
         }
 
         public ControlsSync(CoopNet net) { _net = net; }
+
+        // currentAngle is non-public on both rudder types — read it reflectively for the readout.
+        private FieldInfo _fRudderNewAngle, _fRudderOldAngle;
+        private string RudderAngleText()
+        {
+            try
+            {
+                if (_rudderNew != null)
+                {
+                    if (_fRudderNewAngle == null)
+                        _fRudderNewAngle = typeof(RudderNew).GetField("currentAngle", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (_fRudderNewAngle != null) return ((float)_fRudderNewAngle.GetValue(_rudderNew)).ToString("0.0");
+                }
+                if (_rudderOld != null)
+                {
+                    if (_fRudderOldAngle == null)
+                        _fRudderOldAngle = typeof(Rudder).GetField("currentAngle", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (_fRudderOldAngle != null) return ((float)_fRudderOldAngle.GetValue(_rudderOld)).ToString("0.0");
+                }
+            }
+            catch { }
+            return "—";
+        }
 
         // -----------------------------------------------------------------
         // Host: capture and broadcast lengths + node rotations
@@ -185,25 +239,76 @@ namespace SailwindCoop.Sync
 
             ForwardLocalRopeChanges(dt);
 
+            // Steering: forward the wheel's input to the host while the local player turns it.
+            // We do NOT drive the rudder locally — the host steers authoritatively and its rudder
+            // angle comes back through the node-rotation sync below, which turns the client's wheel.
+            GoPointerButton heldBtn = HeldButton();
+            ForwardSteering(dt, heldBtn);
+
             if (!_haveTargets || _nodes.Length == 0) return;
             if (_targetRots.Length != _nodes.Length) return;
 
-            // Don't fight a control the local player is currently holding — let their input
-            // turn it (so the winch actually moves and the new length gets forwarded).
-            Transform held = HeldButtonTransform();
-
+            // Slerp every moving hinge (booms + rudder) toward the host's value — including the
+            // rudder of a wheel the local player is holding, so they see the real steering result.
             float t = 1f - Mathf.Exp(-RotSmoothing * dt);
             for (int i = 0; i < _nodes.Length; i++)
             {
                 var tr = _nodes[i].T;
                 if (tr == null) continue;
-                if (held != null && tr == held) continue;
                 tr.localRotation = Quaternion.Slerp(tr.localRotation, _targetRots[i], t);
             }
         }
 
-        /// <summary>The transform of the control the local player is sticky-holding, or null.</summary>
-        private Transform HeldButtonTransform()
+        /// <summary>
+        /// Client: while the local player turns a wheel, forward its <c>currentInput</c> to the
+        /// host (throttled, on change). The host drives the rudder from this so its boat turns.
+        /// </summary>
+        private void ForwardSteering(float dt, GoPointerButton heldBtn)
+        {
+            _steerTimer += dt;
+            float interval = 1f / Mathf.Max(1f, ControlHz);
+            if (_steerTimer < interval) return;
+            _steerTimer = 0f;
+
+            var wheel = heldBtn as GPButtonSteeringWheel;
+            if (wheel == null) return;
+            int idx = System.Array.IndexOf(_wheels, wheel);
+            if (idx < 0) return;
+
+            float input = wheel.currentInput;
+            if (idx < _steerLastSent.Length && Mathf.Abs(input - _steerLastSent[idx]) < SteerEps) return;
+
+            _net.Broadcast(new SteerRequestMsg { Index = (ushort)idx, Input = input },
+                           LiteNetLib.DeliveryMethod.ReliableOrdered);
+            if (idx < _steerLastSent.Length) _steerLastSent[idx] = input;
+        }
+
+        /// <summary>Host: apply a client's wheel input — set it and re-run the rudder rotation.</summary>
+        public void OnSteerRequest(SteerRequestMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Host) return;
+            RefreshNodes();
+            int i = msg.Index;
+            if (i < 0 || i >= _wheels.Length) return;
+            var wheel = _wheels[i];
+            if (wheel == null) return;
+
+            wheel.currentInput = msg.Input;
+            try
+            {
+                if (_miApplyRudder == null)
+                    _miApplyRudder = typeof(GPButtonSteeringWheel).GetMethod(
+                        "ApplyRudderRotation", BindingFlags.NonPublic | BindingFlags.Instance);
+                _miApplyRudder?.Invoke(wheel, null);
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogWarning("[ControlsSync] ApplyRudderRotation не удалось: " + e.Message);
+            }
+        }
+
+        /// <summary>The control the local player is sticky-holding (winch/wheel), or null.</summary>
+        private GoPointerButton HeldButton()
         {
             try
             {
@@ -211,8 +316,7 @@ namespace SailwindCoop.Sync
                 if (_gp == null) return null;
                 if (_fSticky == null)
                     _fSticky = typeof(GoPointer).GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
-                var btn = _fSticky != null ? _fSticky.GetValue(_gp) as GoPointerButton : null;
-                return btn != null ? btn.transform : null;
+                return _fSticky != null ? _fSticky.GetValue(_gp) as GoPointerButton : null;
             }
             catch { return null; }
         }
@@ -313,10 +417,15 @@ namespace SailwindCoop.Sync
             _haveTargets = false;
             _warnedMismatch = false;
 
+            _steerRope = null;
+            _rudderNew = null;
+            _rudderOld = null;
+
             if (boat == null)
             {
                 _ropes = System.Array.Empty<RopeController>();
                 _winches = System.Array.Empty<GPButtonRopeWinch>();
+                _wheels = System.Array.Empty<GPButtonSteeringWheel>();
                 _nodes = System.Array.Empty<Node>();
                 _hostLen = System.Array.Empty<float>();
                 _localUntil = System.Array.Empty<long>();
@@ -326,6 +435,15 @@ namespace SailwindCoop.Sync
 
             _ropes = boat.GetComponentsInChildren<RopeController>(true);
             _winches = boat.GetComponentsInChildren<GPButtonRopeWinch>(true);
+            _wheels = boat.GetComponentsInChildren<GPButtonSteeringWheel>(true);
+            _steerLastSent = new float[_wheels.Length];
+            for (int i = 0; i < _wheels.Length; i++)
+                _steerLastSent[i] = _wheels[i] != null ? _wheels[i].currentInput : 0f;
+
+            // Diagnostics references (first of each kind is enough for the readout).
+            _steerRope = boat.GetComponentInChildren<RopeControllerSteeringWheel>(true);
+            _rudderNew = boat.GetComponentInChildren<RudderNew>(true);
+            _rudderOld = boat.GetComponentInChildren<Rudder>(true);
 
             // Stage 2 bookkeeping, seeded from current values so we don't false-trigger.
             _hostLen = new float[_ropes.Length];
@@ -348,7 +466,7 @@ namespace SailwindCoop.Sync
             _nodes = nodes.ToArray();
 
             Plugin.Logger.LogInfo("[ControlsSync] Корабль сменился: тросов=" + _ropes.Length +
-                                  ", узлов=" + _nodes.Length +
+                                  ", узлов=" + _nodes.Length + ", штурвалов=" + _wheels.Length +
                                   (boat != null ? " ('" + boat.name + "')" : ""));
         }
 
@@ -405,6 +523,12 @@ namespace SailwindCoop.Sync
             _cachedBoat = null;
             _ropes = System.Array.Empty<RopeController>();
             _winches = System.Array.Empty<GPButtonRopeWinch>();
+            _wheels = System.Array.Empty<GPButtonSteeringWheel>();
+            _steerLastSent = System.Array.Empty<float>();
+            _steerTimer = 0f;
+            _steerRope = null;
+            _rudderNew = null;
+            _rudderOld = null;
             _nodes = System.Array.Empty<Node>();
             _targetRots = System.Array.Empty<Quaternion>();
             _hostLen = System.Array.Empty<float>();

@@ -1,3 +1,4 @@
+using HarmonyLib;
 using SailwindCoop.Net;
 using SailwindCoop.Sync;
 using UnityEngine;
@@ -18,9 +19,13 @@ namespace SailwindCoop.Runtime
         public BoatSync Boats { get; private set; }
         public EnvironmentSync Env { get; private set; }
         public ControlsSync Controls { get; private set; }
+        public AnchorSync Anchor { get; private set; }
+        public MooringSync Mooring { get; private set; }
+        public InteractionSync Interactions { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
+        private Harmony _harmony;
 
         private void Awake()
         {
@@ -47,6 +52,14 @@ namespace SailwindCoop.Runtime
 
             Env = new EnvironmentSync(Net);
             Controls = new ControlsSync(Net);
+            Anchor = new AnchorSync(Net);
+            Mooring = new MooringSync(Net);
+            Interactions = new InteractionSync(Net);
+
+            // F3 — intercept the game's interaction layer so a client's clicks reach the host.
+            _harmony = new Harmony(Plugin.Guid);
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); }
+            catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
 
             Net.OnAccepted += ack =>
                 Plugin.Logger.LogInfo("[Coop] Подключение принято, NetId=" + ack.AssignedNetId);
@@ -69,6 +82,10 @@ namespace SailwindCoop.Runtime
             Env.Tick(dt);
             Controls.Tick(dt);
             Controls.ApplyClient(dt);
+            Anchor.Tick(dt);
+            Anchor.ApplyRemote();
+            Mooring.Tick(dt);
+            Interactions.Tick(dt);
             Players.Tick(dt);
             Players.ApplyRemotes();
         }
@@ -89,8 +106,23 @@ namespace SailwindCoop.Runtime
                 case MsgType.ControlState:
                     Controls.OnControlState((ControlStateMsg)msg, fromPeer);
                     break;
+                case MsgType.AnchorState:
+                    Anchor.OnAnchorState((AnchorStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.MooringState:
+                    Mooring.OnMooringState((MooringStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.MooringRequest:
+                    Mooring.OnMooringRequest((MooringRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.SteerRequest:
+                    Controls.OnSteerRequest((SteerRequestMsg)msg, fromPeer);
+                    break;
                 case MsgType.ControlRequest:
                     Controls.OnControlRequest((ControlRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.ControlEvent:
+                    Interactions.OnControlEvent((ControlEventMsg)msg, fromPeer);
                     break;
             }
         }
@@ -102,11 +134,15 @@ namespace SailwindCoop.Runtime
 
         private void OnDestroy()
         {
+            Interactions?.Clear();
+            Mooring?.Clear();
+            Anchor?.Clear();
             Controls?.Clear();
             Env?.Clear();
             Boats?.Clear();
             Players?.Clear();
             Net?.Stop();
+            _harmony?.UnpatchSelf();
         }
 
         private void OnApplicationQuit()
@@ -137,6 +173,9 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 Net.Stop();
+                Interactions.Clear();
+                Mooring.Clear();
+                Anchor.Clear();
                 Controls.Clear();
                 Env.Clear();
                 Boats.Clear();

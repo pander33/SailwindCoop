@@ -21,7 +21,7 @@ namespace SailwindCoop.Runtime
         {
             EnsureStyles();
 
-            const float w = 360f, h = 400f;
+            const float w = 360f, h = 520f;
             var rect = new Rect(12, 12, w, h);
             GUI.Box(rect, "Sailwind Co-op " + Plugin.Version, _box);
 
@@ -65,8 +65,18 @@ namespace SailwindCoop.Runtime
                     Line("Управление", coop.Controls.RopeCount + " тросов, " +
                          coop.Controls.WinchCount + " леб., " +
                          coop.Controls.NodeCount + " узлов");
+                    Line("Руль", coop.Controls.SteeringText);
                     Line("ControlRequest", coop.Controls.LastControlRequestText);
                 }
+
+                if (coop.Anchor != null)
+                    Line("Якорь", coop.Anchor.AnchorText);
+
+                if (coop.Mooring != null)
+                    Line("Швартовы", coop.Mooring.MooringText);
+
+                if (coop.Interactions != null)
+                    Line("Событие", coop.Interactions.ButtonCount + " кн · " + coop.Interactions.LastEventText);
 
                 Line("Прицел", InteractText());
             }
