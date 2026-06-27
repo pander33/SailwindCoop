@@ -18,12 +18,25 @@ namespace SailwindCoop.Sync
             foreach (var col in Object.FindObjectsOfType<BoatEmbarkCollider>())
             {
                 if (col == null || col.transform == null || col.transform.parent == null) continue;
-                set.Add(col.transform.parent);
+                Transform boat = col.transform.parent;
+                if (!IsNetworkBoat(boat)) continue;
+                set.Add(boat);
             }
 
             var boats = new List<Transform>(set);
             boats.Sort((a, b) => string.CompareOrdinal(PathOf(a), PathOf(b)));
             return boats;
+        }
+
+        private static bool IsNetworkBoat(Transform worldBoat)
+        {
+            if (worldBoat == null) return false;
+            Transform root = worldBoat.parent != null ? worldBoat.parent : worldBoat;
+            var saveable = root.GetComponent<SaveableObject>();
+            var probes = root.GetComponent("BoatProbes");
+            if (saveable != null && probes != null && !saveable.extraSetting)
+                return false;
+            return true;
         }
 
         public static Transform FindByIndex(ushort index)

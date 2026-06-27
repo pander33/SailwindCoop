@@ -45,6 +45,9 @@ namespace SailwindCoop.Net
         PushRequest = 56,      // client -> host : "I pushed a boat/sail/dock collider this frame"
         LightState = 57,       // host -> client : shared lantern/light state
         LightRequest = 58,     // client -> host : requested lantern/light state change
+        ItemState = 59,        // host -> client : replicated physical item pose/state
+        ItemRequest = 60,      // client -> host : pickup/drop/held-pose/held-action item intent
+        ItemExtra = 62,        // host -> client : per-type item state (cooking/consumption)
     }
 
     /// <summary>Why the host refused a client (sent in Reject).</summary>
@@ -742,6 +745,241 @@ namespace SailwindCoop.Net
             Index = r.GetUShort();
             On = r.GetBool();
             Health = r.GetFloat();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Physical items (P3) — existing save-loaded ShipItem replication
+    // ---------------------------------------------------------------------
+
+    public enum ItemAction : byte
+    {
+        Pose = 0,
+        Pickup = 1,
+        Drop = 2,
+        AltHeld = 3,      // client holds alt with the item in hand (continuous, throttled) — host replays OnAltHeld
+        AltActivate = 4,  // client alt-clicked the held item (discrete) — host replays OnAltActivate
+    }
+
+    public sealed class ItemStateMsg : INetMessage
+    {
+        public ushort Index;
+        public int InstanceId;
+        public int PrefabIndex;
+        public long Tick;
+        public CoordFrame Frame;
+        public ushort BoatIndex;
+        public Vector3 Pos;
+        public Quaternion Rot;
+        public Vector3 Vel;
+        public uint HolderNetId;
+        public float Amount;
+        public float Health;
+        public bool Sold;
+        public bool Nailed;
+
+        public MsgType Type => MsgType.ItemState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.Put(Tick);
+            w.Put((byte)Frame);
+            w.Put(BoatIndex);
+            w.PutVector3(Pos);
+            w.PutQuaternion(Rot);
+            w.PutVector3(Vel);
+            w.Put(HolderNetId);
+            w.Put(Amount);
+            w.Put(Health);
+            w.Put(Sold);
+            w.Put(Nailed);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetUShort();
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            Tick = r.GetLong();
+            Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort();
+            Pos = r.GetVector3();
+            Rot = r.GetQuaternion();
+            Vel = r.GetVector3();
+            HolderNetId = r.GetUInt();
+            Amount = r.GetFloat();
+            Health = r.GetFloat();
+            Sold = r.GetBool();
+            Nailed = r.GetBool();
+        }
+    }
+
+    public sealed class ItemRequestMsg : INetMessage
+    {
+        public ItemAction Action;
+        public ushort Index;
+        public int InstanceId;
+        public int PrefabIndex;
+        public long Tick;
+        public CoordFrame Frame;
+        public ushort BoatIndex;
+        public Vector3 Pos;
+        public Quaternion Rot;
+        public Vector3 Vel;
+        public float Amount;
+        public float Health;
+        public bool Sold;
+        public bool Nailed;
+
+        public MsgType Type => MsgType.ItemRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Action);
+            w.Put(Index);
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.Put(Tick);
+            w.Put((byte)Frame);
+            w.Put(BoatIndex);
+            w.PutVector3(Pos);
+            w.PutQuaternion(Rot);
+            w.PutVector3(Vel);
+            w.Put(Amount);
+            w.Put(Health);
+            w.Put(Sold);
+            w.Put(Nailed);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Action = (ItemAction)r.GetByte();
+            Index = r.GetUShort();
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            Tick = r.GetLong();
+            Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort();
+            Pos = r.GetVector3();
+            Rot = r.GetQuaternion();
+            Vel = r.GetVector3();
+            Amount = r.GetFloat();
+            Health = r.GetFloat();
+            Sold = r.GetBool();
+            Nailed = r.GetBool();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Item lifecycle (P3) — host-authoritative spawn/despawn of runtime items
+    // (caught fish, cooked food, crate contents, …) that aren't in the base save.
+    // ReliableOrdered: a missed spawn/despawn leaves the world permanently diverged.
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Host -> client: create a physical item that appeared in the host's world after load.
+    /// Carries the same pose/scalar payload as <see cref="ItemStateMsg"/> plus a
+    /// <see cref="NetObjKind"/> tag (only <c>Item</c> is used today; the field keeps the
+    /// channel open for non-item spawns later).
+    /// </summary>
+    public sealed class SpawnObjectMsg : INetMessage
+    {
+        public byte Kind;          // NetObjKind (Item)
+        public int InstanceId;
+        public int PrefabIndex;
+        public CoordFrame Frame;
+        public ushort BoatIndex;
+        public Vector3 Pos;
+        public Quaternion Rot;
+        public Vector3 Vel;
+        public uint HolderNetId;
+        public float Amount;
+        public float Health;
+        public bool Sold;
+        public bool Nailed;
+
+        public MsgType Type => MsgType.SpawnObject;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Kind);
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.Put((byte)Frame);
+            w.Put(BoatIndex);
+            w.PutVector3(Pos);
+            w.PutQuaternion(Rot);
+            w.PutVector3(Vel);
+            w.Put(HolderNetId);
+            w.Put(Amount);
+            w.Put(Health);
+            w.Put(Sold);
+            w.Put(Nailed);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = r.GetByte();
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort();
+            Pos = r.GetVector3();
+            Rot = r.GetQuaternion();
+            Vel = r.GetVector3();
+            HolderNetId = r.GetUInt();
+            Amount = r.GetFloat();
+            Health = r.GetFloat();
+            Sold = r.GetBool();
+            Nailed = r.GetBool();
+        }
+    }
+
+    /// <summary>Host -> client: an item was destroyed/consumed; remove the client's copy.</summary>
+    public sealed class DespawnObjectMsg : INetMessage
+    {
+        public byte Kind;          // NetObjKind (Item)
+        public int InstanceId;
+
+        public MsgType Type => MsgType.DespawnObject;
+
+        public void Serialize(NetDataWriter w) { w.Put(Kind); w.Put(InstanceId); }
+        public void Deserialize(NetDataReader r) { Kind = r.GetByte(); InstanceId = r.GetInt(); }
+    }
+
+    /// <summary>
+    /// Host -> client: per-type item state beyond the generic pose/scalars — cooking heat,
+    /// fuel lit, food doneness, liquid contents, etc. The field set per type is fixed by an
+    /// agreed table on both peers (see <c>ItemSync.ExtraFields</c>), so <see cref="Values"/> is
+    /// positional. Floats carry bools (0/1) and enums (cast to int) too; the client converts
+    /// back per the real field type via reflection.
+    /// </summary>
+    public sealed class ItemExtraStateMsg : INetMessage
+    {
+        public int InstanceId;
+        public int PrefabIndex;
+        public float[] Values = System.Array.Empty<float>();
+
+        public MsgType Type => MsgType.ItemExtra;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.Put((byte)Values.Length);
+            for (int i = 0; i < Values.Length; i++) w.Put(Values[i]);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            int n = r.GetByte();
+            Values = new float[n];
+            for (int i = 0; i < n; i++) Values[i] = r.GetFloat();
         }
     }
 

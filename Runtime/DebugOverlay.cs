@@ -21,7 +21,7 @@ namespace SailwindCoop.Runtime
         {
             EnsureStyles();
 
-            const float w = 360f, h = 520f;
+            const float w = 360f, h = 720f;
             var rect = new Rect(12, 12, w, h);
             GUI.Box(rect, "Sailwind Co-op " + Plugin.Version, _box);
 
@@ -81,6 +81,9 @@ namespace SailwindCoop.Runtime
 
                 if (coop.Lights != null)
                     Line("Свет", coop.Lights.LightText);
+
+                if (coop.Items != null)
+                    Line("Предметы", coop.Items.ItemText);
 
                 if (coop.Interactions != null)
                     Line("Событие", coop.Interactions.ButtonCount + " кн · " + coop.Interactions.LastEventText);

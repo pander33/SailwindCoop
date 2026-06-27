@@ -12,6 +12,7 @@ namespace SailwindCoop.Net
         Rudder = 5,
         Anchor = 6,
         Rope = 7,
+        Item = 8,
     }
 
     /// <summary>
@@ -48,11 +49,18 @@ namespace SailwindCoop.Net
 
         /// <summary>Register (or overwrite) an entry. Used on both host and client.</summary>
         public NetEntry Register(uint netId, NetObjKind kind, uint ownerNetId = HostAuthority, object target = null)
+            => RegisterInternal(netId, kind, ownerNetId, target, advanceAllocator: true);
+
+        /// <summary>Register a deterministic id learned outside the allocator without moving the next allocated id.</summary>
+        public NetEntry RegisterFixed(uint netId, NetObjKind kind, uint ownerNetId = HostAuthority, object target = null)
+            => RegisterInternal(netId, kind, ownerNetId, target, advanceAllocator: false);
+
+        private NetEntry RegisterInternal(uint netId, NetObjKind kind, uint ownerNetId, object target, bool advanceAllocator)
         {
             var e = new NetEntry { NetId = netId, Kind = kind, OwnerNetId = ownerNetId, Target = target };
             _byId[netId] = e;
             if (kind == NetObjKind.Player) _players[netId] = e;
-            if (netId >= _nextId) _nextId = netId + 1;
+            if (advanceAllocator && netId >= _nextId) _nextId = netId + 1;
             return e;
         }
 
