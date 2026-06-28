@@ -72,15 +72,20 @@ The mod currently drives these optional float parameters:
 ```text
 Speed
 Turn
+Crouch
 ```
 
 `PlayerSync` checks `Animator.parameters`; if a parameter is missing, it is skipped.
+`Crouch` may also be a bool parameter. For compatibility with existing controllers,
+bool `IsCrouching` is supported too.
 
 Recommended controller:
 
 - Default state: idle or locomotion blend tree.
 - `Speed = 0`: idle.
 - `Speed = 3`: run.
+- `Crouch = 0`: standing locomotion.
+- `Crouch = 1`: crouched locomotion.
 - `Turn`: range roughly `-1..1`, where positive/negative can trigger turn animations.
 
 If only idle and run are configured, make transitions:

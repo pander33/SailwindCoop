@@ -72,6 +72,9 @@ namespace SailwindCoop.Sync
         private readonly HashSet<int> _hostIds = new HashSet<int>();
         public const float MatchRadius = 0.5f;   // metres; items at rest match near-exactly
 
+        // Client: a fish just caught locally, awaiting the host's authoritative SpawnObject to adopt its id.
+        private ShipItem _pendingClientFish;
+
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
         public float ExtraStateHz = 2f;
@@ -288,6 +291,75 @@ namespace SailwindCoop.Sync
             uint actor = _net.PlayerNetIdForPeer(fromPeer);
             if (actor == 0) return;
 
+            if (msg.Action == ItemAction.Consume)
+            {
+                // The client ate/consumed the item. The eater's PlayerNeeds is personal and already
+                // applied on the client; the host only owns the shared lifecycle, so it just destroys
+                // its authoritative copy. RefreshItems then diffs it gone and broadcasts DespawnObject.
+                var ce = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                if (ce != null && ce.Item != null)
+                {
+                    try { ce.Item.DestroyItem(); } catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Consume destroy: " + ex.Message); }
+                    RefreshItems(force: true);   // emit the despawn now
+                    Remember("вх consume #" + ce.Index + " actor=" + actor);
+                }
+                else Remember("отказ consume id=" + msg.InstanceId);
+                return;
+            }
+
+            if (msg.Action == ItemAction.Nail)
+            {
+                // The client (un)nailed a TARGET item (chosen by its own pointer) with a hammer. The
+                // hammer's vanilla replay would aim the HOST's pointer at the wrong thing, so instead
+                // we apply the only authoritative result — target.nailed — directly and broadcast it.
+                var ne = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                if (ne != null && ne.Item != null)
+                {
+                    ne.Item.nailed = msg.Nailed;
+                    _net.Broadcast(BuildState(ne, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх nail #" + ne.Index + "=" + msg.Nailed + " actor=" + actor);
+                }
+                else Remember("отказ nail id=" + msg.InstanceId);
+                return;
+            }
+
+            if (msg.Action == ItemAction.Crate)
+            {
+                // Client moved a target item in/out of a crate. Mirror the membership on the host's copy
+                // and broadcast the item's state (carries CrateId) so every peer converges.
+                var ie = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                if (ie != null && ie.Item != null)
+                {
+                    ApplyCrateMembership(ie.Item, msg.CrateId);
+                    _net.Broadcast(BuildState(ie, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
+                }
+                else Remember("отказ crate id=" + msg.InstanceId);
+                return;
+            }
+
+            if (msg.Action == ItemAction.Unseal)
+            {
+                // Client unsealed a crate. Item creation is host-only, so the host runs the vanilla unseal
+                // (authoring the contained items with host ids + currentCrateId); RefreshItems then
+                // broadcasts the new items, and we push the crate's new amount explicitly.
+                var ce = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                var crate = ce != null ? ce.Item as ShipItemCrate : null;
+                if (crate != null)
+                {
+                    try { crate.UnsealCrate(); }   // amount decrements synchronously; items insert next frame (coroutine)
+                    catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] UnsealCrate: " + ex.Message); }
+                    // Broadcast the crate's new amount now. The contained items are authored across the next
+                    // frames (InsertItem coroutine sets currentCrateId); the periodic RefreshItems then
+                    // broadcasts them as SpawnObject WITH their CrateId — so we deliberately don't force a
+                    // refresh here, which would send them before they're marked as crate contents.
+                    if (ce != null) _net.Broadcast(BuildState(ce, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх unseal crate #" + (ce != null ? ce.Index.ToString() : "?") + " actor=" + actor);
+                }
+                else Remember("отказ unseal id=" + msg.InstanceId);
+                return;
+            }
+
             if (msg.Action == ItemAction.AltHeld || msg.Action == ItemAction.AltActivate)
             {
                 // The client holds the item and triggered an alt action whose effect is
@@ -364,6 +436,7 @@ namespace SailwindCoop.Sync
             uint prevHolder = e.HolderNetId;
             e.HolderNetId = msg.HolderNetId;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
+            ApplyCrateMembership(e.Item, msg.CrateId);
 
             if (msg.HolderNetId == _net.MyNetId)
             {
@@ -438,6 +511,7 @@ namespace SailwindCoop.Sync
                 Health = e.Item.health,
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
+                CrateId = CrateIdOf(e.Item),
             };
         }
 
@@ -483,6 +557,7 @@ namespace SailwindCoop.Sync
                 Health = e.Item.health,
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
+                CrateId = CrateIdOf(e.Item),
             };
         }
 
@@ -567,6 +642,42 @@ namespace SailwindCoop.Sync
             item.health = health;
             item.sold = sold;
             item.nailed = nailed;
+        }
+
+        // Anti-echo: set while we apply a remote crate change, so the Insert/Withdraw postfix patches
+        // don't re-forward it (R13). Static because the patches are static.
+        internal static bool ApplyingCrate;
+
+        /// <summary>
+        /// Mirror a crate membership change onto a local item: withdraw it from its old crate and/or
+        /// insert it into the new one. The crate is resolved by its instanceId via the item registry
+        /// (the vanilla static <c>ShipItemCrate.crates</c> dict is never populated). Insert/Withdraw is
+        /// done under the anti-echo guard so the relay patches don't bounce it back.
+        /// </summary>
+        private void ApplyCrateMembership(ShipItem item, int crateId)
+        {
+            if (item == null) return;
+            var sv = item.GetComponent<SaveablePrefab>();
+            if (sv == null || sv.currentCrateId == crateId) return;
+
+            ApplyingCrate = true;
+            try
+            {
+                int oldId = sv.currentCrateId;
+                if (oldId != 0 && _byInstanceId.TryGetValue(oldId, out var oldC) && oldC.Item != null)
+                {
+                    var inv = oldC.Item.GetComponent<CrateInventory>();
+                    if (inv != null) inv.WithdrawItem(item);
+                }
+                if (crateId != 0 && _byInstanceId.TryGetValue(crateId, out var newC) && newC.Item != null)
+                {
+                    var inv = newC.Item.GetComponent<CrateInventory>();
+                    if (inv != null) inv.InsertItem(item);
+                }
+                sv.currentCrateId = crateId;   // ensure exact match even if Insert/Withdraw were no-ops
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ApplyCrateMembership: " + ex.Message); }
+            finally { ApplyingCrate = false; }
         }
 
         private void ConfigureNetFrame(ItemEntry e, CoordFrame frame, ushort boatIndex)
@@ -769,6 +880,7 @@ namespace SailwindCoop.Sync
             }
             e.HolderNetId = msg.HolderNetId;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
+            ApplyCrateMembership(e.Item, msg.CrateId);
             if (msg.HolderNetId != 0 && msg.HolderNetId != _net.MyNetId)
             {
                 ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
@@ -813,6 +925,86 @@ namespace SailwindCoop.Sync
             if (_altHeldTimer < interval) return;
             _altHeldTimer = 0f;
             ForwardHeldAction(item, ItemAction.AltHeld, reliable: false);
+        }
+
+        /// <summary>
+        /// Client: the player consumed the item (ate food → it will DestroyItem locally). Tell the host
+        /// to destroy its authoritative copy. Must be called BEFORE the local destroy so the entry still
+        /// resolves; the eater's PlayerNeeds is personal and stays local.
+        /// </summary>
+        public void NotifyConsume(ShipItem item)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (item == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            SendRequest(e, ItemAction.Consume, reliable: true);
+            Remember("исх consume #" + e.Index + " '" + item.name + "'");
+        }
+
+        /// <summary>
+        /// A hammer (un)nailed a TARGET item locally (chosen by the local player's own pointer). The
+        /// hammer's own held-action replay can't aim at the right target, so we sync only the result —
+        /// target.nailed. Client forwards it to the host; the host (which already applied it via vanilla)
+        /// just broadcasts so other peers learn it (a resting nailed item isn't otherwise streamed).
+        /// </summary>
+        public void OnLocalNail(ShipItem target)
+        {
+            if (_net.State != LinkState.Connected || target == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(target, out var e)) return;
+            long tick = _net.Clock.ServerTick;
+            if (_net.Role == Role.Client)
+            {
+                var msg = BuildRequest(e, ItemAction.Nail, tick);
+                msg.Nailed = target.nailed;
+                _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("исх nail #" + e.Index + "=" + target.nailed + " '" + target.name + "'");
+            }
+            else
+            {
+                _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("nail(host) #" + e.Index + "=" + target.nailed);
+            }
+        }
+
+        /// <summary>
+        /// A crate's contents changed locally (the player inserted/withdrew an item via the crate UI).
+        /// The new membership is already on the item (currentCrateId, set by vanilla Insert/Withdraw).
+        /// Client forwards it; the host (authoritative) broadcasts the item's state so peers mirror it.
+        /// </summary>
+        public void OnLocalCrate(ShipItem item)
+        {
+            if (ApplyingCrate || _net.State != LinkState.Connected || item == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            long tick = _net.Clock.ServerTick;
+            if (_net.Role == Role.Client)
+            {
+                _net.Broadcast(BuildRequest(e, ItemAction.Crate, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("исх crate #" + e.Index + "->" + CrateIdOf(item));
+            }
+            else
+            {
+                _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("crate(host) #" + e.Index + "->" + CrateIdOf(item));
+            }
+        }
+
+        /// <summary>Client: forward an unseal so the host authors the crate's contents (host-only creation).</summary>
+        public bool ForwardUnseal(ShipItemCrate crate)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected || crate == null) return false;
+            var sv = crate.GetComponent<SaveablePrefab>();
+            if (sv == null || sv.instanceId <= 0) return false;
+            _net.Broadcast(new ItemRequestMsg
+            {
+                Action = ItemAction.Unseal,
+                InstanceId = sv.instanceId,
+                PrefabIndex = sv.prefabIndex,
+            }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх unseal crate id=" + sv.instanceId);
+            return true;
         }
 
         /// <summary>Client: a held item received a discrete OnAltActivate(GoPointer).</summary>
@@ -1216,6 +1408,17 @@ namespace SailwindCoop.Sync
 
             if (!_baselineReady) return null;   // wait until our own save items are loaded
 
+            // A fish we just caught locally is authored by the host now; adopt the host id onto our
+            // exact local catch (deterministic, not position-radius dependent) before generic matching.
+            if (_pendingClientFish != null && PrefabIndexOf(_pendingClientFish) == prefabIndex)
+            {
+                var fish = _pendingClientFish;
+                _pendingClientFish = null;
+                RemapLocalItem(fish, instanceId);
+                RefreshItems(force: true);
+                return _byInstanceId.TryGetValue(instanceId, out var fr) ? fr : null;
+            }
+
             var local = FindUnclaimedMatch(prefabIndex, frame, boatIndex, wirePos);
             if (local != null)
             {
@@ -1346,6 +1549,12 @@ namespace SailwindCoop.Sync
             return s != null ? s.instanceId : 0;
         }
 
+        private static int CrateIdOf(ShipItem item)
+        {
+            var s = item != null ? item.GetComponent<SaveablePrefab>() : null;
+            return s != null ? s.currentCrateId : 0;
+        }
+
         private static int PrefabIndexOf(ShipItem item)
         {
             var s = item != null ? item.GetComponent<SaveablePrefab>() : null;
@@ -1470,6 +1679,152 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.LogInfo("[ItemSync] " + text);
         }
 
+        // -----------------------------------------------------------------
+        // Shop economy bridge (Phase 1) — used by ShopSync. Buy/sell is host
+        // authoritative; these expose just enough of the item machinery to hand a
+        // bought item to a client and to resolve a held item being sold.
+        // -----------------------------------------------------------------
+
+        /// <summary>Host: resolve a sold/replicated item by its stable id (for a Sell).</summary>
+        public ShipItem HostFindById(int instanceId, int prefabIndex)
+        {
+            var e = HostLookup(instanceId, prefabIndex);
+            return e != null ? e.Item : null;
+        }
+
+        /// <summary>Nearest unsold ShipItem of the given prefab to a real-space point (shop stock match).</summary>
+        public static ShipItem FindUnsoldNear(int prefabIndex, Vector3 realPos, float radius)
+        {
+            Vector3 localTarget = CoordSpace.Ready ? CoordSpace.RealToLocal(realPos) : realPos;
+            ShipItem best = null;
+            float bestSq = radius * radius;
+            foreach (var it in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            {
+                if (it == null || it.sold) continue;
+                if (PrefabIndexOf(it) != prefabIndex) continue;
+                float sq = (it.transform.position - localTarget).sqrMagnitude;
+                if (sq < bestSq) { bestSq = sq; best = it; }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Host: a just-bought item (now sold + save-registered) becomes a client-held puppet,
+        /// driven by that client's pose stream — exactly like any client-held item. Returns its
+        /// stable id so the client can adopt the same identity onto its local copy.
+        /// </summary>
+        public bool HostAssignBought(ShipItem item, uint holder, out int instanceId)
+        {
+            instanceId = 0;
+            if (item == null) return false;
+            RefreshItems(force: true);
+            if (!_byItem.TryGetValue(item, out var e)) return false;
+            e.HolderNetId = holder;
+            _localHeld[item] = holder;
+            SetPuppet(item, true);
+            instanceId = e.InstanceId;
+            Remember("куплено хостом для " + holder + " id=" + instanceId + " '" + item.name + "'");
+            return true;
+        }
+
+        /// <summary>
+        /// Client: adopt the host's bought-item id onto our own local unsold copy of the same good and
+        /// put it in the player's hands. The host owns the transaction; this only makes the client's
+        /// view match (no authoritative gold touched — that already happened on the host).
+        /// </summary>
+        public void ClientAdoptBought(int hostInstanceId, int prefabIndex, Vector3 realPos)
+        {
+            var local = FindUnsoldNear(prefabIndex, realPos, 2.5f);
+            if (local == null)
+            {
+                Remember("adopt: нет локального несольнутого prefab=" + prefabIndex);
+                return;
+            }
+            try { local.sold = true; } catch { }
+            RemapLocalItem(local, hostInstanceId);
+            RefreshItems(force: true);
+            try
+            {
+                var gp = HostPointer();
+                if (gp != null && local.held == null) gp.PickUpItem(local);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] adopt pickup: " + ex.Message);
+            }
+            Remember("adopt buy id=" + hostInstanceId + " prefab=" + prefabIndex + " '" + local.name + "'");
+        }
+
+        // -----------------------------------------------------------------
+        // Fishing (Phase 1) — a caught fish is authored on the client (RNG) but must be
+        // host-authoritative. The client asks the host to create the real fish; the host's
+        // SpawnObject then replicates it and the client remaps its local catch (ResolveClient).
+        // -----------------------------------------------------------------
+
+        /// <summary>Client: a fish was just caught locally; ask the host to author the authoritative item.</summary>
+        public void NotifyCaughtFish(ShipItem fish)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected || fish == null) return;
+            _pendingClientFish = fish;
+            BuildPose(fish, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
+                      out Vector3 pos, out Quaternion rot, out _);
+            _net.Broadcast(new FishCatchMsg
+            {
+                PrefabIndex = PrefabIndexOf(fish),
+                Frame = frame,
+                BoatIndex = boatIndex,
+                Pos = pos,
+                Rot = rot,
+            }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх fish catch prefab=" + PrefabIndexOf(fish) + " '" + fish.name + "'");
+        }
+
+        /// <summary>Host: author the fish the client caught; RefreshItems then broadcasts the SpawnObject.</summary>
+        public void OnFishCatch(FishCatchMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Host) return;
+            try
+            {
+                var dir = PrefabsDirectory.instance;
+                if (dir == null || dir.directory == null || msg.PrefabIndex <= 0 || msg.PrefabIndex >= dir.directory.Length)
+                {
+                    Remember("отказ fish prefab=" + msg.PrefabIndex);
+                    return;
+                }
+                var prefab = dir.directory[msg.PrefabIndex];
+                if (prefab == null) return;
+
+                Vector3 pos;
+                Quaternion rot;
+                if (msg.Frame == CoordFrame.Boat)
+                {
+                    Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
+                    if (boat == null) { Remember("отказ fish boat=" + msg.BoatIndex); return; }
+                    pos = boat.TransformPoint(msg.Pos);
+                    rot = boat.rotation * msg.Rot;
+                }
+                else
+                {
+                    pos = CoordSpace.Ready ? CoordSpace.RealToLocal(msg.Pos) : msg.Pos;
+                    rot = msg.Rot;
+                }
+
+                var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
+                var item = go.GetComponent<ShipItem>();
+                var saveable = go.GetComponent<SaveablePrefab>();
+                if (item == null || saveable == null) { UnityEngine.Object.Destroy(go); return; }
+                item.sold = true;
+                saveable.prefabIndex = msg.PrefabIndex;
+                saveable.RegisterToSave();   // assigns a fresh nonzero host id
+                RefreshItems(force: true);   // diff detects the new item and broadcasts SpawnObject
+                Remember("вх fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] OnFishCatch: " + e.Message);
+            }
+        }
+
         public void Clear()
         {
             _items.Clear();
@@ -1477,6 +1832,7 @@ namespace SailwindCoop.Sync
             _byInstanceId.Clear();
             _localHeld.Clear();
             _hostIds.Clear();
+            _pendingClientFish = null;
             _gp = null;
             _fHeldItem = null;
             _refreshTimer = 0f;
@@ -1504,8 +1860,26 @@ namespace SailwindCoop.Sync
             bool bottleClick = TryPatch(harmony, typeof(ShipItemBottle), "OnItemClick", new[] { typeof(PickupableItem) },
                 prefixName: nameof(PreBottleItemClick), postfixName: nameof(PostBottleItemClick));
             bool oarHeld = TryPatch(harmony, typeof(ShipItemOar), "OnAltHeld", Type.EmptyTypes, postfixName: nameof(PostOarAltHeld));
+            // Eating food is not an OnAltHeld replay (OnAltHeld only sets a flag; EatFood does the consume
+            // + DestroyItem and touches the eater's personal PlayerNeeds). Forward the actual consume so
+            // the host destroys its copy without running its own PlayerNeeds.
+            bool eat = TryPatch(harmony, typeof(ShipItemFood), "EatFood", Type.EmptyTypes, prefixName: nameof(PreEatFood));
+            // Hammer nailing targets the item the LOCAL pointer aims at; the held-action replay can't
+            // reproduce that aim, so we sync the result (target.nailed) from the two sites that change it:
+            // NailItem (nail completes after the 2s hold) and OnAltActivate (instant un-nail).
+            bool nail = TryPatch(harmony, typeof(ShipItemHammer), "NailItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostNailItem));
+            bool unnail = TryPatch(harmony, typeof(ShipItemHammer), "OnAltActivate", Type.EmptyTypes, postfixName: nameof(PostHammerAltActivate));
+            // A caught fish is created on the client by FishingRodFish.CollectFish (returns the new item);
+            // forward it so the host authors the authoritative copy (client item replication is host-only).
+            bool fish = TryPatch(harmony, typeof(FishingRodFish), "CollectFish", Type.EmptyTypes, postfixName: nameof(PostCollectFish));
+            // Crates: mirror inventory membership (Insert/Withdraw) and relay unseal (item creation) to host.
+            bool crateIn = TryPatch(harmony, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
+            bool crateOut = TryPatch(harmony, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
+            bool unseal = TryPatch(harmony, typeof(ShipItemCrate), "UnsealCrate", Type.EmptyTypes, prefixName: nameof(PreUnseal));
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
-                                  ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld);
+                                  ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
+                                  ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
+                                  ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal);
 
             // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
             // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
@@ -1690,6 +2064,75 @@ namespace SailwindCoop.Sync
         {
             try { ItemSync.Instance?.NotifyAltActivate(__instance as ShipItem); }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostAltActivate: " + e.Message); }
+        }
+
+        // Runs just before vanilla EatFood. EatFood only consumes when the eat cooldown is clear;
+        // if it will consume, the item is destroyed this call, so forward the consume first (while the
+        // item still resolves). Client-only inside NotifyConsume; the host eats locally via vanilla.
+        private static void PreEatFood(ShipItemFood __instance)
+        {
+            try
+            {
+                if (__instance == null) return;
+                if (PlayerNeeds.instance != null && PlayerNeeds.instance.eatCooldown > 0f) return; // won't eat this call
+                ItemSync.Instance?.NotifyConsume(__instance);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreEatFood: " + e.Message); }
+        }
+
+        // NailItem(item) is where a nail completes (item.nailed set true unless it bailed). Forward the
+        // target's resulting nailed flag.
+        private static void PostNailItem(ShipItem __0)
+        {
+            try { if (__0 != null) ItemSync.Instance?.OnLocalNail(__0); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostNailItem: " + e.Message); }
+        }
+
+        // OnAltActivate toggles an already-nailed target off (instant un-nail). Forward the pointed-at
+        // item's nailed flag; harmless if nothing changed (idempotent on the host).
+        private static void PostHammerAltActivate(ShipItemHammer __instance)
+        {
+            try
+            {
+                var target = __instance != null && __instance.held != null ? __instance.held.GetPointedAtItem() : null;
+                if (target != null) ItemSync.Instance?.OnLocalNail(target);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostHammerAltActivate: " + e.Message); }
+        }
+
+        // FishingRodFish.CollectFish returns the freshly-instantiated fish ShipItem. Forward it so the
+        // host authors the authoritative copy (client-only inside NotifyCaughtFish).
+        private static void PostCollectFish(ShipItem __result)
+        {
+            try { if (__result != null) ItemSync.Instance?.NotifyCaughtFish(__result); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCollectFish: " + e.Message); }
+        }
+
+        // Crate Insert/Withdraw set the item's currentCrateId; forward the membership change (skipped while
+        // we're applying a remote one — ItemSync.ApplyingCrate guard).
+        private static void PostCrateInsert(ShipItem __0)
+        {
+            try { if (!ItemSync.ApplyingCrate) ItemSync.Instance?.OnLocalCrate(__0); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCrateInsert: " + e.Message); }
+        }
+
+        private static void PostCrateWithdraw(ShipItem __0)
+        {
+            try { if (!ItemSync.ApplyingCrate) ItemSync.Instance?.OnLocalCrate(__0); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCrateWithdraw: " + e.Message); }
+        }
+
+        // UnsealCrate authors the contained items. On the client we don't author (phantoms); forward to the
+        // host and skip vanilla. Host/offline runs vanilla normally.
+        private static bool PreUnseal(ShipItemCrate __instance)
+        {
+            try
+            {
+                var sync = ItemSync.Instance;
+                if (sync == null) return true;
+                return !sync.ForwardUnseal(__instance);   // forwarded → skip vanilla; else run it
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreUnseal: " + e.Message); return true; }
         }
     }
 }

@@ -49,6 +49,7 @@ namespace SailwindCoop.Runtime
                 float d = coop.Players.NearestRemoteDistance;
                 if (d >= 0f) Line("До аватара", d.ToString("0.0") + " м");
                 Line("Анимация", coop.Players.NearestRemoteAnim);
+                Line("Присед", coop.Players.LocalCrouchText);
 
                 if (coop.Boats != null)
                 {
@@ -84,6 +85,12 @@ namespace SailwindCoop.Runtime
 
                 if (coop.Items != null)
                     Line("Предметы", coop.Items.ItemText);
+
+                if (coop.Shop != null)
+                    Line("Магазин", coop.Shop.ShopText);
+
+                if (coop.WindTotem != null && coop.WindTotem.Active)
+                    Line("Ветр.тотем", "сила " + coop.WindTotem.LastWind.magnitude.ToString("0.0"));
 
                 if (coop.Interactions != null)
                     Line("Событие", coop.Interactions.ButtonCount + " кн · " + coop.Interactions.LastEventText);

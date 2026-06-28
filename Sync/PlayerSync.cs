@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using SailwindCoop.Net;
 using UnityEngine;
 
@@ -25,8 +26,10 @@ namespace SailwindCoop.Sync
             public bool HeadDrivenByAnimator;
             public float AnimSpeed;
             public float AnimTurn;
+            public float AnimCrouch;
             public float AnimTargetSpeed;
             public float AnimTargetTurn;
+            public float AnimTargetCrouch;
             public bool AnimMoving;
             public Quaternion LastAnimRot;
             public long LastAnimTick;
@@ -34,6 +37,9 @@ namespace SailwindCoop.Sync
             public bool HasAnimSnapshot;
             public bool HasSpeedParam;
             public bool HasTurnParam;
+            public bool HasCrouchFloatParam;
+            public bool HasCrouchBoolParam;
+            public bool HasIsCrouchingParam;
             public float VisualOffsetY;
         }
 
@@ -87,12 +93,19 @@ namespace SailwindCoop.Sync
         private long _lastRealTick;
         private bool _haveLast;
         private CoordFrame _lastFrame;
+        private PlayerCrouching _localCrouching;
+        private bool _lastLocalCrouch;
+        private float _lastLocalCrouchHeight;
+        private static readonly FieldInfo CrouchingField =
+            typeof(PlayerCrouching).GetField("crouching", BindingFlags.Instance | BindingFlags.NonPublic);
 
         public float InterpDelayMs = 100f;
         public int SnapshotHz = 20;
 
         public int RemoteCount => _remotes.Count;
         public bool LocalPlayerFound => _localPlayer != null;
+        public string LocalCrouchText => "local " + (_lastLocalCrouch ? "ДА" : "—") +
+                                         ", h " + _lastLocalCrouchHeight.ToString("0.00");
         public string NearestRemoteAnim
         {
             get
@@ -113,6 +126,9 @@ namespace SailwindCoop.Sync
                 return "Speed " + best.AnimSpeed.ToString("0.00") +
                        " -> " + best.AnimTargetSpeed.ToString("0.0") +
                        ", Turn " + best.AnimTurn.ToString("0.00") +
+                       ", Crouch " + best.AnimCrouch.ToString("0.00") +
+                       " -> " + best.AnimTargetCrouch.ToString("0.0") +
+                       ", param " + (best.HasCrouchFloatParam ? "float" : best.HasCrouchBoolParam ? "bool" : best.HasIsCrouchingParam ? "IsCrouching" : "НЕТ") +
                        ", moving " + (best.AnimMoving ? "ДА" : "—");
             }
         }
@@ -193,6 +209,7 @@ namespace SailwindCoop.Sync
             _lastRealTick = tick;
             _lastFrame = frame;
             _haveLast = true;
+            _lastLocalCrouch = IsLocalCrouching();
 
             _net.Broadcast(new PlayerStateMsg
             {
@@ -204,6 +221,7 @@ namespace SailwindCoop.Sync
                 Rot = rot,
                 HeadRot = headRot,
                 Vel = vel,
+                Crouch = _lastLocalCrouch,
             }, LiteNetLib.DeliveryMethod.Unreliable);
         }
 
@@ -282,6 +300,7 @@ namespace SailwindCoop.Sync
                 if (a.Go != null) Object.Destroy(a.Go);
             _remotes.Clear();
             _localPlayer = null;
+            _localCrouching = null;
             _haveLast = false;
             if (_avatarBundle != null)
             {
@@ -353,9 +372,13 @@ namespace SailwindCoop.Sync
             float dt = Mathf.Max(Time.deltaTime, 0.0001f);
             a.AnimSpeed = Mathf.Lerp(a.AnimSpeed, a.AnimTargetSpeed, 1f - Mathf.Exp(-12f * dt));
             a.AnimTurn = Mathf.Lerp(a.AnimTurn, a.AnimTargetTurn, 1f - Mathf.Exp(-10f * dt));
+            a.AnimCrouch = Mathf.Lerp(a.AnimCrouch, a.AnimTargetCrouch, 1f - Mathf.Exp(-12f * dt));
 
             if (a.HasSpeedParam) a.Animator.SetFloat("Speed", a.AnimSpeed);
             if (a.HasTurnParam) a.Animator.SetFloat("Turn", a.AnimTurn);
+            if (a.HasCrouchFloatParam) a.Animator.SetFloat("Crouch", a.AnimCrouch);
+            if (a.HasCrouchBoolParam) a.Animator.SetBool("Crouch", a.AnimTargetCrouch > 0.5f);
+            if (a.HasIsCrouchingParam) a.Animator.SetBool("IsCrouching", a.AnimTargetCrouch > 0.5f);
         }
 
         private void UpdateAnimatorTargets(RemoteAvatar a, PlayerStateMsg msg)
@@ -376,6 +399,7 @@ namespace SailwindCoop.Sync
                 if (speed > 0.18f) a.AnimMoving = true;
             }
             a.AnimTargetSpeed = a.AnimMoving ? 3f : 0f;
+            a.AnimTargetCrouch = msg.Crouch ? 1f : 0f;
 
             if (!a.HasAnimSnapshot || a.LastAnimFrame != msg.Frame)
             {
@@ -399,6 +423,31 @@ namespace SailwindCoop.Sync
             a.LastAnimRot = msg.Rot;
             a.LastAnimTick = msg.Tick;
             a.LastAnimFrame = msg.Frame;
+        }
+
+        private bool IsLocalCrouching()
+        {
+            try
+            {
+                if (_localCrouching == null)
+                    _localCrouching = Object.FindObjectOfType<PlayerCrouching>();
+
+                if (_localCrouching == null) return false;
+
+                _lastLocalCrouchHeight = _localCrouching.GetCurrentHeadHeight();
+                if (CrouchingField != null)
+                {
+                    bool crouching = (bool)CrouchingField.GetValue(_localCrouching);
+                    return crouching || (_lastLocalCrouchHeight > 0.001f && _lastLocalCrouchHeight < 0.6f);
+                }
+
+                return _lastLocalCrouchHeight > 0.001f && _lastLocalCrouchHeight < 0.6f;
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogWarning("[PlayerSync] Не удалось прочитать состояние приседа: " + e.Message);
+                return false;
+            }
         }
 
         /// <summary>One-time hierarchy dump to understand which transform = visible player.</summary>
@@ -506,6 +555,9 @@ namespace SailwindCoop.Sync
             var animator = model.GetComponentInChildren<Animator>(true);
             bool hasSpeed = false;
             bool hasTurn = false;
+            bool hasCrouchFloat = false;
+            bool hasCrouchBool = false;
+            bool hasIsCrouching = false;
             if (animator != null)
             {
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
@@ -514,11 +566,23 @@ namespace SailwindCoop.Sync
                 animator.enabled = true;
                 foreach (var p in animator.parameters)
                 {
-                    if (p.type != AnimatorControllerParameterType.Float) continue;
-                    if (p.name == "Speed") hasSpeed = true;
-                    if (p.name == "Turn") hasTurn = true;
+                    if (p.type == AnimatorControllerParameterType.Float)
+                    {
+                        if (p.name == "Speed") hasSpeed = true;
+                        if (p.name == "Turn") hasTurn = true;
+                        if (p.name == "Crouch") hasCrouchFloat = true;
+                    }
+                    else if (p.type == AnimatorControllerParameterType.Bool)
+                    {
+                        if (p.name == "Crouch") hasCrouchBool = true;
+                        if (p.name == "IsCrouching") hasIsCrouching = true;
+                    }
                 }
-                Plugin.Logger.LogInfo("[PlayerSync] Animator params: Speed=" + hasSpeed + ", Turn=" + hasTurn);
+                Plugin.Logger.LogInfo("[PlayerSync] Animator params: Speed=" + hasSpeed +
+                                      ", Turn=" + hasTurn +
+                                      ", CrouchFloat=" + hasCrouchFloat +
+                                      ", CrouchBool=" + hasCrouchBool +
+                                      ", IsCrouching=" + hasIsCrouching);
             }
 
             Transform head = FindChildRecursive(model.transform, "Head");
@@ -550,6 +614,9 @@ namespace SailwindCoop.Sync
                 HeadDrivenByAnimator = animator != null,
                 HasSpeedParam = hasSpeed,
                 HasTurnParam = hasTurn,
+                HasCrouchFloatParam = hasCrouchFloat,
+                HasCrouchBoolParam = hasCrouchBool,
+                HasIsCrouchingParam = hasIsCrouching,
                 VisualOffsetY = verticalOffset,
             };
         }

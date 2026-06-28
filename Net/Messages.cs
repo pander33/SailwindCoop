@@ -48,6 +48,26 @@ namespace SailwindCoop.Net
         ItemState = 59,        // host -> client : replicated physical item pose/state
         ItemRequest = 60,      // client -> host : pickup/drop/held-pose/held-action item intent
         ItemExtra = 62,        // host -> client : per-type item state (cooking/consumption)
+        WindRequest = 63,      // client -> host : "I'm steering the wind with a held WindTotemOrb"
+        ShopRequest = 64,      // client -> host : "buy this unsold item / sell this held item"
+        ShopResult = 65,       // host -> client : buy/sell outcome (ok or reason) for notifications
+        FishCatch = 66,        // client -> host : "I caught a fish (prefab P) here" — host authors the real item
+    }
+
+    /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
+    public enum ShopKind : byte
+    {
+        Buy = 0,   // client buys an unsold shop item (host gold pays; item handed to the client)
+        Sell = 1,  // client sells a held item (host gold credited; item destroyed)
+    }
+
+    /// <summary>Why a <see cref="ShopResultMsg"/> reports failure.</summary>
+    public enum ShopFailReason : byte
+    {
+        None = 0,
+        NotEnoughMoney = 1,
+        ItemNotFound = 2,
+        ShopNotFound = 3,
     }
 
     /// <summary>Why the host refused a client (sent in Reject).</summary>
@@ -211,6 +231,7 @@ namespace SailwindCoop.Net
         public Quaternion Rot;    // world rotation, or boat-local rotation
         public Quaternion HeadRot; // world rotation, or boat-local head/camera rotation
         public Vector3 Vel;       // velocity in the same frame, for extrapolation (may be zero)
+        public bool Crouch;       // local player crouch intent for remote avatar animation
 
         public MsgType Type => MsgType.PlayerState;
 
@@ -224,6 +245,7 @@ namespace SailwindCoop.Net
             w.PutQuaternion(Rot);
             w.PutQuaternion(HeadRot);
             w.PutVector3(Vel);
+            w.Put(Crouch);
         }
 
         public void Deserialize(NetDataReader r)
@@ -236,6 +258,7 @@ namespace SailwindCoop.Net
             Rot = r.GetQuaternion();
             HeadRot = r.GetQuaternion();
             Vel = r.GetVector3();
+            Crouch = r.GetBool();
         }
     }
 
@@ -760,6 +783,10 @@ namespace SailwindCoop.Net
         AltHeld = 3,      // client holds alt with the item in hand (continuous, throttled) — host replays OnAltHeld
         AltActivate = 4,  // client alt-clicked the held item (discrete) — host replays OnAltActivate
         State = 5,        // client changed held item scalars locally (water in mug, etc.) — host adopts amount/health
+        Consume = 6,      // client consumed the item (ate food) — host destroys its copy (no host PlayerNeeds)
+        Nail = 7,         // client (un)nailed a TARGET item with a hammer — host sets target.nailed (InstanceId=target)
+        Crate = 8,        // client moved a TARGET item in/out of a crate — host mirrors membership (InstanceId=item, CrateId=dest)
+        Unseal = 9,       // client unsealed a crate (InstanceId=crate) — host authors the contained items
     }
 
     public sealed class ItemStateMsg : INetMessage
@@ -778,6 +805,7 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
+        public int CrateId;   // SaveablePrefab.currentCrateId — which crate contains this item (0 = none)
 
         public MsgType Type => MsgType.ItemState;
 
@@ -797,6 +825,7 @@ namespace SailwindCoop.Net
             w.Put(Health);
             w.Put(Sold);
             w.Put(Nailed);
+            w.Put(CrateId);
         }
 
         public void Deserialize(NetDataReader r)
@@ -815,6 +844,7 @@ namespace SailwindCoop.Net
             Health = r.GetFloat();
             Sold = r.GetBool();
             Nailed = r.GetBool();
+            CrateId = r.GetInt();
         }
     }
 
@@ -834,6 +864,7 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
+        public int CrateId;   // Crate action: the crate this item should belong to (0 = withdraw)
 
         public MsgType Type => MsgType.ItemRequest;
 
@@ -853,6 +884,7 @@ namespace SailwindCoop.Net
             w.Put(Health);
             w.Put(Sold);
             w.Put(Nailed);
+            w.Put(CrateId);
         }
 
         public void Deserialize(NetDataReader r)
@@ -871,6 +903,7 @@ namespace SailwindCoop.Net
             Health = r.GetFloat();
             Sold = r.GetBool();
             Nailed = r.GetBool();
+            CrateId = r.GetInt();
         }
     }
 
@@ -901,6 +934,7 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
+        public int CrateId;   // SaveablePrefab.currentCrateId (0 = not in a crate)
 
         public MsgType Type => MsgType.SpawnObject;
 
@@ -919,6 +953,7 @@ namespace SailwindCoop.Net
             w.Put(Health);
             w.Put(Sold);
             w.Put(Nailed);
+            w.Put(CrateId);
         }
 
         public void Deserialize(NetDataReader r)
@@ -936,6 +971,7 @@ namespace SailwindCoop.Net
             Health = r.GetFloat();
             Sold = r.GetBool();
             Nailed = r.GetBool();
+            CrateId = r.GetInt();
         }
     }
 
@@ -981,6 +1017,132 @@ namespace SailwindCoop.Net
             int n = r.GetByte();
             Values = new float[n];
             for (int i = 0; i < n; i++) Values[i] = r.GetFloat();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // WindTotemOrb (Phase 1) — a non-ShipItem PickupableItem whose effect is
+    // authoritative world state: while held it drives Wind.instance.ForceNewWind.
+    // The client can't own the wind (EnvironmentSync makes it host-authoritative),
+    // so it forwards the orb's computed wind vector; the host applies ForceNewWind
+    // and EnvironmentSync distributes the result to everyone like any other wind.
+    // ---------------------------------------------------------------------
+
+    /// <summary>Client -> host: the wind vector the held WindTotemOrb wants to force.</summary>
+    public sealed class WindRequestMsg : INetMessage
+    {
+        public Vector3 Wind;
+
+        public MsgType Type => MsgType.WindRequest;
+
+        public void Serialize(NetDataWriter w) { w.PutVector3(Wind); }
+        public void Deserialize(NetDataReader r) { Wind = r.GetVector3(); }
+    }
+
+    // ---------------------------------------------------------------------
+    // Fishing (Phase 1) — the rod/bobber/casting are physics-driven and stay local; only
+    // the gameplay outcome is shared. A caught fish is authored on the client (RNG), but
+    // ItemSync is host-authoritative, so the client asks the host to create the real fish
+    // item; the host's SpawnObject then replicates it and the client remaps its local catch.
+    // ---------------------------------------------------------------------
+
+    /// <summary>Client -> host: a fish (PrefabsDirectory prefab) was caught at this pose; author it.</summary>
+    public sealed class FishCatchMsg : INetMessage
+    {
+        public int PrefabIndex;
+        public CoordFrame Frame;
+        public ushort BoatIndex;
+        public Vector3 Pos;
+        public Quaternion Rot;
+
+        public MsgType Type => MsgType.FishCatch;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(PrefabIndex);
+            w.Put((byte)Frame);
+            w.Put(BoatIndex);
+            w.PutVector3(Pos);
+            w.PutQuaternion(Rot);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            PrefabIndex = r.GetInt();
+            Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort();
+            Pos = r.GetVector3();
+            Rot = r.GetQuaternion();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Shop economy (Phase 1) — buy/sell is host-authoritative (host's wallet,
+    // host's PlayerGold). The client never runs the local transaction (its gold
+    // isn't authoritative); it forwards a request, the host runs the vanilla
+    // Shopkeeper method, and the result replicates via the normal item channel
+    // (a bought item is handed to the client; a sold item despawns).
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Client -> host: perform a shop transaction. The keeper is named by a stable
+    /// <see cref="ShopLocator"/> index. For a Buy the unsold item is addressed by prefab +
+    /// real-space position (unsold shop items aren't save-registered, but sit at fixed
+    /// identical positions on both peers). For a Sell the held item carries its instanceId.
+    /// </summary>
+    public sealed class ShopRequestMsg : INetMessage
+    {
+        public ShopKind Kind;
+        public ushort KeeperIndex;
+        public int InstanceId;     // Sell: the held item's id (0 for Buy)
+        public int PrefabIndex;    // Buy: which good to match in the keeper's stock
+        public Vector3 RealPos;    // Buy: real-space position to disambiguate identical-prefab stock
+
+        public MsgType Type => MsgType.ShopRequest;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(KeeperIndex);
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.PutVector3(RealPos);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (ShopKind)r.GetByte();
+            KeeperIndex = r.GetUShort();
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            RealPos = r.GetVector3();
+        }
+    }
+
+    /// <summary>Host -> client: outcome of a shop transaction (for a client-side notification).</summary>
+    public sealed class ShopResultMsg : INetMessage
+    {
+        public ShopKind Kind;
+        public bool Ok;
+        public ShopFailReason Reason;
+        public int InstanceId;     // Buy ok: the host's stable id for the bought item, for the client to adopt
+
+        public MsgType Type => MsgType.ShopResult;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(Ok);
+            w.Put((byte)Reason);
+            w.Put(InstanceId);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (ShopKind)r.GetByte();
+            Ok = r.GetBool();
+            Reason = (ShopFailReason)r.GetByte();
+            InstanceId = r.GetInt();
         }
     }
 

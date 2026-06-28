@@ -32,10 +32,10 @@ namespace SailwindCoop.Sync
                 // sleep / time advance (conflicts with the shared world clock)
                 "GPButtonBed", "GPButtonTavernSleep", "GPButtonOnsenEntrance", "ShipItemBed",
                 // cargo / storage operations
-                "CargoCarrierButton", "CargoStorageUIButton", "CrateInventoryButton",
+                "CargoCarrierButton", "CargoStorageUIButton",
                 // economy / trade / shipyard
                 "EconomyUIButton", "CurrencyExchangeUIButton", "CurrencySwitchButton",
-                "GPButtonBuyItem", "GPButtonPurchaseBoat", "ShipyardButton", "ShipyardDocuments",
+                "GPButtonPurchaseBoat", "ShipyardButton", "ShipyardDocuments",
                 "TradeReceiptsUIButton",
                 // missions
                 "GPButtonListedMission", "GPButtonSetMission", "GPButtonPortMissions",
@@ -55,6 +55,12 @@ namespace SailwindCoop.Sync
                 "GPButtonControlToggle", "GPButtonLogMode", "GPButtonDayLogDay",
                 "GPButtonMapZoom", "StartMenuButton", "GPButtonInventorySlot",
                 "MouseoverTextTrigger",
+                // buy/sell confirm: a LOCAL UI button whose ClickBuyOrSell -> Shopkeeper.TryToSell/BuyItem
+                // is mediated to the host by ShopSync/ShopPatches; must not be blocked or generically replayed.
+                "GPButtonBuyItem",
+                // crate inventory withdraw/insert button: a LOCAL UI button; the resulting
+                // CrateInventory.Insert/WithdrawItem is mediated to the host by ItemSync's crate relay.
+                "CrateInventoryButton",
                 // player movement only; the resulting player pose is already local/player-sync
                 "BoatLadder", "GPButtonRatlines",
             };

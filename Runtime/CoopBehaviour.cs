@@ -25,6 +25,8 @@ namespace SailwindCoop.Runtime
         public LightSync Lights { get; private set; }
         public ItemSync Items { get; private set; }
         public InteractionSync Interactions { get; private set; }
+        public WindTotemSync WindTotem { get; private set; }
+        public ShopSync Shop { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -61,10 +63,12 @@ namespace SailwindCoop.Runtime
             Lights = new LightSync(Net);
             Items = new ItemSync(Net);
             Interactions = new InteractionSync(Net);
+            WindTotem = new WindTotemSync(Net);
+            Shop = new ShopSync(Net);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
 
             Net.OnAccepted += ack =>
@@ -99,6 +103,7 @@ namespace SailwindCoop.Runtime
             Lights.Tick(dt);
             Items.Tick(dt);
             Items.ApplyRemote();
+            WindTotem.Tick(dt);
             Interactions.Tick(dt);
             Players.Tick(dt);
             Players.ApplyRemotes();
@@ -171,6 +176,18 @@ namespace SailwindCoop.Runtime
                 case MsgType.ItemExtra:
                     Items.OnItemExtraState((ItemExtraStateMsg)msg, fromPeer);
                     break;
+                case MsgType.WindRequest:
+                    WindTotem.OnWindRequest((WindRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.ShopRequest:
+                    Shop.OnShopRequest((ShopRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.ShopResult:
+                    Shop.OnShopResult((ShopResultMsg)msg, fromPeer);
+                    break;
+                case MsgType.FishCatch:
+                    Items.OnFishCatch((FishCatchMsg)msg, fromPeer);
+                    break;
             }
         }
 
@@ -181,6 +198,8 @@ namespace SailwindCoop.Runtime
 
         private void OnDestroy()
         {
+            Shop?.Clear();
+            WindTotem?.Clear();
             Interactions?.Clear();
             Items?.Clear();
             Lights?.Clear();
@@ -223,6 +242,8 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 Net.Stop();
+                Shop.Clear();
+                WindTotem.Clear();
                 Interactions.Clear();
                 Items.Clear();
                 Lights.Clear();
