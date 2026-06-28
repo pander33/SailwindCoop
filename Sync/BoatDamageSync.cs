@@ -339,18 +339,50 @@ namespace SailwindCoop.Sync
             catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostHullOakum: " + e.Message); }
         }
 
-        private static void PreWaterBail(BoatDamageWaterButton __instance, out float __state)
+        private struct WaterBailState
         {
-            __state = ReadWater(GetWaterDamage(__instance));
+            public float Water;
+            public float Amount;
+            public float Health;
         }
 
-        private static void PostWaterBail(BoatDamageWaterButton __instance, float __state)
+        private static void PreWaterBail(BoatDamageWaterButton __instance, PickupableItem __0, out WaterBailState __state)
+        {
+            __state = new WaterBailState { Water = ReadWater(GetWaterDamage(__instance)) };
+            var bottle = __0 as ShipItemBottle;
+            if (bottle != null)
+            {
+                __state.Amount = bottle.amount;
+                __state.Health = bottle.health;
+            }
+        }
+
+        private static void PostWaterBail(BoatDamageWaterButton __instance, PickupableItem __0, WaterBailState __state)
         {
             try
             {
-                float delta = __state - ReadWater(GetWaterDamage(__instance));
+                float waterNow = ReadWater(GetWaterDamage(__instance));
+                float delta = __state.Water - waterNow;
+                var bottle = __0 as ShipItemBottle;
+                bool bottleChanged = bottle != null &&
+                                     (Mathf.Abs(bottle.amount - __state.Amount) > 0.0001f ||
+                                      Mathf.Abs(bottle.health - __state.Health) > 0.0001f);
+
                 if (delta > 0.00001f)
+                {
                     BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.BailWater, delta);
+                }
+                if (bottleChanged)
+                    ItemSync.Instance?.NotifyHeldItemStateChanged(bottle, "bail-water");
+
+                if (delta > 0.00001f || bottleChanged)
+                    Plugin.Logger.LogInfo("[BoatDamagePatches] WaterBail item=" +
+                                          (__0 != null ? __0.GetType().Name : "null") +
+                                          " delta=" + delta.ToString("0.####") +
+                                          " amount " + __state.Amount.ToString("0.##") + "->" +
+                                          (bottle != null ? bottle.amount.ToString("0.##") : "?") +
+                                          " health " + __state.Health.ToString("0.##") + "->" +
+                                          (bottle != null ? bottle.health.ToString("0.##") : "?"));
             }
             catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostWaterBail: " + e.Message); }
         }

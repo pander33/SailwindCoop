@@ -296,6 +296,14 @@ namespace SailwindCoop.Sync
                 // is the source of truth. The host doesn't physically hold the item, so we point
                 // its 'held' at the host pointer for the duration so handlers gated on being held
                 // still run, then restore it.
+                if (msg.Action == ItemAction.AltHeld && TryApplyOarRow(e, msg, actor))
+                {
+                    var afterOar = BuildState(e, _net.Clock.ServerTick);
+                    _net.Broadcast(afterOar, LiteNetLib.DeliveryMethod.Unreliable);
+                    Remember("вх oar-row #" + e.Index + " actor=" + actor);
+                    return;
+                }
+
                 ReplayHeldAction(e, msg.Action, actor);
                 var afterAction = BuildState(e, _net.Clock.ServerTick);
                 _net.Broadcast(afterAction, LiteNetLib.DeliveryMethod.Unreliable);
@@ -323,11 +331,15 @@ namespace SailwindCoop.Sync
             }
             else
             {
-                if (e.HolderNetId != actor) return;   // Pose from a non-owner
-                SetPuppet(e.Item, true);              // keep it a clean puppet while held
+                if (msg.Action != ItemAction.State && e.HolderNetId != actor) return;   // Pose from a non-owner
+                if (e.HolderNetId == actor) SetPuppet(e.Item, true);                    // keep it a clean puppet while held
             }
 
-            ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel, e.Item.amount, e.Item.health, e.Item.sold, e.Item.nailed, e.HolderNetId != 0);
+            bool acceptClientScalars = msg.Action == ItemAction.State;
+            ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
+                          acceptClientScalars ? msg.Amount : e.Item.amount,
+                          acceptClientScalars ? msg.Health : e.Item.health,
+                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0);
             var state = BuildState(e, _net.Clock.ServerTick);
             // On drop, BuildState's velocity is derived from the position history and spikes because the
             // transform just teleported to the drop point — use the client's real rigidbody velocity
@@ -397,6 +409,11 @@ namespace SailwindCoop.Sync
         private ItemRequestMsg BuildRequest(ItemEntry e, ItemAction action, long tick)
         {
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
+            if (action == ItemAction.AltHeld && e.Item is ShipItemOar oar && oar.waterPos != null)
+            {
+                BuildTransformPose(oar.waterPos, tick, out frame, out boatIndex, out pos, out rot);
+                vel = Vector3.zero;
+            }
             // On drop/throw the meaningful velocity is the impulse Sailwind just applied to the
             // item's physics proxy, not the smoothed hand motion — read it straight off the body
             // so the host launches the throw authoritatively.
@@ -422,6 +439,28 @@ namespace SailwindCoop.Sync
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
             };
+        }
+
+        private static void BuildTransformPose(Transform source, long tick, out CoordFrame frame, out ushort boatIndex,
+                                               out Vector3 pos, out Quaternion rot)
+        {
+            Transform boat = ParentBoat(source);
+            if (boat == null)
+                boat = LocalPlayerBoat();
+            if (boat != null)
+            {
+                frame = CoordFrame.Boat;
+                boatIndex = BoatLocator.IndexOf(boat);
+                pos = boat.InverseTransformPoint(source.position);
+                rot = Quaternion.Inverse(boat.rotation) * source.rotation;
+            }
+            else
+            {
+                frame = CoordFrame.World;
+                boatIndex = BoatLocator.NoBoat;
+                pos = CoordSpace.Ready ? CoordSpace.LocalToReal(source.position) : source.position;
+                rot = source.rotation;
+            }
         }
 
         private ItemStateMsg BuildState(ItemEntry e, long tick)
@@ -784,6 +823,31 @@ namespace SailwindCoop.Sync
             ForwardHeldAction(item, ItemAction.AltActivate, reliable: true);
         }
 
+        /// <summary>Client: vanilla changed scalars on the held item locally; make the host copy authoritative.</summary>
+        public void NotifyHeldItemStateChanged(ShipItem item, string reason)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (item == null || item.held == null) return;
+            NotifyItemStateChanged(item, reason);
+        }
+
+        /// <summary>Client: vanilla changed item scalar state locally; make the host copy authoritative.</summary>
+        public void NotifyItemStateChanged(ShipItem item, string reason)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (item == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            if (item.held != null)
+            {
+                _localHeld[item] = _net.MyNetId;
+                SetPuppet(item, true);
+            }
+            SendRequest(e, ItemAction.State, reliable: true);
+            Remember("исх state #" + e.Index + " '" + item.name + "' " + reason +
+                     " amount=" + item.amount.ToString("0.##") + " health=" + item.health.ToString("0.##"));
+        }
+
         private void ForwardHeldAction(ShipItem item, ItemAction action, bool reliable)
         {
             RefreshItems(force: false);
@@ -819,6 +883,74 @@ namespace SailwindCoop.Sync
             {
                 try { e.Item.held = prevHeld; } catch { }
             }
+        }
+
+        private bool TryApplyOarRow(ItemEntry e, ItemRequestMsg msg, uint actor)
+        {
+            var oar = e != null ? e.Item as ShipItemOar : null;
+            if (oar == null) return false;
+
+            try
+            {
+                e.HolderNetId = actor;
+                _localHeld[e.Item] = actor;
+
+                if (!e.Item.sold) return true;
+                Transform boat = msg.Frame == CoordFrame.Boat ? BoatLocator.FindByIndex(msg.BoatIndex) : null;
+                var body = BoatBody(boat);
+                if (body == null)
+                {
+                    Remember("oar-row без Rigidbody boat=" + msg.BoatIndex);
+                    return true;
+                }
+
+                if (!WireToWorld(msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, out Vector3 worldPos, out Quaternion worldRot))
+                {
+                    Remember("oar-row без позы boat=" + msg.BoatIndex);
+                    return true;
+                }
+
+                float speedFactor = Mathf.InverseLerp(oar.maxBoatSpeed, 0f, body.velocity.magnitude);
+                float step = 1f / Mathf.Max(1f, AltHeldHz);
+                Vector3 force = (worldRot * Vector3.forward) * (0f - oar.rowForce) * step * speedFactor;
+                body.AddForceAtPosition(force, worldPos);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] Ошибка применения гребка веслом: " + ex.Message);
+                return true;
+            }
+        }
+
+        private static Rigidbody BoatBody(Transform boat)
+        {
+            if (boat == null) return null;
+            var body = boat.GetComponent<Rigidbody>();
+            if (body != null) return body;
+            return boat.parent != null ? boat.parent.GetComponent<Rigidbody>() : null;
+        }
+
+        private static bool WireToWorld(CoordFrame frame, ushort boatIndex, Vector3 pos, Quaternion rot,
+                                        out Vector3 worldPos, out Quaternion worldRot)
+        {
+            if (frame == CoordFrame.Boat)
+            {
+                Transform boat = BoatLocator.FindByIndex(boatIndex);
+                if (boat == null)
+                {
+                    worldPos = Vector3.zero;
+                    worldRot = Quaternion.identity;
+                    return false;
+                }
+                worldPos = boat.TransformPoint(pos);
+                worldRot = boat.rotation * rot;
+                return true;
+            }
+
+            worldPos = CoordSpace.Ready ? CoordSpace.RealToLocal(pos) : pos;
+            worldRot = rot;
+            return true;
         }
 
         private GoPointer HostPointer()
@@ -1363,12 +1495,17 @@ namespace SailwindCoop.Sync
     public static class ItemPatches
     {
         private static FieldInfo _fHeldItem;
+        private static FieldInfo _fOarIsRowing;
 
         public static void Apply(Harmony harmony)
         {
             bool pickup = TryPatch(harmony, typeof(GoPointer), "PickUpItem", new[] { typeof(PickupableItem) }, postfixName: nameof(PostPickup));
             bool drop = TryPatch(harmony, typeof(GoPointer), "DropItem", Type.EmptyTypes, prefixName: nameof(PreDrop), postfixName: nameof(PostDrop));
-            Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop);
+            bool bottleClick = TryPatch(harmony, typeof(ShipItemBottle), "OnItemClick", new[] { typeof(PickupableItem) },
+                prefixName: nameof(PreBottleItemClick), postfixName: nameof(PostBottleItemClick));
+            bool oarHeld = TryPatch(harmony, typeof(ShipItemOar), "OnAltHeld", Type.EmptyTypes, postfixName: nameof(PostOarAltHeld));
+            Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
+                                  ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld);
 
             // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
             // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
@@ -1449,10 +1586,104 @@ namespace SailwindCoop.Sync
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostDrop: " + e.Message); }
         }
 
+        private struct BottleClickState
+        {
+            public bool HasTarget;
+            public float TargetAmount;
+            public float TargetHealth;
+            public bool HasHeld;
+            public float HeldAmount;
+            public float HeldHealth;
+        }
+
+        private static void PreBottleItemClick(ShipItemBottle __instance, PickupableItem __0, out BottleClickState __state)
+        {
+            __state = new BottleClickState();
+            try
+            {
+                if (__instance != null)
+                {
+                    __state.HasTarget = true;
+                    __state.TargetAmount = __instance.amount;
+                    __state.TargetHealth = __instance.health;
+                }
+
+                var heldBottle = __0 as ShipItemBottle;
+                if (heldBottle != null)
+                {
+                    __state.HasHeld = true;
+                    __state.HeldAmount = heldBottle.amount;
+                    __state.HeldHealth = heldBottle.health;
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemPatches] PreBottleItemClick: " + e.Message);
+            }
+        }
+
+        private static void PostBottleItemClick(ShipItemBottle __instance, PickupableItem __0, BottleClickState __state)
+        {
+            try
+            {
+                var sync = ItemSync.Instance;
+                if (sync == null) return;
+
+                const float eps = 0.0001f;
+                var heldBottle = __0 as ShipItemBottle;
+                bool targetChanged = __state.HasTarget && __instance != null &&
+                    (Mathf.Abs(__instance.amount - __state.TargetAmount) > eps ||
+                     Mathf.Abs(__instance.health - __state.TargetHealth) > eps);
+                bool heldChanged = __state.HasHeld && heldBottle != null &&
+                    (Mathf.Abs(heldBottle.amount - __state.HeldAmount) > eps ||
+                     Mathf.Abs(heldBottle.health - __state.HeldHealth) > eps);
+
+                if (targetChanged) sync.NotifyItemStateChanged(__instance, "bottle-click-target");
+                if (heldChanged && !ReferenceEquals(heldBottle, __instance)) sync.NotifyItemStateChanged(heldBottle, "bottle-click-held");
+
+                if (targetChanged || heldChanged)
+                {
+                    Plugin.Logger.LogInfo("[ItemPatches] BottleClick sync target=" +
+                        (targetChanged ? __instance.name : "-") + " held=" +
+                        (heldChanged && heldBottle != null ? heldBottle.name : "-"));
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemPatches] PostBottleItemClick: " + e.Message);
+            }
+        }
+
         private static void PostAltHeld(GoPointerButton __instance)
         {
-            try { ItemSync.Instance?.NotifyAltHeld(__instance as ShipItem); }
+            try
+            {
+                if (__instance is ShipItemOar) return; // handled by the no-arg oar hook after vanilla sets isRowing
+                ItemSync.Instance?.NotifyAltHeld(__instance as ShipItem);
+            }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostAltHeld: " + e.Message); }
+        }
+
+        private static void PostOarAltHeld(ShipItemOar __instance)
+        {
+            try
+            {
+                if (!OarIsRowing(__instance)) return;
+                ItemSync.Instance?.NotifyAltHeld(__instance);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostOarAltHeld: " + e.Message); }
+        }
+
+        private static bool OarIsRowing(ShipItemOar oar)
+        {
+            try
+            {
+                if (oar == null) return false;
+                if (_fOarIsRowing == null)
+                    _fOarIsRowing = typeof(ShipItemOar).GetField("isRowing", BindingFlags.NonPublic | BindingFlags.Instance);
+                return _fOarIsRowing != null && (bool)_fOarIsRowing.GetValue(oar);
+            }
+            catch { return false; }
         }
 
         private static void PostAltActivate(GoPointerButton __instance)

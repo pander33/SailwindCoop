@@ -759,6 +759,7 @@ namespace SailwindCoop.Net
         Drop = 2,
         AltHeld = 3,      // client holds alt with the item in hand (continuous, throttled) — host replays OnAltHeld
         AltActivate = 4,  // client alt-clicked the held item (discrete) — host replays OnAltActivate
+        State = 5,        // client changed held item scalars locally (water in mug, etc.) — host adopts amount/health
     }
 
     public sealed class ItemStateMsg : INetMessage
