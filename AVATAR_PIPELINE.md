@@ -12,7 +12,7 @@ Runtime behavior:
 - Remote root motion is applied through `NetTransform`.
 - If `BepInEx/plugins/SailwindCoop/avatar.bundle` exists, `PlayerSync` tries to load a character prefab from it.
 - Bundle prefabs are instantiated under a network root; only the visual child is shifted by `Avatar.VerticalOffset` from the BepInEx config.
-- If bundle loading fails, the mod falls back to a simple code-built avatar: body, head, look marker, and name.
+- If bundle loading fails, the mod falls back to a simple code-built avatar: body, head, and look marker.
 - Remote avatar colliders are removed so the model cannot block Sailwind raycasts/interactions.
 - Remote avatar layer is set recursively to a layer rendered by the active camera.
 
@@ -170,7 +170,6 @@ dotnet build SailwindCoop.csproj -c Release
 5. Host with `F9`, join with `F10`, show overlay with `F8`.
 6. Verify:
    - model loads instead of fallback primitives;
-   - name faces camera;
    - idle/run follows actual player movement;
    - standing on a moving boat stays idle;
    - upper body follows look pitch;
