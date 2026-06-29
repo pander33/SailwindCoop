@@ -271,7 +271,7 @@ namespace SailwindCoop.Sync
             Remember("исх pickup #" + e.Index + " '" + item.name + "'");
         }
 
-        public void NotifyDrop(GoPointer pointer, PickupableItem pickup)
+        public void NotifyDrop(GoPointer pointer, PickupableItem pickup, Vector3 throwVelocity)
         {
             if (_net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
@@ -317,6 +317,13 @@ namespace SailwindCoop.Sync
                     msg.Vel = Vector3.zero;
                     msg.CargoIndex = -2; // sentinel: drop immediately after inventory/cargo withdraw
                 }
+                else if (throwVelocity.sqrMagnitude > 0.0001f)
+                {
+                    // T-throw: the item was a kinematic puppet while held, so vanilla's deferred
+                    // ThrowItemAfterDelay impulse never lands on the body (RealItemVelocity is ~0 here).
+                    // Send the throw velocity we computed from the pointer so the host launches it.
+                    msg.Vel = throwVelocity;
+                }
                 e.DropWithoutProxyVelocity = false;
                 e.ForceWorldPoseUntilDrop = false;
                 _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -334,6 +341,7 @@ namespace SailwindCoop.Sync
                 state.HolderNetId = 0;
                 Vector3 rbVel = RealItemVelocity(item);
                 if (rbVel.sqrMagnitude > 0.0001f) state.Vel = rbVel;
+                else if (throwVelocity.sqrMagnitude > 0.0001f) state.Vel = throwVelocity;   // T-throw impulse hasn't hit the body yet
                 _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 Remember("исх drop(host) #" + e.Index + " '" + item.name + "'");
             }
@@ -2471,10 +2479,33 @@ namespace SailwindCoop.Sync
             catch { __state = null; }
         }
 
+        private static FieldInfo _fCurrentThrowPower;
+
         private static void PostDrop(GoPointer __instance, PickupableItem __state)
         {
-            try { ItemSync.Instance?.NotifyDrop(__instance, __state); }
+            try { ItemSync.Instance?.NotifyDrop(__instance, __state, ComputeThrowVelocity(__instance)); }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostDrop: " + e.Message); }
+        }
+
+        // Vanilla throws via ThrowItemAfterDelay, started right after DropItem(): one WaitForFixedUpdate
+        // later it AddForce(forward * throwForce * f * mass) with ForceMode.Force. Δv = force/mass * dt,
+        // so mass cancels: Δv = forward * throwForce * f * fixedDeltaTime, where f = min(power - delay, 1)
+        // and the coroutine only runs when power > throwDelay. We replicate that velocity at drop time
+        // because the deferred impulse never lands on our kinematic puppet. currentThrowPower is still set
+        // here (the game zeroes it after the StartCoroutine call). Returns zero for a plain (non-T) drop.
+        private static Vector3 ComputeThrowVelocity(GoPointer pointer)
+        {
+            try
+            {
+                if (pointer == null) return Vector3.zero;
+                if (_fCurrentThrowPower == null)
+                    _fCurrentThrowPower = typeof(GoPointer).GetField("currentThrowPower", BindingFlags.NonPublic | BindingFlags.Instance);
+                float power = _fCurrentThrowPower != null ? (float)_fCurrentThrowPower.GetValue(pointer) : 0f;
+                if (power <= pointer.throwDelay) return Vector3.zero;
+                float f = Mathf.Min(power - pointer.throwDelay, 1f);
+                return pointer.transform.forward * pointer.throwForce * f * Time.fixedDeltaTime;
+            }
+            catch { return Vector3.zero; }
         }
 
         private struct BottleClickState
