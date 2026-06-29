@@ -35,6 +35,7 @@ namespace SailwindCoop.Runtime
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
         private DebugPanel _debugPanel;
+        private bool _debugPanelEnabled;
         private Harmony _harmony;
 
         private void Awake()
@@ -46,6 +47,10 @@ namespace SailwindCoop.Runtime
                 PlayerName = Plugin.Cfg.PlayerName.Value,
                 // Stage 1 will replace this with the host's loaded save identity.
                 WorldIdProvider = () => "",
+                MaxClients = Plugin.Cfg.MaxClients.Value,
+                DisconnectTimeoutMs = Plugin.Cfg.DisconnectTimeoutMs.Value,
+                UpdateTimeMs = Plugin.Cfg.UpdateTimeMs.Value,
+                PingIntervalMs = Plugin.Cfg.PingIntervalMs.Value,
             };
 
             Players = new PlayerSync(Net)
@@ -92,7 +97,12 @@ namespace SailwindCoop.Runtime
             };
 
             _overlay = new DebugOverlay(Net);
-            _debugPanel = new DebugPanel(Net);
+            _debugPanelEnabled = Plugin.Cfg.EnableDebugPanel.Value;
+            if (_debugPanelEnabled)
+            {
+                _debugPanel = new DebugPanel(Net);
+                Plugin.Logger.LogInfo("[Coop] Дебаг-панель включена в конфиге (хоткей " + Plugin.Cfg.DebugPanelKey.Value + ").");
+            }
         }
 
         private void Update()
@@ -222,7 +232,7 @@ namespace SailwindCoop.Runtime
         private void OnGUI()
         {
             if (_overlayVisible) _overlay.Draw();
-            _debugPanel.Draw();
+            if (_debugPanelEnabled) _debugPanel.Draw();
         }
 
         private void OnDestroy()
@@ -257,7 +267,7 @@ namespace SailwindCoop.Runtime
             if (Input.GetKeyDown(cfg.OverlayKey.Value))
                 _overlayVisible = !_overlayVisible;
 
-            if (Input.GetKeyDown(cfg.DebugPanelKey.Value))
+            if (_debugPanelEnabled && Input.GetKeyDown(cfg.DebugPanelKey.Value))
                 _debugPanel.Visible = !_debugPanel.Visible;
 
             if (Input.GetKeyDown(cfg.HostKey.Value))

@@ -52,6 +52,15 @@ namespace SailwindCoop
         public readonly ConfigEntry<float> AvatarVerticalOffset;
         public readonly ConfigEntry<float> HostAvatarVerticalOffset;
 
+        // Server (host) tuning.
+        public readonly ConfigEntry<int> MaxClients;
+        public readonly ConfigEntry<int> DisconnectTimeoutMs;
+        public readonly ConfigEntry<int> UpdateTimeMs;
+        public readonly ConfigEntry<int> PingIntervalMs;
+
+        // Debug.
+        public readonly ConfigEntry<bool> EnableDebugPanel;
+
         public readonly ConfigEntry<KeyCode> HostKey;
         public readonly ConfigEntry<KeyCode> JoinKey;
         public readonly ConfigEntry<KeyCode> DisconnectKey;
@@ -68,6 +77,13 @@ namespace SailwindCoop
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Задержка буфера интерполяции (мс), этап 1+.");
             AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели относительно сетевой позиции игрока. Отрицательное значение опускает модель.");
             HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели хоста. Нужен отдельно, потому что root-поза хоста в Sailwind обычно выше клиентской.");
+
+            MaxClients = c.Bind("Server", "MaxClients", 4, "Максимум одновременно подключённых клиентов к хосту (1 = только один гость). Применяется при входящем подключении.");
+            DisconnectTimeoutMs = c.Bind("Server", "DisconnectTimeoutMs", 5000, "Таймаут (мс) без пакетов от пира, после которого он считается отключённым.");
+            UpdateTimeMs = c.Bind("Server", "UpdateTimeMs", 15, "Интервал внутреннего обновления сетевого менеджера (мс). Меньше = чаще опрос/отправка, выше нагрузка на CPU.");
+            PingIntervalMs = c.Bind("Server", "PingIntervalMs", 1000, "Интервал ping (мс) для оценки задержки и keepalive соединения.");
+
+            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Включить дебаг-панель тест-сценариев (золото/спавн/репутация/мир) по хоткею DebugPanel. Только для отладки — в обычной игре держать выключенной.");
 
             HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Запустить хост.");
             JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Подключиться к JoinIp.");

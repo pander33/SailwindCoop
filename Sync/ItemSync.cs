@@ -29,6 +29,7 @@ namespace SailwindCoop.Sync
             public long LastTick;
             public bool HaveLast;
             public bool WasActive;   // host: was streaming this item last tick (to send a final resting pose)
+            public int InventorySlot = -1;
         }
 
         private readonly CoopNet _net;
@@ -229,6 +230,7 @@ namespace SailwindCoop.Sync
             RefreshItems(force: true);
             if (!_byItem.TryGetValue(item, out var e)) return;
 
+            PrepareLocalPickupPose(pointer, item);
             SetPuppet(item, true);    // client-held items are visual only; no collision/boat push
             e.HolderNetId = _net.MyNetId;
             e.Net.Clear();
@@ -244,10 +246,39 @@ namespace SailwindCoop.Sync
             if (item == null) return;
             RefreshItems(force: true);
             if (!_byItem.TryGetValue(item, out var e)) return;
+
+            int personalSlot = PersonalInventorySlotOf(item);
+            if (personalSlot >= 0)
+            {
+                e.InventorySlot = personalSlot;
+                e.HolderNetId = _net.MyNetId;
+                _localHeld[item] = _net.MyNetId;
+                if (_net.Role == Role.Client)
+                {
+                    var inv = BuildRequest(e, ItemAction.Inventory, _net.Clock.ServerTick);
+                    inv.InventorySlot = personalSlot;
+                    _net.Broadcast(inv, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+                else if (_net.Role == Role.Host)
+                {
+                    var state = BuildState(e, _net.Clock.ServerTick);
+                    state.InventorySlot = personalSlot;
+                    _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+                RestoreLocalInventoryVisual(item, inInventory: true);
+                Remember("исх inventory #" + e.Index + " slot=" + personalSlot + " '" + item.name + "'");
+                return;
+            }
+
             _localHeld.Remove(item);
+            e.InventorySlot = -1;
 
             if (_net.Role == Role.Client)
             {
+                RestoreLocalInventoryVisual(item, inInventory: false);
+                if (LocalPlayerBoat() == null)
+                    EnsureWorldParentState(item);
+                MoveProxyToItem(item, kinematic: true, Vector3.zero);
                 var msg = BuildRequest(e, ItemAction.Drop, _net.Clock.ServerTick);
                 _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 e.HolderNetId = _net.MyNetId;  // keep ApplyRemote off until the host sends the free state
@@ -378,6 +409,35 @@ namespace SailwindCoop.Sync
                 return;
             }
 
+            if (msg.Action == ItemAction.Inventory)
+            {
+                // Personal belt slots are per-player UI. Do not insert a guest item into the host's own
+                // belt; keep the authoritative copy hidden/kinematic until the guest withdraws it.
+                var ie = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                if (ie != null && ie.Item != null)
+                {
+                    ie.InventorySlot = msg.InventorySlot;
+                    if (msg.InventorySlot >= 0)
+                    {
+                        ie.HolderNetId = actor;
+                        _localHeld[ie.Item] = actor;
+                        SetRemoteInventoryVisual(ie.Item, hidden: true);
+                        SetPuppet(ie.Item, true);
+                    }
+                    else
+                    {
+                        SetRemoteInventoryVisual(ie.Item, hidden: false);
+                    }
+
+                    var invState = BuildState(ie, _net.Clock.ServerTick);
+                    invState.InventorySlot = ie.InventorySlot;
+                    _net.Broadcast(invState, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх inventory #" + ie.Index + " slot=" + msg.InventorySlot + " actor=" + actor);
+                }
+                else Remember("отказ inventory id=" + msg.InstanceId);
+                return;
+            }
+
             if (msg.Action == ItemAction.AltHeld || msg.Action == ItemAction.AltActivate)
             {
                 // The client holds the item and triggered an alt action whose effect is
@@ -403,6 +463,10 @@ namespace SailwindCoop.Sync
 
             if (msg.Action == ItemAction.Pickup)
             {
+                e.InventorySlot = -1;
+                if (msg.Frame == CoordFrame.World)
+                    EnsureWorldParentState(e.Item);
+                SetRemoteInventoryVisual(e.Item, hidden: false);
                 e.HolderNetId = actor;
                 _localHeld[e.Item] = actor;
                 // Disable the host's own item physics while a CLIENT holds it — otherwise the game's
@@ -413,6 +477,10 @@ namespace SailwindCoop.Sync
             }
             else if (msg.Action == ItemAction.Drop)
             {
+                e.InventorySlot = -1;
+                if (msg.Frame == CoordFrame.World)
+                    EnsureWorldParentState(e.Item);
+                SetRemoteInventoryVisual(e.Item, hidden: false);
                 e.HolderNetId = 0;
                 _localHeld.Remove(e.Item);
                 // Give the host's physics back; it now simulates the fall authoritatively (lands, enters
@@ -453,15 +521,19 @@ namespace SailwindCoop.Sync
 
             uint prevHolder = e.HolderNetId;
             e.HolderNetId = msg.HolderNetId;
+            e.InventorySlot = msg.InventorySlot;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
             ApplyCrateMembership(e.Item, msg.CrateId);
             ApplyCargoMembership(e.Item, msg.CargoPort);
 
             if (msg.HolderNetId == _net.MyNetId)
             {
+                SetRemoteInventoryVisual(e.Item, hidden: false);
                 Remember("эхо #" + e.Index);   // my own held item echoed back; the game drives it
                 return;
             }
+
+            SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0);
 
             // Free OR remote-held: feed the pose into NetTransform; ApplyRemote drives the item as a
             // kinematic puppet (game physics disabled), so it can't diverge / be ejected / vanish.
@@ -500,13 +572,16 @@ namespace SailwindCoop.Sync
             }
         }
 
-        /// <summary>Send one unreliable Pose for a locally-carried item (hand or belt) and keep it a puppet.</summary>
+        /// <summary>Send one unreliable Pose for a locally-carried item (hand or belt).</summary>
         private void StreamLocalPose(ShipItem item)
         {
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
             _localHeld[item] = _net.MyNetId;
-            SetPuppet(item, true);    // keep collisions disabled for the whole carry window
+            if (!InPersonalInventory(item))
+                SetPuppet(item, true);    // hand-held items stay visual/kinematic; belt slots need vanilla ItemRigidbody
+            else
+                RestoreLocalInventoryVisual(item, inInventory: true);
             SendRequest(e, ItemAction.Pose, reliable: false);
         }
 
@@ -514,9 +589,126 @@ namespace SailwindCoop.Sync
         // port+100 (see CargoPortOf) and nothing returns -1. So [0,100) means "in the local player's belt".
         private static bool InPersonalInventory(ShipItem item)
         {
-            if (item == null) return false;
-            try { int slot = item.GetCurrentInventorySlot(); return slot >= 0 && slot < 100; }
-            catch { return false; }
+            return PersonalInventorySlotOf(item) >= 0;
+        }
+
+        private static int PersonalInventorySlotOf(ShipItem item)
+        {
+            if (item == null) return -1;
+            try
+            {
+                int slot = item.GetCurrentInventorySlot();
+                return slot >= 0 && slot < 100 ? slot : -1;
+            }
+            catch { return -1; }
+        }
+
+        private static void SetRemoteInventoryVisual(ShipItem item, bool hidden)
+        {
+            try
+            {
+                if (item == null) return;
+                foreach (var r in item.GetComponentsInChildren<Renderer>(true))
+                    if (r != null) r.enabled = !hidden;
+                if (!hidden)
+                {
+                    item.transform.localScale = Vector3.one;
+                    var t = item.transform;
+                    for (int i = 0; i < t.childCount; i++)
+                        t.GetChild(i).localScale = Vector3.one;
+                }
+                var irb = item.GetItemRigidbody();
+                if (irb != null)
+                {
+                    irb.ToggleCollider(!hidden);
+                    irb.disableCol = hidden;
+                }
+                var col = item.GetComponent<Collider>();
+                if (col != null) col.enabled = !hidden;
+            }
+            catch { }
+        }
+
+        private static void RestoreLocalInventoryVisual(ShipItem item, bool inInventory)
+        {
+            try
+            {
+                if (item == null) return;
+                var irb = item.GetItemRigidbody();
+                if (!inInventory && irb != null && irb.GetCurrentInventorySlot() != null)
+                    irb.ExitInventorySlot();
+
+                foreach (var r in item.GetComponentsInChildren<Renderer>(true))
+                    if (r != null) r.enabled = true;
+                if (!inInventory)
+                {
+                    item.transform.localScale = Vector3.one;
+                    var t = item.transform;
+                    for (int i = 0; i < t.childCount; i++)
+                        t.GetChild(i).localScale = Vector3.one;
+                }
+                var col = item.GetComponent<Collider>();
+                if (col != null) col.enabled = !inInventory;
+                if (irb != null)
+                {
+                    if (!irb.enabled) irb.enabled = true;
+                    irb.disableCol = false;
+                    irb.ToggleCollider(!inInventory);
+                }
+            }
+            catch { }
+        }
+
+        private static void PrepareLocalWithdrawPickup(ShipItem item)
+        {
+            try
+            {
+                if (item == null || item.held == null) return;
+                RestoreLocalInventoryVisual(item, inInventory: false);
+
+                Transform pointer = item.held.transform;
+                if (pointer != null)
+                {
+                    Vector3 pos = pointer.position + pointer.forward * Mathf.Max(0.7f, item.holdDistance) + pointer.up * item.holdHeight;
+                    Quaternion rot = pointer.rotation * Quaternion.Euler(item.heldRotationOffset, 0f, 0f);
+                    item.transform.position = pos;
+                    item.transform.rotation = rot;
+                }
+
+                if (LocalPlayerBoat() == null)
+                    EnsureWorldParentState(item);
+                MoveProxyToItem(item, kinematic: true, Vector3.zero);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] PrepareLocalWithdrawPickup: " + ex.Message);
+            }
+        }
+
+        private static void PrepareLocalPickupPose(GoPointer pointer, ShipItem item)
+        {
+            try
+            {
+                if (pointer == null || item == null) return;
+                RestoreLocalInventoryVisual(item, inInventory: false);
+
+                Transform p = pointer.movement != null ? pointer.movement.transform : pointer.transform;
+                if (p != null)
+                {
+                    Vector3 pos = p.position + p.forward * Mathf.Max(0.7f, item.holdDistance) + p.up * item.holdHeight;
+                    Quaternion rot = p.rotation * Quaternion.Euler(item.heldRotationOffset, 0f, 0f);
+                    item.transform.position = pos;
+                    item.transform.rotation = rot;
+                }
+
+                if (LocalPlayerBoat() == null)
+                    EnsureWorldParentState(item);
+                MoveProxyToItem(item, kinematic: true, Vector3.zero);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] PrepareLocalPickupPose: " + ex.Message);
+            }
         }
 
         private void SendRequest(ItemEntry e, ItemAction action, bool reliable)
@@ -560,6 +752,7 @@ namespace SailwindCoop.Sync
                 Nailed = e.Item.nailed,
                 CrateId = CrateIdOf(e.Item),
                 CargoPort = CargoPortOf(e.Item),
+                InventorySlot = PersonalInventorySlotOf(e.Item),
             };
         }
 
@@ -589,6 +782,8 @@ namespace SailwindCoop.Sync
         {
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
             uint holder = e.Item.held != null ? _net.MyNetId : e.HolderNetId;
+            int inventorySlot = PersonalInventorySlotOf(e.Item);
+            if (inventorySlot < 0) inventorySlot = e.InventorySlot;
             return new ItemStateMsg
             {
                 Index = e.Index,
@@ -607,14 +802,15 @@ namespace SailwindCoop.Sync
                 Nailed = e.Item.nailed,
                 CrateId = CrateIdOf(e.Item),
                 CargoPort = CargoPortOf(e.Item),
+                InventorySlot = inventorySlot,
             };
         }
 
         private void BuildPose(ShipItem item, long tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel)
         {
-            Transform boat = item.currentActualBoat != null ? item.currentActualBoat : ParentBoat(item.transform);
-            if (boat == null && item.held != null)
-                boat = LocalPlayerBoat();
+            Transform boat = item.held != null
+                ? LocalPlayerBoat()
+                : (item.currentActualBoat != null ? item.currentActualBoat : ParentBoat(item.transform));
             if (boat != null)
             {
                 frame = CoordFrame.Boat;
@@ -675,6 +871,7 @@ namespace SailwindCoop.Sync
 
             item.transform.position = worldPos;
             item.transform.rotation = worldRot;
+            item.transform.localScale = Vector3.one;
             if (frame == CoordFrame.Boat)
                 EnsureBoatParentState(item, boatIndex);
             else
@@ -753,7 +950,7 @@ namespace SailwindCoop.Sync
                     var c = carriers[cur];
                     c.cargo.Remove(item);
                     item.WithdrawFromCarrier();
-                    item.transform.localScale = Vector3.one;
+                    RestoreLocalInventoryVisual(item, inInventory: false);
                 }
                 if (port >= 0 && carriers != null && port < carriers.Length && carriers[port] != null)
                 {
@@ -899,13 +1096,32 @@ namespace SailwindCoop.Sync
 
         private static void EnsureWorldParentState(ShipItem item)
         {
-            if (item == null || item.currentActualBoat == null) return;
+            if (item == null) return;
             try
             {
                 if (_mShipItemExitBoat == null)
                     _mShipItemExitBoat = typeof(ShipItem).GetMethod("ExitBoat", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (_mShipItemExitBoat != null)
+                if (item.currentActualBoat != null && _mShipItemExitBoat != null)
                     _mShipItemExitBoat.Invoke(item, null);
+
+                Transform world = FloatingOriginManager.instance != null ? FloatingOriginManager.instance.transform : null;
+                if (world != null)
+                {
+                    item.transform.parent = world;
+                    var irb = item.GetItemRigidbody();
+                    if (irb != null) irb.transform.parent = world;
+                }
+
+                item.currentActualBoat = null;
+                item.currentWalkCol = null;
+                if (_fShipItemCurrentBoatCollider == null)
+                    _fShipItemCurrentBoatCollider = typeof(ShipItem).GetField("currentBoatCollider", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (_fShipItemCurrentBoatCollider != null)
+                    _fShipItemCurrentBoatCollider.SetValue(item, null);
+
+                var saveable = item.GetComponent<SaveablePrefab>();
+                if (saveable != null && saveable.GetParentObject() != -3)
+                    saveable.SetParentObject(-1);
             }
             catch (Exception e)
             {
@@ -937,6 +1153,9 @@ namespace SailwindCoop.Sync
                 Health = e.Item.health,
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
+                CrateId = CrateIdOf(e.Item),
+                CargoPort = CargoPortOf(e.Item),
+                InventorySlot = e.InventorySlot,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("исх spawn id=" + e.InstanceId + " prefab=" + e.PrefabIndex);
         }
@@ -963,9 +1182,11 @@ namespace SailwindCoop.Sync
                 return;
             }
             e.HolderNetId = msg.HolderNetId;
+            e.InventorySlot = msg.InventorySlot;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
             ApplyCrateMembership(e.Item, msg.CrateId);
             ApplyCargoMembership(e.Item, msg.CargoPort);
+            SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0 && msg.HolderNetId != _net.MyNetId);
             if (msg.HolderNetId != 0 && msg.HolderNetId != _net.MyNetId)
             {
                 ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
@@ -1106,12 +1327,39 @@ namespace SailwindCoop.Sync
             if (ApplyingCargo || _net.State != LinkState.Connected || item == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
+            int port = CargoPortOf(item);
+            if (_net.Role == Role.Client && port < 0) PrepareLocalWithdrawPickup(item);
             long tick = _net.Clock.ServerTick;
             if (_net.Role == Role.Client)
                 _net.Broadcast(BuildRequest(e, ItemAction.Cargo, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
             else
                 _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх cargo #" + e.Index + " port=" + CargoPortOf(item));
+            Remember("исх cargo #" + e.Index + " port=" + port);
+        }
+
+        /// <summary>A personal belt membership changed locally. Client forwards it; host broadcasts state.</summary>
+        public void OnLocalInventory(ShipItem item)
+        {
+            if (_net.State != LinkState.Connected || item == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            int slot = PersonalInventorySlotOf(item);
+            if (_net.Role == Role.Client && slot < 0) PrepareLocalWithdrawPickup(item);
+            e.InventorySlot = slot;
+            long tick = _net.Clock.ServerTick;
+            if (_net.Role == Role.Client)
+            {
+                var msg = BuildRequest(e, ItemAction.Inventory, tick);
+                msg.InventorySlot = slot;
+                _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+            else
+            {
+                var state = BuildState(e, tick);
+                state.InventorySlot = slot;
+                _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+            Remember("исх inventory #" + e.Index + " slot=" + slot);
         }
 
         /// <summary>Client: a held item received a discrete OnAltActivate(GoPointer).</summary>
@@ -1946,11 +2194,14 @@ namespace SailwindCoop.Sync
             // in a prefix (it isn't an argument) and forwards it in the postfix.
             bool cargoIn = TryPatch(harmony, typeof(CargoCarrier), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCargoInsert));
             bool cargoOut = TryPatch(harmony, typeof(CargoCarrier), "WithdrawItem", new[] { typeof(GoPointer), typeof(int) }, prefixName: nameof(PreCargoWithdraw), postfixName: nameof(PostCargoWithdraw));
+            bool invIn = TryPatch(harmony, typeof(GPButtonInventorySlot), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostInventoryInsert));
+            bool invOut = TryPatch(harmony, typeof(GPButtonInventorySlot), "WithdrawItem", Type.EmptyTypes, prefixName: nameof(PreInventoryWithdraw), postfixName: nameof(PostInventoryWithdraw));
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
                                   ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
-                                  ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut);
+                                  ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut +
+                                  ", invIn=" + invIn + ", invOut=" + invOut);
 
             // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
             // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
@@ -2231,6 +2482,25 @@ namespace SailwindCoop.Sync
         {
             try { if (__state != null && !ItemSync.ApplyingCargo) ItemSync.Instance?.OnLocalCargo(__state); }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCargoWithdraw: " + e.Message); }
+        }
+
+        private static void PostInventoryInsert(ShipItem __0)
+        {
+            try { ItemSync.Instance?.OnLocalInventory(__0); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostInventoryInsert: " + e.Message); }
+        }
+
+        private static void PreInventoryWithdraw(GPButtonInventorySlot __instance, out ShipItem __state)
+        {
+            __state = null;
+            try { __state = __instance != null ? __instance.currentItem : null; }
+            catch { __state = null; }
+        }
+
+        private static void PostInventoryWithdraw(ShipItem __state)
+        {
+            try { if (__state != null) ItemSync.Instance?.OnLocalInventory(__state); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostInventoryWithdraw: " + e.Message); }
         }
     }
 }

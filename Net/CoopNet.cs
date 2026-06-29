@@ -58,6 +58,12 @@ namespace SailwindCoop.Net
         public Func<string> WorldIdProvider = () => "";   // host's save identity ("" = unknown)
         public string PlayerName = "Player";
 
+        // Server (host) tuning, supplied by the runtime layer from config.
+        public int MaxClients = 4;
+        public int DisconnectTimeoutMs = 5000;
+        public int UpdateTimeMs = 15;
+        public int PingIntervalMs = 1000;
+
         // Raised for non-session gameplay messages (Stage 1+). (type, message, fromPeer)
         public event Action<MsgType, INetMessage, NetPeer> OnGameMessage;
         // Raised when a client finishes handshake on the host (host side) — for spawn bookkeeping.
@@ -156,7 +162,9 @@ namespace SailwindCoop.Net
             return new NetManager(_listener)
             {
                 AutoRecycle = true,
-                UpdateTime = 15,
+                UpdateTime = Math.Max(1, UpdateTimeMs),
+                DisconnectTimeout = Math.Max(1000, DisconnectTimeoutMs),
+                PingInterval = Math.Max(100, PingIntervalMs),
                 UnconnectedMessagesEnabled = false,
                 IPv6Enabled = false,
             };
@@ -191,8 +199,8 @@ namespace SailwindCoop.Net
         private void OnConnectionRequest(ConnectionRequest request)
         {
             if (Role != Role.Host) { request.Reject(); return; }
-            // Stage 0: 1 client. Tighten/relax later via config.
-            if (_sessions.Count >= 4) { request.Reject(); return; }
+            // Cap concurrent clients per config (Server/MaxClients).
+            if (_sessions.Count >= Math.Max(1, MaxClients)) { request.Reject(); return; }
             request.AcceptIfKey(ConnKey);
         }
 
