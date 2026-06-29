@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 37;
+        public const int Version = 38;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -85,6 +85,7 @@ namespace SailwindCoop.Net
                 case MsgType.MissionReward: return new MissionRewardMsg();
                 case MsgType.MissionAccept: return new MissionAcceptMsg();
                 case MsgType.MissionAbandon: return new MissionAbandonMsg();
+                case MsgType.BoatPurchase: return new BoatPurchaseMsg();
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

@@ -31,8 +31,6 @@ namespace SailwindCoop.Sync
             {
                 // sleep / time advance (conflicts with the shared world clock) — mediated later (P4.2)
                 "GPButtonBed", "GPButtonTavernSleep", "GPButtonOnsenEntrance", "ShipItemBed",
-                // shipyard / boat purchase — host-authoritative world geometry, needs multi-boat (P4.5)
-                "GPButtonPurchaseBoat", "ShipyardButton", "ShipyardDocuments",
                 // save
                 "GPButtonAutosaveToggle",
             };
@@ -63,6 +61,9 @@ namespace SailwindCoop.Sync
                 // the host at the PlayerMissions.AcceptMission/AbandonMission choke points (MissionPatches).
                 "GPButtonPortMissions", "GPButtonListedMission", "GPButtonSetMission",
                 "GPButtonMissionListBack", "GPButtonMissionListPage", "GPButtonMissionListWorld",
+                // shipyard: browsing/buying is local UI; the boat is bought with the buyer's own wallet and
+                // the purchase (extraSetting) is replicated to the peer by ShipyardPatches → ShipyardSync.
+                "ShipyardButton", "ShipyardDocuments", "GPButtonPurchaseBoat",
                 // player movement only; the resulting player pose is already local/player-sync
                 "BoatLadder", "GPButtonRatlines",
             };

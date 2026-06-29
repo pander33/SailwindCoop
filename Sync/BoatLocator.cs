@@ -24,8 +24,24 @@ namespace SailwindCoop.Sync
             }
 
             var boats = new List<Transform>(set);
-            boats.Sort((a, b) => string.CompareOrdinal(PathOf(a), PathOf(b)));
+            // Original boats first (stable order), purchasable boats last. A purchasable boat only joins
+            // the network set once bought (extraSetting); sorting it after the originals means buying one
+            // APPENDS its index instead of shifting the main ship's index (which items/players address).
+            boats.Sort((a, b) =>
+            {
+                int pa = IsPurchasable(a) ? 1 : 0;
+                int pb = IsPurchasable(b) ? 1 : 0;
+                if (pa != pb) return pa - pb;
+                return string.CompareOrdinal(PathOf(a), PathOf(b));
+            });
             return boats;
+        }
+
+        private static bool IsPurchasable(Transform worldBoat)
+        {
+            if (worldBoat == null) return false;
+            Transform root = worldBoat.parent != null ? worldBoat.parent : worldBoat;
+            return root.GetComponent("PurchasableBoat") != null;
         }
 
         private static bool IsNetworkBoat(Transform worldBoat)

@@ -59,6 +59,7 @@ namespace SailwindCoop.Net
         MissionReward = 71,    // host -> client : credit a mission delivery payout to the client's own wallet
         MissionAccept = 72,    // client -> host : "accept THIS mission" (full spec — offers differ per machine)
         MissionAbandon = 73,   // client -> host : "abandon the mission in slot N"
+        BoatPurchase = 74,     // both : a purchasable boat was bought — mark it purchased on the other peer
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1357,6 +1358,19 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w) { w.Put(MissionIndex); }
         public void Deserialize(NetDataReader r) { MissionIndex = r.GetByte(); }
+    }
+
+    /// <summary>Both directions: a purchasable boat was bought (its <c>SaveableObject.extraSetting</c> flipped
+    /// to true). The buyer paid from their own wallet; the other peer just marks the same boat purchased (by
+    /// stable <c>sceneIndex</c>) so both enumerate and sync it as a network boat. P4.5.</summary>
+    public sealed class BoatPurchaseMsg : INetMessage
+    {
+        public int SceneIndex;
+
+        public MsgType Type => MsgType.BoatPurchase;
+
+        public void Serialize(NetDataWriter w) { w.Put(SceneIndex); }
+        public void Deserialize(NetDataReader r) { SceneIndex = r.GetInt(); }
     }
 
     // ---------------------------------------------------------------------

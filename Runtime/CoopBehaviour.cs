@@ -30,6 +30,7 @@ namespace SailwindCoop.Runtime
         public WeatherStormSync Storms { get; private set; }
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
+        public ShipyardSync Shipyard { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -71,10 +72,11 @@ namespace SailwindCoop.Runtime
             Storms = new WeatherStormSync(Net);
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
+            Shipyard = new ShipyardSync(Net);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
 
             Net.OnAccepted += ack =>
@@ -208,6 +210,9 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.MissionAbandon:
                     Missions.OnMissionAbandon((MissionAbandonMsg)msg, fromPeer);
+                    break;
+                case MsgType.BoatPurchase:
+                    Shipyard.OnBoatPurchase((BoatPurchaseMsg)msg, fromPeer);
                     break;
             }
         }
