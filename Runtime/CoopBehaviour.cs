@@ -35,7 +35,6 @@ namespace SailwindCoop.Runtime
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
         private DebugPanel _debugPanel;
-        private bool _debugPanelEnabled;
         private Harmony _harmony;
 
         private void Awake()
@@ -51,6 +50,9 @@ namespace SailwindCoop.Runtime
                 DisconnectTimeoutMs = Plugin.Cfg.DisconnectTimeoutMs.Value,
                 UpdateTimeMs = Plugin.Cfg.UpdateTimeMs.Value,
                 PingIntervalMs = Plugin.Cfg.PingIntervalMs.Value,
+                ListenIp = Plugin.Cfg.ListenIp.Value,
+                ConnectAttempts = Plugin.Cfg.ConnectAttempts.Value,
+                ReconnectDelayMs = Plugin.Cfg.ReconnectDelayMs.Value,
             };
 
             Players = new PlayerSync(Net)
@@ -97,12 +99,9 @@ namespace SailwindCoop.Runtime
             };
 
             _overlay = new DebugOverlay(Net);
-            _debugPanelEnabled = Plugin.Cfg.EnableDebugPanel.Value;
-            if (_debugPanelEnabled)
-            {
-                _debugPanel = new DebugPanel(Net);
-                Plugin.Logger.LogInfo("[Coop] Дебаг-панель включена в конфиге (хоткей " + Plugin.Cfg.DebugPanelKey.Value + ").");
-            }
+            // Always created (lightweight). Availability is gated live by EnableDebugPanel so it can be
+            // toggled in-game (e.g. via BepInEx.ConfigurationManager) without a restart.
+            _debugPanel = new DebugPanel(Net);
         }
 
         private void Update()
@@ -232,7 +231,7 @@ namespace SailwindCoop.Runtime
         private void OnGUI()
         {
             if (_overlayVisible) _overlay.Draw();
-            if (_debugPanelEnabled) _debugPanel.Draw();
+            if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
         }
 
         private void OnDestroy()
@@ -267,8 +266,16 @@ namespace SailwindCoop.Runtime
             if (Input.GetKeyDown(cfg.OverlayKey.Value))
                 _overlayVisible = !_overlayVisible;
 
-            if (_debugPanelEnabled && Input.GetKeyDown(cfg.DebugPanelKey.Value))
-                _debugPanel.Visible = !_debugPanel.Visible;
+            // Live gate: read the config each frame so it can be flipped in-game without a restart.
+            if (cfg.EnableDebugPanel.Value)
+            {
+                if (Input.GetKeyDown(cfg.DebugPanelKey.Value))
+                    _debugPanel.Visible = !_debugPanel.Visible;
+            }
+            else if (_debugPanel.Visible)
+            {
+                _debugPanel.Visible = false;   // disabled while open → hide; re-enable starts hidden
+            }
 
             if (Input.GetKeyDown(cfg.HostKey.Value))
             {

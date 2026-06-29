@@ -64,6 +64,11 @@ namespace SailwindCoop.Net
         public int UpdateTimeMs = 15;
         public int PingIntervalMs = 1000;
 
+        // Connection tuning (host bind + client connect), supplied by the runtime layer from config.
+        public string ListenIp = "0.0.0.0";   // host: interface to bind ("0.0.0.0"/empty = all)
+        public int ConnectAttempts = 10;       // client: connect packets before giving up
+        public int ReconnectDelayMs = 500;     // client: delay between connect attempts
+
         // Raised for non-session gameplay messages (Stage 1+). (type, message, fromPeer)
         public event Action<MsgType, INetMessage, NetPeer> OnGameMessage;
         // Raised when a client finishes handshake on the host (host side) — for spawn bookkeeping.
@@ -110,10 +115,14 @@ namespace SailwindCoop.Net
         {
             Stop();
             _net = NewManager();
-            if (!_net.Start(port))
+            // Honor ListenIp: a concrete address binds to that interface only; "0.0.0.0"/empty = all.
+            bool bindAll = string.IsNullOrEmpty(ListenIp) || ListenIp == "0.0.0.0";
+            bool started = bindAll ? _net.Start(port) : _net.Start(ListenIp, "::", port);
+            if (!started)
             {
                 State = LinkState.Failed;
-                LastError = "Не удалось открыть UDP-порт " + port;
+                LastError = "Не удалось открыть UDP-порт " + port +
+                            (bindAll ? "" : " на интерфейсе " + ListenIp);
                 _log("[CoopNet] " + LastError);
                 return;
             }
@@ -122,7 +131,8 @@ namespace SailwindCoop.Net
             MyNetId = NetRegistry.HostPlayerNetId;
             // Host registers its own player as NetId 1.
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
-            _log("[CoopNet] Хост слушает порт " + port + " (protocol " + Protocol.Version + ")");
+            _log("[CoopNet] Хост слушает " + (bindAll ? "все интерфейсы" : ListenIp) +
+                 " порт " + port + " (protocol " + Protocol.Version + ")");
         }
 
         public void StartClient(string ip, int port)
@@ -165,6 +175,8 @@ namespace SailwindCoop.Net
                 UpdateTime = Math.Max(1, UpdateTimeMs),
                 DisconnectTimeout = Math.Max(1000, DisconnectTimeoutMs),
                 PingInterval = Math.Max(100, PingIntervalMs),
+                MaxConnectAttempts = Math.Max(1, ConnectAttempts),
+                ReconnectDelay = Math.Max(100, ReconnectDelayMs),
                 UnconnectedMessagesEnabled = false,
                 IPv6Enabled = false,
             };

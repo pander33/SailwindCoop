@@ -58,6 +58,10 @@ namespace SailwindCoop
         public readonly ConfigEntry<int> UpdateTimeMs;
         public readonly ConfigEntry<int> PingIntervalMs;
 
+        // Client connection tuning.
+        public readonly ConfigEntry<int> ConnectAttempts;
+        public readonly ConfigEntry<int> ReconnectDelayMs;
+
         // Debug.
         public readonly ConfigEntry<bool> EnableDebugPanel;
 
@@ -70,7 +74,7 @@ namespace SailwindCoop
         public CoopConfig(ConfigFile c)
         {
             Port = c.Bind("Network", "Port", 7777, "UDP-порт хоста.");
-            ListenIp = c.Bind("Network", "ListenIp", "0.0.0.0", "IP, который слушает хост (0.0.0.0 = все интерфейсы).");
+            ListenIp = c.Bind("Network", "ListenIp", "0.0.0.0", "IP/интерфейс, который слушает хост (0.0.0.0 = все интерфейсы). Применяется при старте хоста: конкретный адрес = принимать подключения только на нём.");
             JoinIp = c.Bind("Network", "JoinIp", "127.0.0.1", "IP хоста для подключения клиентом.");
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Отображаемое имя игрока.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "Частота отправки снапшотов состояния (Гц), этап 1+.");
@@ -83,7 +87,10 @@ namespace SailwindCoop
             UpdateTimeMs = c.Bind("Server", "UpdateTimeMs", 15, "Интервал внутреннего обновления сетевого менеджера (мс). Меньше = чаще опрос/отправка, выше нагрузка на CPU.");
             PingIntervalMs = c.Bind("Server", "PingIntervalMs", 1000, "Интервал ping (мс) для оценки задержки и keepalive соединения.");
 
-            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Включить дебаг-панель тест-сценариев (золото/спавн/репутация/мир) по хоткею DebugPanel. Только для отладки — в обычной игре держать выключенной.");
+            ConnectAttempts = c.Bind("Client", "ConnectAttempts", 10, "Сколько раз клиент пытается достучаться до хоста перед ошибкой подключения.");
+            ReconnectDelayMs = c.Bind("Client", "ReconnectDelayMs", 500, "Задержка (мс) между попытками подключения клиента к хосту.");
+
+            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "Дебаг-панель тест-сценариев (золото/спавн/репутация/мир) доступна и открывается по хоткою DebugPanel (стартует скрытой). Значение читается в рантайме — переключать доступность можно прямо в игре через BepInEx.ConfigurationManager (F1) без рестарта.");
 
             HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Запустить хост.");
             JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Подключиться к JoinIp.");
