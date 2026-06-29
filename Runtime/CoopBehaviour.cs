@@ -1,4 +1,5 @@
 using HarmonyLib;
+using SailwindCoop.Avatar;
 using SailwindCoop.Net;
 using SailwindCoop.Sync;
 using UnityEngine;
@@ -35,6 +36,7 @@ namespace SailwindCoop.Runtime
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
         private DebugPanel _debugPanel;
+        private AvatarSelectUI _avatarUI;
         private Harmony _harmony;
 
         private void Awake()
@@ -90,7 +92,12 @@ namespace SailwindCoop.Runtime
             Net.OnAccepted += ack =>
                 Plugin.Logger.LogInfo("[Coop] Подключение принято, NetId=" + ack.AssignedNetId);
             Net.OnClientReady += s =>
-                Plugin.Logger.LogInfo("[Coop] Клиент готов: " + s.PlayerName);
+            {
+                Plugin.Logger.LogInfo("[Coop] Клиент готов: " + s.PlayerName +
+                                      ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
+                // Remember the bundle file this client wants; used when their first PlayerState arrives.
+                Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
+            };
             Net.OnGameMessage += OnGameMessage;
             Net.OnPlayerLeft += netId =>
             {
@@ -98,10 +105,18 @@ namespace SailwindCoop.Runtime
                 Damage.ClearRemoteActor(netId);
             };
 
+            // Re-broadcast our own selection to the other side whenever it changes locally.
+            AvatarCatalog.OnSelectionChanged += newFile =>
+            {
+                if (Net.State != LinkState.Connected) return;
+                Net.SendAvatarChange(newFile);
+            };
+
             _overlay = new DebugOverlay(Net);
             // Always created (lightweight). Availability is gated live by EnableDebugPanel so it can be
             // toggled in-game (e.g. via BepInEx.ConfigurationManager) without a restart.
             _debugPanel = new DebugPanel(Net);
+            _avatarUI = new AvatarSelectUI(AvatarCatalog.CurrentSelection);
         }
 
         private void Update()
@@ -225,13 +240,23 @@ namespace SailwindCoop.Runtime
                 case MsgType.BoatPurchase:
                     Shipyard.OnBoatPurchase((BoatPurchaseMsg)msg, fromPeer);
                     break;
+                case MsgType.AvatarChange:
+                    HandleAvatarChange((AvatarChangeMsg)msg, fromPeer);
+                    break;
             }
+        }
+
+        private void HandleAvatarChange(AvatarChangeMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            Plugin.Logger.LogInfo("[Coop] AvatarChange NetId=" + msg.NetId + " -> '" + msg.BundleFile + "'");
+            Players.ApplyAvatarChange(msg.NetId, msg.BundleFile);
         }
 
         private void OnGUI()
         {
             if (_overlayVisible) _overlay.Draw();
             if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
+            if (_avatarUI != null) _avatarUI.Draw();
         }
 
         private void OnDestroy()
@@ -262,6 +287,13 @@ namespace SailwindCoop.Runtime
         private void HandleHotkeys()
         {
             var cfg = Plugin.Cfg;
+
+            if (Input.GetKeyDown(cfg.AvatarSelectKey.Value))
+            {
+                if (_avatarUI == null) _avatarUI = new AvatarSelectUI(AvatarCatalog.CurrentSelection);
+                _avatarUI.Visible = !_avatarUI.Visible;
+                if (_avatarUI.Visible) AvatarCatalog.Scan();   // refresh the list every time it opens
+            }
 
             if (Input.GetKeyDown(cfg.OverlayKey.Value))
                 _overlayVisible = !_overlayVisible;

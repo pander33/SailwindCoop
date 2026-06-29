@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using SailwindCoop.Avatar;
 using SailwindCoop.Net;
 using UnityEngine;
 
@@ -81,9 +82,11 @@ namespace SailwindCoop.Sync
 
         private readonly CoopNet _net;
         private readonly Dictionary<uint, RemoteAvatar> _remotes = new Dictionary<uint, RemoteAvatar>();
-        private AssetBundle _avatarBundle;
-        private GameObject _avatarPrefab;
-        private bool _avatarBundleTried;
+        // Per-file bundle cache so two players can use different avatar*.bundle at the same time.
+        private readonly Dictionary<string, AssetBundle> _bundleCache = new Dictionary<string, AssetBundle>();
+        private readonly Dictionary<string, GameObject> _prefabCache = new Dictionary<string, GameObject>();
+        // netId -> bundle file name the remote player chose (default = avatar.bundle).
+        private readonly Dictionary<uint, string> _remoteAvatarFile = new Dictionary<uint, string>();
 
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
@@ -151,6 +154,45 @@ namespace SailwindCoop.Sync
         }
 
         public PlayerSync(CoopNet net) { _net = net; }
+
+        // -----------------------------------------------------------------
+        // Avatar selection: called by CoopBehaviour on handshake / change
+        // -----------------------------------------------------------------
+
+        /// <summary>Host-side: remember which avatar bundle a freshly accepted client chose.
+        /// Used when their first PlayerState arrives so we instantiate the right model.</summary>
+        public void RegisterRemoteAvatarFile(uint netId, string bundleFile)
+        {
+            string key = ResolveBundleKey(bundleFile);
+            _remoteAvatarFile[netId] = key;
+        }
+
+        /// <summary>Called when an AvatarChange message arrives (host rebroadcast or our own).
+        /// Updates the per-player file map and rebuilds the remote avatar if it already exists.</summary>
+        public void ApplyAvatarChange(uint netId, string bundleFile)
+        {
+            string key = ResolveBundleKey(bundleFile);
+            _remoteAvatarFile[netId] = key;
+            if (_remotes.TryGetValue(netId, out var existing) && existing.Go != null)
+            {
+                Plugin.Logger.LogInfo("[PlayerSync] AvatarChange NetId=" + netId + " -> '" + key +
+                                      "' (пересоздаю аватар)");
+                // Tear down the old avatar; the next PlayerState will rebuild from the new bundle.
+                Object.Destroy(existing.Go);
+                _remotes.Remove(netId);
+            }
+            else
+            {
+                Plugin.Logger.LogInfo("[PlayerSync] AvatarChange NetId=" + netId + " -> '" + key +
+                                      "' (аватар ещё не создан, выбор запомнен)");
+            }
+        }
+
+        private string ResolveBundleKey(string bundleFile)
+        {
+            if (string.IsNullOrWhiteSpace(bundleFile)) return AvatarCatalog.DefaultBundleFile;
+            return bundleFile.Trim();
+        }
 
         // -----------------------------------------------------------------
         // Outbound: send my pose
@@ -292,6 +334,7 @@ namespace SailwindCoop.Sync
                 if (a.Go != null) Object.Destroy(a.Go);
                 _remotes.Remove(netId);
             }
+            _remoteAvatarFile.Remove(netId);
         }
 
         public void Clear()
@@ -299,16 +342,14 @@ namespace SailwindCoop.Sync
             foreach (var a in _remotes.Values)
                 if (a.Go != null) Object.Destroy(a.Go);
             _remotes.Clear();
+            _remoteAvatarFile.Clear();
             _localPlayer = null;
             _localCrouching = null;
             _haveLast = false;
-            if (_avatarBundle != null)
-            {
-                _avatarBundle.Unload(false);
-                _avatarBundle = null;
-                _avatarPrefab = null;
-                _avatarBundleTried = false;
-            }
+            foreach (var b in _bundleCache.Values)
+                if (b != null) b.Unload(false);
+            _bundleCache.Clear();
+            _prefabCache.Clear();
         }
 
         // -----------------------------------------------------------------
@@ -475,7 +516,10 @@ namespace SailwindCoop.Sync
 
         private RemoteAvatar CreateAvatar(uint netId)
         {
-            RemoteAvatar bundled = TryCreateBundledAvatar(netId);
+            string bundleFile;
+            if (!_remoteAvatarFile.TryGetValue(netId, out bundleFile))
+                bundleFile = AvatarCatalog.DefaultBundleFile;
+            RemoteAvatar bundled = TryCreateBundledAvatar(netId, bundleFile);
             if (bundled != null) return bundled;
 
             var go = new GameObject("CoopPlayer_" + netId);
@@ -532,9 +576,9 @@ namespace SailwindCoop.Sync
             return new RemoteAvatar { Go = go, Body = body.transform, Head = head.transform };
         }
 
-        private RemoteAvatar TryCreateBundledAvatar(uint netId)
+        private RemoteAvatar TryCreateBundledAvatar(uint netId, string bundleFile)
         {
-            GameObject prefab = GetAvatarPrefab();
+            GameObject prefab = GetAvatarPrefab(bundleFile);
             if (prefab == null) return null;
 
             var go = new GameObject("CoopPlayer_" + netId);
@@ -621,54 +665,67 @@ namespace SailwindCoop.Sync
             };
         }
 
-        private GameObject GetAvatarPrefab()
+        private GameObject GetAvatarPrefab(string bundleFile)
         {
-            if (_avatarBundleTried) return _avatarPrefab;
-            _avatarBundleTried = true;
+            if (string.IsNullOrWhiteSpace(bundleFile)) bundleFile = AvatarCatalog.DefaultBundleFile;
+            string key = bundleFile.Trim();
 
-            string path = Plugin.AvatarBundlePath;
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            // Cache hit — return the same prefab for repeat instantiations.
+            if (_prefabCache.TryGetValue(key, out var cached) && cached != null)
+                return cached;
+
+            string path = AvatarCatalog.ResolvePath(key);
+            if (string.IsNullOrEmpty(path))
             {
-                Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle не найден, используется примитивный аватар");
+                // Fallback chain: requested bundle missing locally -> default avatar.bundle -> primitive.
+                if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    Plugin.Logger.LogWarning("[PlayerSync] '" + key + "' не найден, fallback на " +
+                                             AvatarCatalog.DefaultBundleFile);
+                    return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
+                }
+                Plugin.Logger.LogInfo("[PlayerSync] " + AvatarCatalog.DefaultBundleFile +
+                                      " не найден, используется примитивный аватар");
                 return null;
             }
 
-            _avatarBundle = AssetBundle.LoadFromFile(path);
-            if (_avatarBundle == null)
+            var bundle = AssetBundle.LoadFromFile(path);
+            if (bundle == null)
             {
-                Plugin.Logger.LogWarning("[PlayerSync] Не удалось загрузить avatar.bundle: " + path +
+                Plugin.Logger.LogWarning("[PlayerSync] Не удалось загрузить " + key + ": " + path +
                                          " (" + ReadBundleHeader(path) + ")");
+                if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
+                    return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
                 return null;
             }
 
-            _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Modular Fantasy Character");
-            if (_avatarPrefab == null)
-                _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Modular Fantasy Character.prefab");
-            if (_avatarPrefab == null)
-                _avatarPrefab = _avatarBundle.LoadAsset<GameObject>("Cowboy");
-            var names = _avatarBundle.GetAllAssetNames();
+            var prefab = bundle.LoadAsset<GameObject>("Modular Fantasy Character");
+            if (prefab == null) prefab = bundle.LoadAsset<GameObject>("Modular Fantasy Character.prefab");
+            if (prefab == null) prefab = bundle.LoadAsset<GameObject>("Cowboy");
+            var names = bundle.GetAllAssetNames();
             string listed = names != null && names.Length > 0 ? string.Join(", ", names) : "<empty>";
-            Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle assets: " + listed);
+            Plugin.Logger.LogInfo("[PlayerSync] " + key + " assets: " + listed);
 
-            if (_avatarPrefab == null && names != null)
-                _avatarPrefab = PickAvatarPrefab(names, "modular fantasy character");
+            if (prefab == null && names != null)
+                prefab = PickAvatarPrefab(bundle, names, "modular fantasy character");
+            if (prefab == null && names != null)
+                prefab = PickAvatarPrefab(bundle, names, preferCowboy: true);
+            if (prefab == null && names != null)
+                prefab = PickAvatarPrefab(bundle, names, preferCowboy: false);
 
-            if (_avatarPrefab == null && names != null)
-                _avatarPrefab = PickAvatarPrefab(names, preferCowboy: true);
-
-            if (_avatarPrefab == null && names != null)
-                _avatarPrefab = PickAvatarPrefab(names, preferCowboy: false);
-
-            if (_avatarPrefab == null)
+            if (prefab == null)
             {
-                Plugin.Logger.LogWarning("[PlayerSync] В avatar.bundle не найден GameObject prefab");
-                _avatarBundle.Unload(false);
-                _avatarBundle = null;
+                Plugin.Logger.LogWarning("[PlayerSync] В " + key + " не найден GameObject prefab");
+                bundle.Unload(false);
+                if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
+                    return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
                 return null;
             }
 
-            Plugin.Logger.LogInfo("[PlayerSync] Загружен avatar.bundle prefab '" + _avatarPrefab.name + "'");
-            return _avatarPrefab;
+            _bundleCache[key] = bundle;
+            _prefabCache[key] = prefab;
+            Plugin.Logger.LogInfo("[PlayerSync] Загружен '" + key + "' prefab '" + prefab.name + "'");
+            return prefab;
         }
 
         private float ResolveAvatarVerticalOffset(uint netId)
@@ -694,34 +751,34 @@ namespace SailwindCoop.Sync
             return offset;
         }
 
-        private GameObject PickAvatarPrefab(string[] names, string contains)
+        private GameObject PickAvatarPrefab(AssetBundle bundle, string[] names, string contains)
         {
             foreach (string name in names)
             {
                 if (string.IsNullOrEmpty(name)) continue;
                 if (name.ToLowerInvariant().IndexOf(contains) < 0) continue;
 
-                var go = _avatarBundle.LoadAsset<GameObject>(name);
+                var go = bundle.LoadAsset<GameObject>(name);
                 if (go != null)
                 {
-                    Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle выбран asset '" + name + "' -> '" + go.name + "'");
+                    Plugin.Logger.LogInfo("[PlayerSync] выбран asset '" + name + "' -> '" + go.name + "'");
                     return go;
                 }
             }
             return null;
         }
 
-        private GameObject PickAvatarPrefab(string[] names, bool preferCowboy)
+        private GameObject PickAvatarPrefab(AssetBundle bundle, string[] names, bool preferCowboy)
         {
             foreach (string name in names)
             {
                 if (string.IsNullOrEmpty(name)) continue;
                 if (preferCowboy && name.ToLowerInvariant().IndexOf("cowboy") < 0) continue;
 
-                var go = _avatarBundle.LoadAsset<GameObject>(name);
+                var go = bundle.LoadAsset<GameObject>(name);
                 if (go != null)
                 {
-                    Plugin.Logger.LogInfo("[PlayerSync] avatar.bundle выбран asset '" + name + "' -> '" + go.name + "'");
+                    Plugin.Logger.LogInfo("[PlayerSync] выбран asset '" + name + "' -> '" + go.name + "'");
                     return go;
                 }
             }

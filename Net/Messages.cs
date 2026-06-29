@@ -60,6 +60,7 @@ namespace SailwindCoop.Net
         MissionAccept = 72,    // client -> host : "accept THIS mission" (full spec — offers differ per machine)
         MissionAbandon = 73,   // client -> host : "abandon the mission in slot N"
         BoatPurchase = 74,     // both : a purchasable boat was bought — mark it purchased on the other peer
+        AvatarChange = 75,     // both : this player switched to a different avatar bundle mid-session
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -110,6 +111,7 @@ namespace SailwindCoop.Net
         public string ModVersion = "";
         public string WorldId = "";      // host save identity; must match
         public string PlayerName = "";
+        public string SelectedAvatar = ""; // avatar bundle file name, e.g. "avatar1.bundle"
 
         public MsgType Type => MsgType.Hello;
 
@@ -119,6 +121,7 @@ namespace SailwindCoop.Net
             w.Put(ModVersion);
             w.Put(WorldId);
             w.Put(PlayerName);
+            w.Put(SelectedAvatar ?? "");
         }
 
         public void Deserialize(NetDataReader r)
@@ -127,6 +130,7 @@ namespace SailwindCoop.Net
             ModVersion = r.GetString();
             WorldId = r.GetString();
             PlayerName = r.GetString();
+            SelectedAvatar = r.GetString();
         }
     }
 
@@ -1381,6 +1385,35 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w) { w.Put(SceneIndex); }
         public void Deserialize(NetDataReader r) { SceneIndex = r.GetInt(); }
+    }
+
+    // ---------------------------------------------------------------------
+    // Avatar selection
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Sent when a player switches to a different avatar bundle file. The host
+    /// rebroadcasts it to other clients so they can rebuild that player's
+    /// remote avatar from the new bundle.
+    /// </summary>
+    public sealed class AvatarChangeMsg : INetMessage
+    {
+        public uint NetId;                  // the player whose avatar changed
+        public string BundleFile = "";      // e.g. "avatar1.bundle"
+
+        public MsgType Type => MsgType.AvatarChange;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(NetId);
+            w.Put(BundleFile ?? "");
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            NetId = r.GetUInt();
+            BundleFile = r.GetString();
+        }
     }
 
     // ---------------------------------------------------------------------

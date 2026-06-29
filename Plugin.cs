@@ -26,6 +26,7 @@ namespace SailwindCoop
             Instance = this;
             Logger = base.Logger;
             Cfg = new CoopConfig(Config);
+            Avatar.AvatarCatalog.Initialize();
 
             Logger.LogInfo("Sailwind LAN Co-op " + Version + " загружается...");
 
@@ -70,6 +71,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<KeyCode> DisconnectKey;
         public readonly ConfigEntry<KeyCode> OverlayKey;
         public readonly ConfigEntry<KeyCode> DebugPanelKey;
+        public readonly ConfigEntry<KeyCode> AvatarSelectKey;
 
         public CoopConfig(ConfigFile c)
         {
@@ -97,6 +99,7 @@ namespace SailwindCoop
             DisconnectKey = c.Bind("Hotkeys", "Disconnect", KeyCode.F11, "Разорвать соединение.");
             OverlayKey = c.Bind("Hotkeys", "Overlay", KeyCode.F8, "Показать/скрыть диагностический оверлей.");
             DebugPanelKey = c.Bind("Hotkeys", "DebugPanel", KeyCode.F7, "Показать/скрыть дебаг-панель тест-сценариев (золото/спавн/репутация/мир).");
+            AvatarSelectKey = c.Bind("Hotkeys", "AvatarSelect", KeyCode.F6, "Показать/скрыть меню выбора модели персонажа.");
         }
     }
 }

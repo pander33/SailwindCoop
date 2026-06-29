@@ -18,6 +18,7 @@ namespace SailwindCoop.Net
         public bool HandshakeDone;
         public uint PlayerNetId;
         public string PlayerName = "";
+        public string SelectedAvatar = ""; // avatar bundle file name chosen by this player
     }
 
     /// <summary>
@@ -222,13 +223,17 @@ namespace SailwindCoop.Net
             {
                 _hostPeer = peer;
                 State = LinkState.Handshaking;
-                _log("[CoopNet] Соединение установлено, отправляю Hello");
+                string mySelection = "";
+                try { mySelection = SailwindCoop.Avatar.AvatarCatalog.CurrentSelection; }
+                catch { mySelection = ""; }
+                _log("[CoopNet] Соединение установлено, отправляю Hello (avatar=" + mySelection + ")");
                 peer.Send(new HelloMsg
                 {
                     ProtocolVersion = Protocol.Version,
                     ModVersion = ModVersion,
                     WorldId = WorldIdProvider(),
                     PlayerName = PlayerName,
+                    SelectedAvatar = mySelection,
                 }, DeliveryMethod.ReliableOrdered);
             }
             else // Host
@@ -285,6 +290,7 @@ namespace SailwindCoop.Net
                 case MsgType.HelloAck: HandleHelloAck((HelloAckMsg)msg); break;
                 case MsgType.Reject: HandleReject((RejectMsg)msg); break;
                 case MsgType.TimeSync: HandleTimeSync(peer, (TimeSyncMsg)msg); break;
+                case MsgType.AvatarChange: HandleAvatarChange(peer, (AvatarChangeMsg)msg); break;
                 case MsgType.Disconnect:
                     _log("[CoopNet] Disconnect: " + ((DisconnectMsg)msg).Reason);
                     break;
@@ -319,6 +325,7 @@ namespace SailwindCoop.Net
             session.HandshakeDone = true;
             session.PlayerNetId = assigned;
             session.PlayerName = string.IsNullOrEmpty(hello.PlayerName) ? ("Player" + assigned) : hello.PlayerName;
+            session.SelectedAvatar = string.IsNullOrWhiteSpace(hello.SelectedAvatar) ? "" : hello.SelectedAvatar.Trim();
             _playerNames[assigned] = session.PlayerName;
             _playerNames[NetRegistry.HostPlayerNetId] = PlayerName;
 
@@ -404,6 +411,35 @@ namespace SailwindCoop.Net
                 // Originator: complete the round trip.
                 Clock.OnReply(ts.ClientSendTick, ts.ServerTick);
             }
+        }
+
+        // -----------------------------------------------------------------
+        // Avatar change (both sides)
+        // -----------------------------------------------------------------
+
+        /// <summary>Called by the client to tell the host (and other clients) the local player
+        /// switched avatar bundle. The host rebroadcasts to everyone except the originator.</summary>
+        public void SendAvatarChange(string bundleFile)
+        {
+            if (string.IsNullOrWhiteSpace(bundleFile)) return;
+            var msg = new AvatarChangeMsg { NetId = MyNetId, BundleFile = bundleFile.Trim() };
+            if (Role == Role.Host)
+                Broadcast(msg, DeliveryMethod.ReliableOrdered);
+            else if (_hostPeer != null)
+                _hostPeer.Send(msg, DeliveryMethod.ReliableOrdered);
+        }
+
+        private void HandleAvatarChange(NetPeer peer, AvatarChangeMsg msg)
+        {
+            if (Role == Role.Host)
+            {
+                // Refresh the session's known choice before relaying.
+                if (_sessions.TryGetValue(peer.Id, out var s) && s.HandshakeDone)
+                    s.SelectedAvatar = msg.BundleFile ?? "";
+                // Forward to other clients.
+                RelayExcept(msg, peer, DeliveryMethod.ReliableOrdered);
+            }
+            // Both sides: the Sync layer reads the new bundle file via OnGameMessage.
         }
 
         // -----------------------------------------------------------------

@@ -86,6 +86,7 @@ namespace SailwindCoop.Net
                 case MsgType.MissionAccept: return new MissionAcceptMsg();
                 case MsgType.MissionAbandon: return new MissionAbandonMsg();
                 case MsgType.BoatPurchase: return new BoatPurchaseMsg();
+                case MsgType.AvatarChange: return new AvatarChangeMsg();
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

@@ -1,4 +1,5 @@
 using System.Reflection;
+using SailwindCoop.Avatar;
 using SailwindCoop.Net;
 using UnityEngine;
 
@@ -50,6 +51,7 @@ namespace SailwindCoop.Runtime
                 if (d >= 0f) Line("До аватара", d.ToString("0.0") + " м");
                 Line("Анимация", coop.Players.NearestRemoteAnim);
                 Line("Присед", coop.Players.LocalCrouchText);
+                Line("Модель", AvatarCatalog.CurrentSelection + " (" + AvatarCatalog.Entries.Count + " бандлов)");
 
                 if (coop.Boats != null)
                 {
