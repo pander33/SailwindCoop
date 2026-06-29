@@ -54,7 +54,7 @@ namespace SailwindCoop.Net
         private long _lastTimeSyncTick;
 
         // Identity supplied by the runtime layer.
-        public string ModVersion = "0.0.0";
+        public string ModVersion = "0.0.1";
         public Func<string> WorldIdProvider = () => "";   // host's save identity ("" = unknown)
         public string PlayerName = "Player";
 

@@ -796,6 +796,7 @@ namespace SailwindCoop.Net
         Crate = 8,        // client moved a TARGET item in/out of a crate — host mirrors membership (InstanceId=item, CrateId=dest)
         Unseal = 9,       // client unsealed a crate (InstanceId=crate) — host authors the contained items
         Cargo = 10,       // client loaded/unloaded port cargo — host charges the wallet and moves the item
+        Inventory = 11,   // client moved an item in/out of a personal belt slot
     }
 
     public sealed class ItemStateMsg : INetMessage
@@ -816,6 +817,7 @@ namespace SailwindCoop.Net
         public bool Nailed;
         public int CrateId;       // SaveablePrefab.currentCrateId — which crate contains this item (0 = none)
         public int CargoPort = -1; // CargoCarrier.portIndex this item is stored in (-1 = not in cargo)
+        public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
 
         public MsgType Type => MsgType.ItemState;
 
@@ -837,6 +839,7 @@ namespace SailwindCoop.Net
             w.Put(Nailed);
             w.Put(CrateId);
             w.Put(CargoPort);
+            w.Put(InventorySlot);
         }
 
         public void Deserialize(NetDataReader r)
@@ -857,6 +860,7 @@ namespace SailwindCoop.Net
             Nailed = r.GetBool();
             CrateId = r.GetInt();
             CargoPort = r.GetInt();
+            InventorySlot = r.GetInt();
         }
     }
 
@@ -879,6 +883,7 @@ namespace SailwindCoop.Net
         public int CrateId;        // Crate action: the crate this item should belong to (0 = withdraw)
         public int CargoPort = -1; // Cargo action: target carrier portIndex
         public int CargoIndex = -1; // Cargo withdraw: index into the carrier's cargo list
+        public int InventorySlot = -1; // Inventory action: personal belt slot 0..4 (-1 = withdraw)
 
         public MsgType Type => MsgType.ItemRequest;
 
@@ -901,6 +906,7 @@ namespace SailwindCoop.Net
             w.Put(CrateId);
             w.Put(CargoPort);
             w.Put(CargoIndex);
+            w.Put(InventorySlot);
         }
 
         public void Deserialize(NetDataReader r)
@@ -922,6 +928,7 @@ namespace SailwindCoop.Net
             CrateId = r.GetInt();
             CargoPort = r.GetInt();
             CargoIndex = r.GetInt();
+            InventorySlot = r.GetInt();
         }
     }
 
@@ -954,6 +961,7 @@ namespace SailwindCoop.Net
         public bool Nailed;
         public int CrateId;       // SaveablePrefab.currentCrateId (0 = not in a crate)
         public int CargoPort = -1; // CargoCarrier.portIndex (-1 = not in cargo)
+        public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
 
         public MsgType Type => MsgType.SpawnObject;
 
@@ -974,6 +982,7 @@ namespace SailwindCoop.Net
             w.Put(Nailed);
             w.Put(CrateId);
             w.Put(CargoPort);
+            w.Put(InventorySlot);
         }
 
         public void Deserialize(NetDataReader r)
@@ -993,6 +1002,7 @@ namespace SailwindCoop.Net
             Nailed = r.GetBool();
             CrateId = r.GetInt();
             CargoPort = r.GetInt();
+            InventorySlot = r.GetInt();
         }
     }
 
