@@ -1,0 +1,80 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code
+*.cs text diff=csharp
+*.csproj text
+*.sln text
+*.slnx text
+*.targets text
+*.props text
+*.config text
+*.xml text
+*.xaml text
+*.resx text
+*.md text
+*.txt text
+*.json text
+*.yml text
+*.yaml text
+*.ini text
+*.bat text
+*.ps1 text
+*.sh text eol=lf
+
+# Binary files
+*.dll binary
+*.exe binary
+*.pdb binary
+*.mdb binary
+*.dylib binary
+*.so binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.ico binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+*.rar binary
+*.pdf binary
+*.doc binary
+*.docx binary
+*.xls binary
+*.xlsx binary
+*.ppt binary
+*.pptx binary
+*.mp3 binary
+*.mp4 binary
+*.avi binary
+*.wmv binary
+*.wav binary
+*.ogg binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+
+# Unity assets (if applicable)
+*.unity binary
+*.prefab text
+*.mat text
+*.anim text
+*.controller text
+*.overrideController text
+*.physicMaterial text
+*.physicsMaterial2D text
+*.asset text
+*.meta text
+*.asset meta=text
+*.unitypackage binary
+
+# Ensure shell scripts have LF line endings
+*.sh text eol=lf
+
+# Ensure batch files have CRLF line endings on Windows
+*.bat text eol=crlf
+*.cmd text eol=crlf
