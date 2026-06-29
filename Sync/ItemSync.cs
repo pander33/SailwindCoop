@@ -36,6 +36,7 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ShipItem, ItemEntry> _byItem = new Dictionary<ShipItem, ItemEntry>();
         private readonly Dictionary<int, ItemEntry> _byInstanceId = new Dictionary<int, ItemEntry>();
         private readonly Dictionary<ShipItem, uint> _localHeld = new Dictionary<ShipItem, uint>();
+        private readonly List<ShipItem> _poseScratch = new List<ShipItem>();
 
         private GoPointer _gp;
         private FieldInfo _fHeldItem;
@@ -479,15 +480,43 @@ namespace SailwindCoop.Sync
             if (_heldPoseTimer < interval) return;
             _heldPoseTimer = 0f;
 
-            var held = HeldItem();
-            var item = held as ShipItem;
-            if (item == null) return;
+            var held = HeldItem() as ShipItem;
+            if (held != null) StreamLocalPose(held);
 
+            // Items the local player tucked into a personal belt slot (GPButtonInventorySlot) are no longer
+            // pointer-held — vanilla parents them to a slot transform on the body. Without continuing to
+            // stream their pose the host puppet would freeze at the pickup spot ("hangs in the air"). Keep
+            // them riding the client's avatar by streaming the belt-local pose every tick; the host already
+            // thinks the actor holds them (set at Pickup), so the Pose updates keep applying.
+            if (_localHeld.Count > 0)
+            {
+                _poseScratch.Clear();
+                foreach (var kv in _localHeld) _poseScratch.Add(kv.Key);
+                foreach (var it in _poseScratch)
+                {
+                    if (it == null || it == held) continue;
+                    if (InPersonalInventory(it)) StreamLocalPose(it);
+                }
+            }
+        }
+
+        /// <summary>Send one unreliable Pose for a locally-carried item (hand or belt) and keep it a puppet.</summary>
+        private void StreamLocalPose(ShipItem item)
+        {
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
             _localHeld[item] = _net.MyNetId;
             SetPuppet(item, true);    // keep collisions disabled for the whole carry window
             SendRequest(e, ItemAction.Pose, reliable: false);
+        }
+
+        // A personal belt slot returns slotIndex 0..4 from GetCurrentInventorySlot(); cargo carriers return
+        // port+100 (see CargoPortOf) and nothing returns -1. So [0,100) means "in the local player's belt".
+        private static bool InPersonalInventory(ShipItem item)
+        {
+            if (item == null) return false;
+            try { int slot = item.GetCurrentInventorySlot(); return slot >= 0 && slot < 100; }
+            catch { return false; }
         }
 
         private void SendRequest(ItemEntry e, ItemAction action, bool reliable)
@@ -1090,6 +1119,12 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (item == null || item.held == null) return;
+            // A crate's OnAltActivate only opens a LOCAL window (CrateSealUI / CrateInventory.OpenCrate) —
+            // each player browses their own. Forwarding it would replay OnAltActivate on the host and pop
+            // the window open on the HOST's screen instead of the client's. The crate's real state changes
+            // (unseal, insert/withdraw) are mediated by their own relays (PreUnseal, OnLocalCrate), so the
+            // UI-opening alt must stay local.
+            if (item is ShipItemCrate) return;
             ForwardHeldAction(item, ItemAction.AltActivate, reliable: true);
         }
 

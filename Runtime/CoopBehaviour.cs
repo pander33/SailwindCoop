@@ -34,6 +34,7 @@ namespace SailwindCoop.Runtime
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
+        private DebugPanel _debugPanel;
         private Harmony _harmony;
 
         private void Awake()
@@ -91,6 +92,7 @@ namespace SailwindCoop.Runtime
             };
 
             _overlay = new DebugOverlay(Net);
+            _debugPanel = new DebugPanel(Net);
         }
 
         private void Update()
@@ -220,6 +222,7 @@ namespace SailwindCoop.Runtime
         private void OnGUI()
         {
             if (_overlayVisible) _overlay.Draw();
+            _debugPanel.Draw();
         }
 
         private void OnDestroy()
@@ -253,6 +256,9 @@ namespace SailwindCoop.Runtime
 
             if (Input.GetKeyDown(cfg.OverlayKey.Value))
                 _overlayVisible = !_overlayVisible;
+
+            if (Input.GetKeyDown(cfg.DebugPanelKey.Value))
+                _debugPanel.Visible = !_debugPanel.Visible;
 
             if (Input.GetKeyDown(cfg.HostKey.Value))
             {

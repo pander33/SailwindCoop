@@ -56,6 +56,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<KeyCode> JoinKey;
         public readonly ConfigEntry<KeyCode> DisconnectKey;
         public readonly ConfigEntry<KeyCode> OverlayKey;
+        public readonly ConfigEntry<KeyCode> DebugPanelKey;
 
         public CoopConfig(ConfigFile c)
         {
@@ -72,6 +73,7 @@ namespace SailwindCoop
             JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Подключиться к JoinIp.");
             DisconnectKey = c.Bind("Hotkeys", "Disconnect", KeyCode.F11, "Разорвать соединение.");
             OverlayKey = c.Bind("Hotkeys", "Overlay", KeyCode.F8, "Показать/скрыть диагностический оверлей.");
+            DebugPanelKey = c.Bind("Hotkeys", "DebugPanel", KeyCode.F7, "Показать/скрыть дебаг-панель тест-сценариев (золото/спавн/репутация/мир).");
         }
     }
 }
