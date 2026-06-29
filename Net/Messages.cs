@@ -52,6 +52,13 @@ namespace SailwindCoop.Net
         ShopRequest = 64,      // client -> host : "buy this unsold item / sell this held item"
         ShopResult = 65,       // host -> client : buy/sell outcome (ok or reason) for notifications
         FishCatch = 66,        // client -> host : "I caught a fish (prefab P) here" — host authors the real item
+        CargoResult = 67,      // host -> client : cargo load/unload outcome; withdraw tells the client to take the item
+        StormState = 68,       // host -> client : wandering-storm positions + active flags (re-anchor drift)
+        SleepState = 69,       // host -> client : host fell asleep / woke (shared blackout + time-skip)
+        MissionJournal = 70,   // host -> client : the shared mission journal (read-only mirror)
+        MissionReward = 71,    // host -> client : credit a mission delivery payout to the client's own wallet
+        MissionAccept = 72,    // client -> host : "accept THIS mission" (full spec — offers differ per machine)
+        MissionAbandon = 73,   // client -> host : "abandon the mission in slot N"
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -787,6 +794,7 @@ namespace SailwindCoop.Net
         Nail = 7,         // client (un)nailed a TARGET item with a hammer — host sets target.nailed (InstanceId=target)
         Crate = 8,        // client moved a TARGET item in/out of a crate — host mirrors membership (InstanceId=item, CrateId=dest)
         Unseal = 9,       // client unsealed a crate (InstanceId=crate) — host authors the contained items
+        Cargo = 10,       // client loaded/unloaded port cargo — host charges the wallet and moves the item
     }
 
     public sealed class ItemStateMsg : INetMessage
@@ -805,7 +813,8 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
-        public int CrateId;   // SaveablePrefab.currentCrateId — which crate contains this item (0 = none)
+        public int CrateId;       // SaveablePrefab.currentCrateId — which crate contains this item (0 = none)
+        public int CargoPort = -1; // CargoCarrier.portIndex this item is stored in (-1 = not in cargo)
 
         public MsgType Type => MsgType.ItemState;
 
@@ -826,6 +835,7 @@ namespace SailwindCoop.Net
             w.Put(Sold);
             w.Put(Nailed);
             w.Put(CrateId);
+            w.Put(CargoPort);
         }
 
         public void Deserialize(NetDataReader r)
@@ -845,6 +855,7 @@ namespace SailwindCoop.Net
             Sold = r.GetBool();
             Nailed = r.GetBool();
             CrateId = r.GetInt();
+            CargoPort = r.GetInt();
         }
     }
 
@@ -864,7 +875,9 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
-        public int CrateId;   // Crate action: the crate this item should belong to (0 = withdraw)
+        public int CrateId;        // Crate action: the crate this item should belong to (0 = withdraw)
+        public int CargoPort = -1; // Cargo action: target carrier portIndex
+        public int CargoIndex = -1; // Cargo withdraw: index into the carrier's cargo list
 
         public MsgType Type => MsgType.ItemRequest;
 
@@ -885,6 +898,8 @@ namespace SailwindCoop.Net
             w.Put(Sold);
             w.Put(Nailed);
             w.Put(CrateId);
+            w.Put(CargoPort);
+            w.Put(CargoIndex);
         }
 
         public void Deserialize(NetDataReader r)
@@ -904,6 +919,8 @@ namespace SailwindCoop.Net
             Sold = r.GetBool();
             Nailed = r.GetBool();
             CrateId = r.GetInt();
+            CargoPort = r.GetInt();
+            CargoIndex = r.GetInt();
         }
     }
 
@@ -934,7 +951,8 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold;
         public bool Nailed;
-        public int CrateId;   // SaveablePrefab.currentCrateId (0 = not in a crate)
+        public int CrateId;       // SaveablePrefab.currentCrateId (0 = not in a crate)
+        public int CargoPort = -1; // CargoCarrier.portIndex (-1 = not in cargo)
 
         public MsgType Type => MsgType.SpawnObject;
 
@@ -954,6 +972,7 @@ namespace SailwindCoop.Net
             w.Put(Sold);
             w.Put(Nailed);
             w.Put(CrateId);
+            w.Put(CargoPort);
         }
 
         public void Deserialize(NetDataReader r)
@@ -972,6 +991,7 @@ namespace SailwindCoop.Net
             Sold = r.GetBool();
             Nailed = r.GetBool();
             CrateId = r.GetInt();
+            CargoPort = r.GetInt();
         }
     }
 
@@ -1045,6 +1065,37 @@ namespace SailwindCoop.Net
     // ItemSync is host-authoritative, so the client asks the host to create the real fish
     // item; the host's SpawnObject then replicates it and the client remaps its local catch.
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Host -> client: outcome of a cargo load/unload. On a successful withdraw the client locally
+    /// takes its own copy of the item (by id) out of the carrier and into hand; on failure (no money /
+    /// not found) it shows a notification. Insert success needs no result — membership replicates.
+    /// </summary>
+    public sealed class CargoResultMsg : INetMessage
+    {
+        public bool Ok;
+        public bool IsWithdraw;
+        public ShopFailReason Reason;
+        public int InstanceId;     // withdraw ok: the item the client should take into hand
+
+        public MsgType Type => MsgType.CargoResult;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Ok);
+            w.Put(IsWithdraw);
+            w.Put((byte)Reason);
+            w.Put(InstanceId);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Ok = r.GetBool();
+            IsWithdraw = r.GetBool();
+            Reason = (ShopFailReason)r.GetByte();
+            InstanceId = r.GetInt();
+        }
+    }
 
     /// <summary>Client -> host: a fish (PrefabsDirectory prefab) was caught at this pose; author it.</summary>
     public sealed class FishCatchMsg : INetMessage
@@ -1144,6 +1195,168 @@ namespace SailwindCoop.Net
             Reason = (ShopFailReason)r.GetByte();
             InstanceId = r.GetInt();
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Weather storms — wandering storms drift by the (synced) wind each frame, but each
+    // machine integrates that drift over its own frame times, so positions slowly diverge.
+    // The host periodically re-anchors every storm's real-space position + active flag; the
+    // weather visuals derive from storm proximity, so syncing storms keeps weather aligned
+    // without serializing the non-networkable WeatherSet scene objects.
+    // ---------------------------------------------------------------------
+
+    public sealed class StormStateMsg : INetMessage
+    {
+        public Vector3[] Pos = System.Array.Empty<Vector3>();
+        public bool[] Active = System.Array.Empty<bool>();
+        public float Distance;
+
+        public MsgType Type => MsgType.StormState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Pos.Length);
+            for (int i = 0; i < Pos.Length; i++) { w.PutVector3(Pos[i]); w.Put(Active[i]); }
+            w.Put(Distance);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            int n = r.GetByte();
+            Pos = new Vector3[n];
+            Active = new bool[n];
+            for (int i = 0; i < n; i++) { Pos[i] = r.GetVector3(); Active[i] = r.GetBool(); }
+            Distance = r.GetFloat();
+        }
+    }
+
+    /// <summary>Host → client: the host is sleeping (true) or awake (false). Drives the client's shared
+    /// blackout + control lock while the host authoritatively warps time (P4.2).</summary>
+    public sealed class SleepStateMsg : INetMessage
+    {
+        public bool Sleeping;
+
+        public MsgType Type => MsgType.SleepState;
+
+        public void Serialize(NetDataWriter w) { w.Put(Sleeping); }
+        public void Deserialize(NetDataReader r) { Sleeping = r.GetBool(); }
+    }
+
+    /// <summary>One active mission, mirroring the game's <c>SaveMissionData</c> (stable port/prefab
+    /// indices). The slot is <see cref="MissionIndex"/> (0..4).</summary>
+    public struct MissionEntry
+    {
+        public byte MissionIndex;
+        public int OriginPort;
+        public int DestinationPort;
+        public int GoodPrefabIndex;
+        public int GoodCount;
+        public int TotalPrice;
+        public float InsuranceLevel;
+        public float Distance;
+        public int DeliveredGoods;
+        public int DueDay;
+    }
+
+    /// <summary>Host → client: the full shared mission journal (read-only mirror). Slots not listed are
+    /// empty on the client. Built from <c>PlayerMissions.missions[i].PrepareSaveData()</c>.</summary>
+    public sealed class MissionJournalMsg : INetMessage
+    {
+        public MissionEntry[] Missions = System.Array.Empty<MissionEntry>();
+
+        public MsgType Type => MsgType.MissionJournal;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Missions.Length);
+            for (int i = 0; i < Missions.Length; i++)
+            {
+                var m = Missions[i];
+                w.Put(m.MissionIndex);
+                w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
+                w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
+                w.Put(m.Distance); w.Put(m.DeliveredGoods); w.Put(m.DueDay);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            int n = r.GetByte();
+            Missions = new MissionEntry[n];
+            for (int i = 0; i < n; i++)
+            {
+                Missions[i] = new MissionEntry
+                {
+                    MissionIndex = r.GetByte(),
+                    OriginPort = r.GetInt(),
+                    DestinationPort = r.GetInt(),
+                    GoodPrefabIndex = r.GetInt(),
+                    GoodCount = r.GetInt(),
+                    TotalPrice = r.GetInt(),
+                    InsuranceLevel = r.GetFloat(),
+                    Distance = r.GetFloat(),
+                    DeliveredGoods = r.GetInt(),
+                    DueDay = r.GetInt(),
+                };
+            }
+        }
+    }
+
+    /// <summary>Host → client: a mission delivery just paid out on the host; credit the same amount to the
+    /// client's own wallet (separate-money model — the reward is duplicated to both players).</summary>
+    public sealed class MissionRewardMsg : INetMessage
+    {
+        public int Region;
+        public int Amount;
+
+        public MsgType Type => MsgType.MissionReward;
+
+        public void Serialize(NetDataWriter w) { w.Put(Region); w.Put(Amount); }
+        public void Deserialize(NetDataReader r) { Region = r.GetInt(); Amount = r.GetInt(); }
+    }
+
+    /// <summary>Client → host: accept this exact mission. The mission OFFER list is generated from
+    /// per-player state (reputation/prices) and can differ between machines, so we send the full spec
+    /// (a <see cref="MissionEntry"/>) and the host accepts it directly rather than an offer-list index.</summary>
+    public sealed class MissionAcceptMsg : INetMessage
+    {
+        public MissionEntry Mission;
+
+        public MsgType Type => MsgType.MissionAccept;
+
+        public void Serialize(NetDataWriter w)
+        {
+            var m = Mission;
+            w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
+            w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
+            w.Put(m.Distance); w.Put(m.DueDay);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Mission = new MissionEntry
+            {
+                OriginPort = r.GetInt(),
+                DestinationPort = r.GetInt(),
+                GoodPrefabIndex = r.GetInt(),
+                GoodCount = r.GetInt(),
+                TotalPrice = r.GetInt(),
+                InsuranceLevel = r.GetFloat(),
+                Distance = r.GetFloat(),
+                DueDay = r.GetInt(),
+            };
+        }
+    }
+
+    /// <summary>Client → host: abandon the mission in the given shared journal slot.</summary>
+    public sealed class MissionAbandonMsg : INetMessage
+    {
+        public byte MissionIndex;
+
+        public MsgType Type => MsgType.MissionAbandon;
+
+        public void Serialize(NetDataWriter w) { w.Put(MissionIndex); }
+        public void Deserialize(NetDataReader r) { MissionIndex = r.GetByte(); }
     }
 
     // ---------------------------------------------------------------------

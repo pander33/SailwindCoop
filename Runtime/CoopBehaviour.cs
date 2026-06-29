@@ -27,6 +27,9 @@ namespace SailwindCoop.Runtime
         public InteractionSync Interactions { get; private set; }
         public WindTotemSync WindTotem { get; private set; }
         public ShopSync Shop { get; private set; }
+        public WeatherStormSync Storms { get; private set; }
+        public SleepSync Sleep { get; private set; }
+        public MissionSync Missions { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -65,10 +68,13 @@ namespace SailwindCoop.Runtime
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
             Shop = new ShopSync(Net);
+            Storms = new WeatherStormSync(Net);
+            Sleep = new SleepSync(Net);
+            Missions = new MissionSync(Net);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
 
             Net.OnAccepted += ack =>
@@ -94,6 +100,9 @@ namespace SailwindCoop.Runtime
             Boats.Tick(dt);
             Boats.ApplyRemote();
             Env.Tick(dt);
+            Storms.Tick(dt);
+            Sleep.Tick(dt);
+            Missions.Tick(dt);
             Controls.Tick(dt);
             Controls.ApplyClient(dt);
             Anchor.Tick(dt);
@@ -179,14 +188,26 @@ namespace SailwindCoop.Runtime
                 case MsgType.WindRequest:
                     WindTotem.OnWindRequest((WindRequestMsg)msg, fromPeer);
                     break;
-                case MsgType.ShopRequest:
-                    Shop.OnShopRequest((ShopRequestMsg)msg, fromPeer);
-                    break;
-                case MsgType.ShopResult:
-                    Shop.OnShopResult((ShopResultMsg)msg, fromPeer);
-                    break;
                 case MsgType.FishCatch:
                     Items.OnFishCatch((FishCatchMsg)msg, fromPeer);
+                    break;
+                case MsgType.StormState:
+                    Storms.OnStormState((StormStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.SleepState:
+                    Sleep.OnSleepState((SleepStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.MissionJournal:
+                    Missions.OnMissionJournal((MissionJournalMsg)msg, fromPeer);
+                    break;
+                case MsgType.MissionReward:
+                    Missions.OnMissionReward((MissionRewardMsg)msg, fromPeer);
+                    break;
+                case MsgType.MissionAccept:
+                    Missions.OnMissionAccept((MissionAcceptMsg)msg, fromPeer);
+                    break;
+                case MsgType.MissionAbandon:
+                    Missions.OnMissionAbandon((MissionAbandonMsg)msg, fromPeer);
                     break;
             }
         }
@@ -198,6 +219,8 @@ namespace SailwindCoop.Runtime
 
         private void OnDestroy()
         {
+            Missions?.Clear();
+            Sleep?.Clear();
             Shop?.Clear();
             WindTotem?.Clear();
             Interactions?.Clear();
@@ -242,6 +265,8 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 Net.Stop();
+                Missions.Clear();
+                Sleep.Clear();
                 Shop.Clear();
                 WindTotem.Clear();
                 Interactions.Clear();

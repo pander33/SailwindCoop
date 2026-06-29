@@ -89,6 +89,12 @@ namespace SailwindCoop.Runtime
                 if (coop.Shop != null)
                     Line("Магазин", coop.Shop.ShopText);
 
+                if (coop.Sleep != null)
+                    Line("Сон", coop.Sleep.SleepText);
+
+                if (coop.Missions != null)
+                    Line("Миссии", coop.Missions.MissionText);
+
                 if (coop.WindTotem != null && coop.WindTotem.Active)
                     Line("Ветр.тотем", "сила " + coop.WindTotem.LastWind.magnitude.ToString("0.0"));
 

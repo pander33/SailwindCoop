@@ -29,17 +29,10 @@ namespace SailwindCoop.Sync
         private static readonly System.Collections.Generic.HashSet<string> HostOnly =
             new System.Collections.Generic.HashSet<string>
             {
-                // sleep / time advance (conflicts with the shared world clock)
+                // sleep / time advance (conflicts with the shared world clock) — mediated later (P4.2)
                 "GPButtonBed", "GPButtonTavernSleep", "GPButtonOnsenEntrance", "ShipItemBed",
-                // cargo / storage operations
-                "CargoCarrierButton", "CargoStorageUIButton",
-                // economy / trade / shipyard
-                "EconomyUIButton", "CurrencyExchangeUIButton", "CurrencySwitchButton",
+                // shipyard / boat purchase — host-authoritative world geometry, needs multi-boat (P4.5)
                 "GPButtonPurchaseBoat", "ShipyardButton", "ShipyardDocuments",
-                "TradeReceiptsUIButton",
-                // missions
-                "GPButtonListedMission", "GPButtonSetMission", "GPButtonPortMissions",
-                "GPButtonMissionListBack", "GPButtonMissionListPage", "GPButtonMissionListWorld",
                 // save
                 "GPButtonAutosaveToggle",
             };
@@ -55,12 +48,21 @@ namespace SailwindCoop.Sync
                 "GPButtonControlToggle", "GPButtonLogMode", "GPButtonDayLogDay",
                 "GPButtonMapZoom", "StartMenuButton", "GPButtonInventorySlot",
                 "MouseoverTextTrigger",
-                // buy/sell confirm: a LOCAL UI button whose ClickBuyOrSell -> Shopkeeper.TryToSell/BuyItem
-                // is mediated to the host by ShopSync/ShopPatches; must not be blocked or generically replayed.
-                "GPButtonBuyItem",
+                // Personal economy (local money model): each player buys/sells/exchanges against their own
+                // wallet locally — these UI buttons must work on the client, not be blocked. Only the item
+                // consequence of a buy/sell is shared (ShopPatches → ItemSync handoff/despawn).
+                "GPButtonBuyItem", "EconomyUIButton", "CurrencyExchangeUIButton",
+                "CurrencySwitchButton", "TradeReceiptsUIButton",
                 // crate inventory withdraw/insert button: a LOCAL UI button; the resulting
                 // CrateInventory.Insert/WithdrawItem is mediated to the host by ItemSync's crate relay.
                 "CrateInventoryButton",
+                // cargo UI: hire-transport / page-nav / withdraw buttons are LOCAL UI; the wallet ops in
+                // CargoCarrier.Insert/WithdrawItem are mediated to the host by ItemSync's cargo relay.
+                "CargoCarrierButton", "CargoStorageUIButton",
+                // mission scroll: opening/browsing/paging is local UI; accepting/abandoning is mediated to
+                // the host at the PlayerMissions.AcceptMission/AbandonMission choke points (MissionPatches).
+                "GPButtonPortMissions", "GPButtonListedMission", "GPButtonSetMission",
+                "GPButtonMissionListBack", "GPButtonMissionListPage", "GPButtonMissionListWorld",
                 // player movement only; the resulting player pose is already local/player-sync
                 "BoatLadder", "GPButtonRatlines",
             };

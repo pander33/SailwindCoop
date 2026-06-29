@@ -72,8 +72,9 @@ namespace SailwindCoop.Sync
         private readonly HashSet<int> _hostIds = new HashSet<int>();
         public const float MatchRadius = 0.5f;   // metres; items at rest match near-exactly
 
-        // Client: a fish just caught locally, awaiting the host's authoritative SpawnObject to adopt its id.
-        private ShipItem _pendingClientFish;
+        // Client: a runtime item just authored locally (caught fish OR a freshly-bought good), awaiting the
+        // host's authoritative SpawnObject to adopt its id. Single slot — a buy and a catch racing is rare.
+        private ShipItem _pendingClientItem;
 
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
@@ -360,6 +361,22 @@ namespace SailwindCoop.Sync
                 return;
             }
 
+            if (msg.Action == ItemAction.Cargo)
+            {
+                // Client loaded/unloaded a port carrier with its OWN wallet (vanilla ran locally). Mirror
+                // only the physical membership on the host's copy (no wallet) and broadcast the new state.
+                var ge = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                if (ge != null && ge.Item != null)
+                {
+                    ApplyCargoMembership(ge.Item, msg.CargoPort);
+                    if (msg.CargoPort >= 0) ge.HolderNetId = 0;   // stored item is held by nobody
+                    _net.Broadcast(BuildState(ge, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх cargo #" + ge.Index + "->" + msg.CargoPort + " actor=" + actor);
+                }
+                else Remember("отказ cargo id=" + msg.InstanceId);
+                return;
+            }
+
             if (msg.Action == ItemAction.AltHeld || msg.Action == ItemAction.AltActivate)
             {
                 // The client holds the item and triggered an alt action whose effect is
@@ -437,6 +454,7 @@ namespace SailwindCoop.Sync
             e.HolderNetId = msg.HolderNetId;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
             ApplyCrateMembership(e.Item, msg.CrateId);
+            ApplyCargoMembership(e.Item, msg.CargoPort);
 
             if (msg.HolderNetId == _net.MyNetId)
             {
@@ -512,6 +530,7 @@ namespace SailwindCoop.Sync
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
                 CrateId = CrateIdOf(e.Item),
+                CargoPort = CargoPortOf(e.Item),
             };
         }
 
@@ -558,6 +577,7 @@ namespace SailwindCoop.Sync
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
                 CrateId = CrateIdOf(e.Item),
+                CargoPort = CargoPortOf(e.Item),
             };
         }
 
@@ -678,6 +698,41 @@ namespace SailwindCoop.Sync
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ApplyCrateMembership: " + ex.Message); }
             finally { ApplyingCrate = false; }
+        }
+
+        // Anti-echo guard for cargo membership (the Insert/Withdraw patches check it).
+        internal static bool ApplyingCargo;
+
+        /// <summary>
+        /// Mirror a cargo-storage membership change: pull the item out of its old carrier and/or push it
+        /// into the new one — VISUAL/state only (LoadSavedItem adds without charging the wallet; each
+        /// player's own wallet already ran the vanilla load/unload locally). Carriers are addressed by
+        /// stable portIndex via the static <c>CargoCarrier.carriers</c> array.
+        /// </summary>
+        private void ApplyCargoMembership(ShipItem item, int port)
+        {
+            if (item == null) return;
+            int cur = CargoPortOf(item);
+            if (cur == port) return;
+
+            ApplyingCargo = true;
+            try
+            {
+                var carriers = CargoCarrier.carriers;
+                if (cur >= 0 && carriers != null && cur < carriers.Length && carriers[cur] != null)
+                {
+                    var c = carriers[cur];
+                    c.cargo.Remove(item);
+                    item.WithdrawFromCarrier();
+                    item.transform.localScale = Vector3.one;
+                }
+                if (port >= 0 && carriers != null && port < carriers.Length && carriers[port] != null)
+                {
+                    carriers[port].LoadSavedItem(item);   // EnterInventorySlot + InsertIntoCargoCarrier + scale 0, no wallet
+                }
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ApplyCargoMembership: " + ex.Message); }
+            finally { ApplyingCargo = false; }
         }
 
         private void ConfigureNetFrame(ItemEntry e, CoordFrame frame, ushort boatIndex)
@@ -881,6 +936,7 @@ namespace SailwindCoop.Sync
             e.HolderNetId = msg.HolderNetId;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
             ApplyCrateMembership(e.Item, msg.CrateId);
+            ApplyCargoMembership(e.Item, msg.CargoPort);
             if (msg.HolderNetId != 0 && msg.HolderNetId != _net.MyNetId)
             {
                 ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
@@ -1005,6 +1061,28 @@ namespace SailwindCoop.Sync
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("исх unseal crate id=" + sv.instanceId);
             return true;
+        }
+
+        // -----------------------------------------------------------------
+        // Cargo storage — local money, shared membership. The player loads/unloads a port carrier with
+        // their OWN wallet (vanilla runs locally); only the physical membership is synced, exactly like a
+        // crate: the item's CargoPort rides every state message and ApplyCargoMembership mirrors it
+        // (visual-only, no wallet). This method just triggers a state send when membership changes locally.
+        // -----------------------------------------------------------------
+
+        /// <summary>A cargo membership change happened locally (load/unload). Client forwards the request;
+        /// the host mirrors it and broadcasts authoritative state.</summary>
+        public void OnLocalCargo(ShipItem item)
+        {
+            if (ApplyingCargo || _net.State != LinkState.Connected || item == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            long tick = _net.Clock.ServerTick;
+            if (_net.Role == Role.Client)
+                _net.Broadcast(BuildRequest(e, ItemAction.Cargo, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+            else
+                _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх cargo #" + e.Index + " port=" + CargoPortOf(item));
         }
 
         /// <summary>Client: a held item received a discrete OnAltActivate(GoPointer).</summary>
@@ -1408,12 +1486,13 @@ namespace SailwindCoop.Sync
 
             if (!_baselineReady) return null;   // wait until our own save items are loaded
 
-            // A fish we just caught locally is authored by the host now; adopt the host id onto our
-            // exact local catch (deterministic, not position-radius dependent) before generic matching.
-            if (_pendingClientFish != null && PrefabIndexOf(_pendingClientFish) == prefabIndex)
+            // An item we just authored locally (caught fish / bought good) is authored by the host now;
+            // adopt the host id onto our exact local copy (deterministic, not position-radius dependent)
+            // before generic matching.
+            if (_pendingClientItem != null && PrefabIndexOf(_pendingClientItem) == prefabIndex)
             {
-                var fish = _pendingClientFish;
-                _pendingClientFish = null;
+                var fish = _pendingClientItem;
+                _pendingClientItem = null;
                 RemapLocalItem(fish, instanceId);
                 RefreshItems(force: true);
                 return _byInstanceId.TryGetValue(instanceId, out var fr) ? fr : null;
@@ -1555,6 +1634,15 @@ namespace SailwindCoop.Sync
             return s != null ? s.currentCrateId : 0;
         }
 
+        // GetCurrentInventorySlot() returns portIndex+100 while the item is stored in a port cargo carrier
+        // (currentCargoCarrier is private); other inventory slots are < 100. So slot >= 100 → cargo.
+        private static int CargoPortOf(ShipItem item)
+        {
+            if (item == null) return -1;
+            try { int slot = item.GetCurrentInventorySlot(); return slot >= 100 ? slot - 100 : -1; }
+            catch { return -1; }
+        }
+
         private static int PrefabIndexOf(ShipItem item)
         {
             var s = item != null ? item.GetComponent<SaveablePrefab>() : null;
@@ -1680,106 +1768,48 @@ namespace SailwindCoop.Sync
         }
 
         // -----------------------------------------------------------------
-        // Shop economy bridge (Phase 1) — used by ShopSync. Buy/sell is host
-        // authoritative; these expose just enough of the item machinery to hand a
-        // bought item to a client and to resolve a held item being sold.
+        // Client-authored runtime items (fishing, shop buy). Such an item is created on the client
+        // (RNG id) but must be host-authoritative. The client asks the host to create the real twin;
+        // the host's SpawnObject then replicates it and the client remaps its local copy (ResolveClient
+        // via _pendingClientItem). Sold goods take the inverse path: NotifySold tells the host to destroy.
         // -----------------------------------------------------------------
-
-        /// <summary>Host: resolve a sold/replicated item by its stable id (for a Sell).</summary>
-        public ShipItem HostFindById(int instanceId, int prefabIndex)
-        {
-            var e = HostLookup(instanceId, prefabIndex);
-            return e != null ? e.Item : null;
-        }
-
-        /// <summary>Nearest unsold ShipItem of the given prefab to a real-space point (shop stock match).</summary>
-        public static ShipItem FindUnsoldNear(int prefabIndex, Vector3 realPos, float radius)
-        {
-            Vector3 localTarget = CoordSpace.Ready ? CoordSpace.RealToLocal(realPos) : realPos;
-            ShipItem best = null;
-            float bestSq = radius * radius;
-            foreach (var it in UnityEngine.Object.FindObjectsOfType<ShipItem>())
-            {
-                if (it == null || it.sold) continue;
-                if (PrefabIndexOf(it) != prefabIndex) continue;
-                float sq = (it.transform.position - localTarget).sqrMagnitude;
-                if (sq < bestSq) { bestSq = sq; best = it; }
-            }
-            return best;
-        }
 
         /// <summary>
-        /// Host: a just-bought item (now sold + save-registered) becomes a client-held puppet,
-        /// driven by that client's pose stream — exactly like any client-held item. Returns its
-        /// stable id so the client can adopt the same identity onto its local copy.
+        /// Client: a runtime item was just authored locally (a caught fish, or a good just bought with
+        /// the player's own wallet); ask the host to author the authoritative twin so it becomes shared.
         /// </summary>
-        public bool HostAssignBought(ShipItem item, uint holder, out int instanceId)
+        public void NotifyClientAuthored(ShipItem item)
         {
-            instanceId = 0;
-            if (item == null) return false;
-            RefreshItems(force: true);
-            if (!_byItem.TryGetValue(item, out var e)) return false;
-            e.HolderNetId = holder;
-            _localHeld[item] = holder;
-            SetPuppet(item, true);
-            instanceId = e.InstanceId;
-            Remember("куплено хостом для " + holder + " id=" + instanceId + " '" + item.name + "'");
-            return true;
-        }
-
-        /// <summary>
-        /// Client: adopt the host's bought-item id onto our own local unsold copy of the same good and
-        /// put it in the player's hands. The host owns the transaction; this only makes the client's
-        /// view match (no authoritative gold touched — that already happened on the host).
-        /// </summary>
-        public void ClientAdoptBought(int hostInstanceId, int prefabIndex, Vector3 realPos)
-        {
-            var local = FindUnsoldNear(prefabIndex, realPos, 2.5f);
-            if (local == null)
-            {
-                Remember("adopt: нет локального несольнутого prefab=" + prefabIndex);
-                return;
-            }
-            try { local.sold = true; } catch { }
-            RemapLocalItem(local, hostInstanceId);
-            RefreshItems(force: true);
-            try
-            {
-                var gp = HostPointer();
-                if (gp != null && local.held == null) gp.PickUpItem(local);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Logger.LogWarning("[ItemSync] adopt pickup: " + ex.Message);
-            }
-            Remember("adopt buy id=" + hostInstanceId + " prefab=" + prefabIndex + " '" + local.name + "'");
-        }
-
-        // -----------------------------------------------------------------
-        // Fishing (Phase 1) — a caught fish is authored on the client (RNG) but must be
-        // host-authoritative. The client asks the host to create the real fish; the host's
-        // SpawnObject then replicates it and the client remaps its local catch (ResolveClient).
-        // -----------------------------------------------------------------
-
-        /// <summary>Client: a fish was just caught locally; ask the host to author the authoritative item.</summary>
-        public void NotifyCaughtFish(ShipItem fish)
-        {
-            if (_net.Role != Role.Client || _net.State != LinkState.Connected || fish == null) return;
-            _pendingClientFish = fish;
-            BuildPose(fish, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected || item == null) return;
+            _pendingClientItem = item;
+            BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
             {
-                PrefabIndex = PrefabIndexOf(fish),
+                PrefabIndex = PrefabIndexOf(item),
                 Frame = frame,
                 BoatIndex = boatIndex,
                 Pos = pos,
                 Rot = rot,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх fish catch prefab=" + PrefabIndexOf(fish) + " '" + fish.name + "'");
+            Remember("исх client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
         }
 
-        /// <summary>Host: author the fish the client caught; RefreshItems then broadcasts the SpawnObject.</summary>
+        /// <summary>
+        /// Client: a shared item was sold to a shopkeeper locally (own wallet credited by vanilla, item
+        /// destroyed locally). Tell the host to destroy its authoritative copy so it despawns for everyone.
+        /// Reuses the Consume action (host destroys its copy by id). Call BEFORE the local destroy.
+        /// </summary>
+        public void NotifySold(int instanceId, int prefabIndex)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (instanceId <= 0 || prefabIndex <= 0) return;
+            _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = instanceId, PrefabIndex = prefabIndex },
+                           LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх sold(despawn) id=" + instanceId);
+        }
+
+        /// <summary>Host: author the item the client created; RefreshItems then broadcasts the SpawnObject.</summary>
         public void OnFishCatch(FishCatchMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Host) return;
@@ -1832,7 +1862,7 @@ namespace SailwindCoop.Sync
             _byInstanceId.Clear();
             _localHeld.Clear();
             _hostIds.Clear();
-            _pendingClientFish = null;
+            _pendingClientItem = null;
             _gp = null;
             _fHeldItem = null;
             _refreshTimer = 0f;
@@ -1876,10 +1906,16 @@ namespace SailwindCoop.Sync
             bool crateIn = TryPatch(harmony, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
             bool crateOut = TryPatch(harmony, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
             bool unseal = TryPatch(harmony, typeof(ShipItemCrate), "UnsealCrate", Type.EmptyTypes, prefixName: nameof(PreUnseal));
+            // Cargo load/unload uses each player's OWN wallet (local money) → vanilla runs locally; we only
+            // mirror the resulting membership (like crates). Postfix on insert; withdraw captures the item
+            // in a prefix (it isn't an argument) and forwards it in the postfix.
+            bool cargoIn = TryPatch(harmony, typeof(CargoCarrier), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCargoInsert));
+            bool cargoOut = TryPatch(harmony, typeof(CargoCarrier), "WithdrawItem", new[] { typeof(GoPointer), typeof(int) }, prefixName: nameof(PreCargoWithdraw), postfixName: nameof(PostCargoWithdraw));
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
-                                  ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal);
+                                  ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
+                                  ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut);
 
             // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
             // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
@@ -2101,10 +2137,10 @@ namespace SailwindCoop.Sync
         }
 
         // FishingRodFish.CollectFish returns the freshly-instantiated fish ShipItem. Forward it so the
-        // host authors the authoritative copy (client-only inside NotifyCaughtFish).
+        // host authors the authoritative copy (client-only inside NotifyClientAuthored).
         private static void PostCollectFish(ShipItem __result)
         {
-            try { if (__result != null) ItemSync.Instance?.NotifyCaughtFish(__result); }
+            try { if (__result != null) ItemSync.Instance?.NotifyClientAuthored(__result); }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCollectFish: " + e.Message); }
         }
 
@@ -2133,6 +2169,33 @@ namespace SailwindCoop.Sync
                 return !sync.ForwardUnseal(__instance);   // forwarded → skip vanilla; else run it
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreUnseal: " + e.Message); return true; }
+        }
+
+        // Cargo load/unload runs locally (own wallet); we only mirror the resulting membership.
+        // After InsertItem the item's CargoPort is the carrier's port — forward it.
+        private static void PostCargoInsert(ShipItem __0)
+        {
+            try { if (!ItemSync.ApplyingCargo) ItemSync.Instance?.OnLocalCargo(__0); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCargoInsert: " + e.Message); }
+        }
+
+        // WithdrawItem(GoPointer, int index) doesn't take the item; capture it from carrier.cargo[index]
+        // before vanilla removes it, then forward its new (out-of-carrier) membership afterwards.
+        private static void PreCargoWithdraw(CargoCarrier __instance, int __1, out ShipItem __state)
+        {
+            __state = null;
+            try
+            {
+                if (__instance != null && __instance.cargo != null && __1 >= 0 && __1 < __instance.cargo.Count)
+                    __state = __instance.cargo[__1];
+            }
+            catch { __state = null; }
+        }
+
+        private static void PostCargoWithdraw(ShipItem __state)
+        {
+            try { if (__state != null && !ItemSync.ApplyingCargo) ItemSync.Instance?.OnLocalCargo(__state); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCargoWithdraw: " + e.Message); }
         }
     }
 }
