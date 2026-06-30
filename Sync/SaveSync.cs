@@ -52,7 +52,9 @@ namespace SailwindCoop.Sync
             {
                 if (GuestConnected())
                 {
-                    Plugin.Logger.LogInfo("[SavePatches] Сейв пропущен (гость в мире хоста)");
+                    // Don't write the host's world to the guest's disk; persist the guest's CHARACTER instead.
+                    CoopProfile.SaveFromGame();
+                    Plugin.Logger.LogInfo("[SavePatches] Мир хоста не сохранён; профиль персонажа гостя записан");
                     return false;
                 }
             }

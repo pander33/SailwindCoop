@@ -61,6 +61,11 @@ namespace SailwindCoop.Net
         MissionAbandon = 73,   // client -> host : "abandon the mission in slot N"
         BoatPurchase = 74,     // both : a purchasable boat was bought — mark it purchased on the other peer
         AvatarChange = 75,     // both : this player switched to a different avatar bundle mid-session
+
+        // --- save streaming (ReliableOrdered) — host streams its world save to a joining client ---
+        SaveSnapshotBegin = 76, // host -> client : a save transfer is starting (total size, chunk count, game version)
+        SaveSnapshotChunk = 77, // host -> client : one chunk of the serialized SaveContainer bytes
+        SaveSnapshotEnd = 78,   // host -> client : transfer complete (final signal; client merges + loads)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1414,6 +1419,72 @@ namespace SailwindCoop.Net
             NetId = r.GetUInt();
             BundleFile = r.GetString();
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Save streaming — the host serializes its current world save (SaveContainer)
+    // and streams the raw bytes to a joining client in chunks over the reliable
+    // channel. The client reassembles them, overlays its own character profile
+    // (money/reputation/needs/missions), writes the merged save to the coop slot
+    // and loads it — so the guest enters the HOST's world but keeps its own progress.
+    // ReliableOrdered guarantees in-order, complete delivery.
+    // ---------------------------------------------------------------------
+
+    /// <summary>Host -> client: announces a save transfer. <see cref="GameVersion"/> is the host's
+    /// <c>SaveLoadManager.gameVersion</c> so the client can refuse a mismatched save format.</summary>
+    public sealed class SaveSnapshotBeginMsg : INetMessage
+    {
+        public int TotalBytes;
+        public int ChunkCount;
+        public int GameVersion;
+
+        public MsgType Type => MsgType.SaveSnapshotBegin;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(TotalBytes);
+            w.Put(ChunkCount);
+            w.Put(GameVersion);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            TotalBytes = r.GetInt();
+            ChunkCount = r.GetInt();
+            GameVersion = r.GetInt();
+        }
+    }
+
+    /// <summary>Host -> client: one ordered chunk of the serialized SaveContainer.</summary>
+    public sealed class SaveSnapshotChunkMsg : INetMessage
+    {
+        public int Index;
+        public byte[] Data = System.Array.Empty<byte>();
+
+        public MsgType Type => MsgType.SaveSnapshotChunk;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Index);
+            w.PutBytesWithLength(Data);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Index = r.GetInt();
+            Data = r.GetBytesWithLength();
+        }
+    }
+
+    /// <summary>Host -> client: all chunks sent; the client now merges + loads.</summary>
+    public sealed class SaveSnapshotEndMsg : INetMessage
+    {
+        public bool Ok;
+
+        public MsgType Type => MsgType.SaveSnapshotEnd;
+
+        public void Serialize(NetDataWriter w) { w.Put(Ok); }
+        public void Deserialize(NetDataReader r) { Ok = r.GetBool(); }
     }
 
     // ---------------------------------------------------------------------

@@ -1,3 +1,4 @@
+using System.Collections;
 using HarmonyLib;
 using SailwindCoop.Avatar;
 using SailwindCoop.Net;
@@ -32,6 +33,7 @@ namespace SailwindCoop.Runtime
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
+        public SaveTransferSync SaveTransfer { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -83,6 +85,7 @@ namespace SailwindCoop.Runtime
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
             Shipyard = new ShipyardSync(Net);
+            SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
@@ -97,6 +100,8 @@ namespace SailwindCoop.Runtime
                                       ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
                 // Remember the bundle file this client wants; used when their first PlayerState arrives.
                 Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
+                // Stream the host's world to the freshly-joined client so it loads into our world.
+                StartCoroutine(StreamSaveToClient(s.Peer));
             };
             Net.OnGameMessage += OnGameMessage;
             Net.OnPlayerLeft += netId =>
@@ -243,7 +248,52 @@ namespace SailwindCoop.Runtime
                 case MsgType.AvatarChange:
                     HandleAvatarChange((AvatarChangeMsg)msg, fromPeer);
                     break;
+                case MsgType.SaveSnapshotBegin:
+                    SaveTransfer.OnBegin((SaveSnapshotBeginMsg)msg);
+                    break;
+                case MsgType.SaveSnapshotChunk:
+                    SaveTransfer.OnChunk((SaveSnapshotChunkMsg)msg);
+                    break;
+                case MsgType.SaveSnapshotEnd:
+                    SaveTransfer.OnEnd((SaveSnapshotEndMsg)msg);
+                    break;
             }
+        }
+
+        /// <summary>Host side: when a client finishes the handshake, save the host's world fresh (so the
+        /// client gets the up-to-date economy/objects/position), then stream the save file to that client.</summary>
+        private IEnumerator StreamSaveToClient(LiteNetLib.NetPeer peer)
+        {
+            // Give the handshake a frame to settle.
+            yield return null;
+
+            if (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.readyToSave && SaveLoadManager.instance != null)
+            {
+                bool started = false;
+                try { SaveLoadManager.instance.SaveGame(compressed: true); started = true; }
+                catch (System.Exception e) { Plugin.Logger.LogWarning("[Coop] Принудительное сохранение хоста не удалось: " + e.Message); }
+
+                if (started)
+                {
+                    // DoSaveGame sets its private 'busy' flag synchronously; wait for it to clear so the
+                    // file is fully written before we read it (timeout guards a stuck/blocked save).
+                    float t = 0f;
+                    while (SaveTransferSync.HostSaveBusy() && t < 10f)
+                    {
+                        t += Time.unscaledDeltaTime;
+                        yield return null;
+                    }
+                    yield return new WaitForEndOfFrame();
+                }
+            }
+
+            byte[] bytes = SaveTransferSync.ReadHostSaveBytes();
+            if (bytes == null)
+            {
+                Plugin.Logger.LogError("[Coop] Нет сейва хоста для отправки клиенту");
+                yield break;
+            }
+            SaveTransfer.SendSaveTo(peer, bytes);
         }
 
         private void HandleAvatarChange(AvatarChangeMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -324,6 +374,10 @@ namespace SailwindCoop.Runtime
             if (Input.GetKeyDown(cfg.DisconnectKey.Value))
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
+                // Persist the guest's character before tearing the session down, so its money/reputation survive.
+                if (Net.Role == Role.Client && Net.State == LinkState.Connected)
+                    CoopProfile.SaveFromGame();
+                SaveTransfer.Reset();
                 Net.Stop();
                 Missions.Clear();
                 Sleep.Clear();

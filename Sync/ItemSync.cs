@@ -51,6 +51,13 @@ namespace SailwindCoop.Sync
         private readonly List<ShipItem> _poseScratch = new List<ShipItem>();
         private readonly List<PendingDynamicRelease> _pendingDynamic = new List<PendingDynamicRelease>();
 
+        // Client: host item ids we've "claimed" into our own belt. When the host's despawn (from our claim
+        // request) echoes back, we keep the local item (it's now player-local) instead of destroying it.
+        private readonly HashSet<int> _localClaimed = new HashSet<int>();
+        // Client: a player-local belt item just withdrawn to hand and re-authored on the host; once the host
+        // assigns it an id (remap), we send a Pickup so the host marks it held by us.
+        private ShipItem _pendingHeldItem;
+
         private GoPointer _gp;
         private FieldInfo _fHeldItem;
         private static FieldInfo _fBoatCachedItems;
@@ -267,6 +274,13 @@ namespace SailwindCoop.Sync
             e.HolderNetId = _net.MyNetId;
             e.Net.Clear();
             _localHeld[item] = _net.MyNetId;
+            // A player-local item (just withdrawn from our belt) has no host id yet — don't send a Pickup the
+            // host can't resolve. OnLocalInventory(slot<0) re-authors it; the deferred Pickup follows the remap.
+            if (!_hostIds.Contains(e.InstanceId))
+            {
+                Remember("лок pickup (player-local, ждём авторинг) '" + item.name + "'");
+                return;
+            }
             SendRequest(e, ItemAction.Pickup, reliable: true);
             Remember("исх pickup #" + e.Index + " '" + item.name + "'");
         }
@@ -282,23 +296,8 @@ namespace SailwindCoop.Sync
             int personalSlot = PersonalInventorySlotOf(item);
             if (personalSlot >= 0)
             {
-                e.InventorySlot = personalSlot;
-                e.HolderNetId = _net.MyNetId;
-                _localHeld[item] = _net.MyNetId;
-                if (_net.Role == Role.Client)
-                {
-                    var inv = BuildRequest(e, ItemAction.Inventory, _net.Clock.ServerTick);
-                    inv.InventorySlot = personalSlot;
-                    _net.Broadcast(inv, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                }
-                else if (_net.Role == Role.Host)
-                {
-                    var state = BuildState(e, _net.Clock.ServerTick);
-                    state.InventorySlot = personalSlot;
-                    _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                }
-                RestoreLocalInventoryVisual(item, inInventory: true);
-                Remember("исх inventory #" + e.Index + " slot=" + personalSlot + " '" + item.name + "'");
+                // Item dropped into a personal belt slot → it becomes player-local (see ClaimItemToBelt).
+                ClaimItemToBelt(item, personalSlot);
                 return;
             }
 
@@ -1388,6 +1387,21 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client) return;
             if (msg.Kind != (byte)NetObjKind.Item) return;
+            // We claimed this item into our own belt — the despawn is the host dropping its shared copy in
+            // response. Keep our local (now player-local) item; just untrack it. Other peers destroy theirs.
+            if (_localClaimed.Remove(msg.InstanceId))
+            {
+                if (_byInstanceId.TryGetValue(msg.InstanceId, out var claimed))
+                {
+                    _items.Remove(claimed);
+                    _byInstanceId.Remove(msg.InstanceId);
+                    _net.Registry.Remove(claimed.NetId);
+                    if (claimed.Item != null) _byItem.Remove(claimed.Item);
+                }
+                Remember("вх despawn id=" + msg.InstanceId + " (claimed -> оставляю в поясе)");
+                return;
+            }
+
             if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e))
             {
                 Remember("нет despawn id=" + msg.InstanceId);
@@ -1531,37 +1545,75 @@ namespace SailwindCoop.Sync
             Remember("исх cargo #" + e.Index + " port=" + port);
         }
 
-        /// <summary>A personal belt membership changed locally. Client forwards it; host broadcasts state.</summary>
+        /// <summary>
+        /// A personal belt membership changed locally (item entered or left a slot 0..4). Belt items are
+        /// PLAYER-LOCAL, so this drives the two transitions between the shared world and the local belt:
+        /// <list type="bullet">
+        /// <item>world/hand → belt (slot &gt;= 0): claim the item — the host drops its shared copy and we keep
+        /// ours locally (<see cref="ClaimItemToBelt"/>).</item>
+        /// <item>belt → hand (slot &lt; 0): re-author the item on the host so it becomes shared again
+        /// (<see cref="NotifyClientAuthored"/> + deferred Pickup once the host id lands).</item>
+        /// </list>
+        /// On the host the same transitions are handled implicitly by the <see cref="RefreshItems"/> diff
+        /// (excluded belt item → despawn; reappearing item → spawn), so the host just forces a refresh.
+        /// </summary>
         public void OnLocalInventory(ShipItem item)
         {
             if (_net.State != LinkState.Connected || item == null) return;
-            RefreshItems(force: false);
-            if (!_byItem.TryGetValue(item, out var e)) return;
             int slot = PersonalInventorySlotOf(item);
-            if (_net.Role == Role.Client && slot < 0)
+
+            if (_net.Role == Role.Host)
             {
-                PrepareLocalWithdrawPickup(item);
-                e.DropWithoutProxyVelocity = true;
-                e.ForceWorldPoseUntilDrop = LocalPlayerBoat() == null;
-                e.InventorySlot = -1;
-                Remember("лок inventory-out #" + e.Index);
-                return; // PickUpItem postfix will send Pickup with the real hand pose.
+                // Host belt items are player-local too; the RefreshItems diff broadcasts despawn (in) / spawn (out).
+                RefreshItems(force: true);
+                Remember("лок host belt slot=" + slot);
+                return;
             }
-            e.InventorySlot = slot;
-            long tick = _net.Clock.ServerTick;
-            if (_net.Role == Role.Client)
+
+            // Client
+            if (slot >= 0)
             {
-                var msg = BuildRequest(e, ItemAction.Inventory, tick);
-                msg.InventorySlot = slot;
-                _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                ClaimItemToBelt(item, slot);
+                return;
             }
-            else
+
+            // belt → hand: the item is player-local (host doesn't know it). Re-author it on the host so it
+            // rejoins the shared world; mark it for a Pickup once the host id is remapped onto our copy.
+            RefreshItems(force: true);
+            RestoreLocalInventoryVisual(item, inInventory: false);
+            _localClaimed.Remove(InstanceIdOf(item));
+            _pendingHeldItem = item;
+            NotifyClientAuthored(item);
+            Remember("исх belt->hand author '" + item.name + "'");
+        }
+
+        /// <summary>Client (or host) put a shared item into a personal belt slot: it becomes player-local.
+        /// The client asks the host to drop its authoritative copy and ignores the resulting despawn echo for
+        /// this id (so the local belt item survives). Idempotent per id.</summary>
+        private void ClaimItemToBelt(ShipItem item, int slot)
+        {
+            RefreshItems(force: true);
+
+            if (_net.Role == Role.Host)
             {
-                var state = BuildState(e, tick);
-                state.InventorySlot = slot;
-                _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                // Host's own belt: the RefreshItems diff already despawned it for clients. Nothing to send.
+                _localHeld.Remove(item);
+                RestoreLocalInventoryVisual(item, inInventory: true);
+                Remember("лок host claim->belt slot=" + slot);
+                return;
             }
-            Remember("исх inventory #" + e.Index + " slot=" + slot);
+
+            int id = InstanceIdOf(item);
+            int prefab = PrefabIndexOf(item);
+            if (id > 0 && prefab > 0 && _hostIds.Contains(id) && !_localClaimed.Contains(id))
+            {
+                _localClaimed.Add(id);
+                _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = id, PrefabIndex = prefab },
+                               LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("исх claim->belt id=" + id + " slot=" + slot);
+            }
+            _localHeld.Remove(item);
+            RestoreLocalInventoryVisual(item, inInventory: true);
         }
 
         /// <summary>Client: a held item received a discrete OnAltActivate(GoPointer).</summary>
@@ -1980,7 +2032,21 @@ namespace SailwindCoop.Sync
                 _pendingClientItem = null;
                 RemapLocalItem(fish, instanceId);
                 RefreshItems(force: true);
-                return _byInstanceId.TryGetValue(instanceId, out var fr) ? fr : null;
+                _byInstanceId.TryGetValue(instanceId, out var fr);
+                // If this item was just withdrawn from our belt to hand, tell the host we hold it now.
+                if (fish == _pendingHeldItem)
+                {
+                    _pendingHeldItem = null;
+                    if (fr != null && fr.Item != null)
+                    {
+                        fr.HolderNetId = _net.MyNetId;
+                        _localHeld[fr.Item] = _net.MyNetId;
+                        SetPuppet(fr.Item, true);
+                        SendRequest(fr, ItemAction.Pickup, reliable: true);
+                        Remember("исх belt->hand pickup id=" + instanceId);
+                    }
+                }
+                return fr;
             }
 
             var local = FindUnclaimedMatch(prefabIndex, frame, boatIndex, wirePos);
@@ -2095,7 +2161,11 @@ namespace SailwindCoop.Sync
         {
             if (item == null) return false;
             var saveable = item.GetComponent<SaveablePrefab>();
-            return saveable != null && saveable.instanceId > 0 && saveable.prefabIndex > 0 && item.sold;
+            // Personal belt items (slots 0..4) are PLAYER-LOCAL: each player owns its own belt, persisted via
+            // CoopProfile. They are excluded from the shared/host-authoritative item set so they never leak
+            // across peers. The host's RefreshItems diff turns the belt-in/out transitions into despawn/spawn.
+            return saveable != null && saveable.instanceId > 0 && saveable.prefabIndex > 0 && item.sold
+                   && !InPersonalInventory(item);
         }
 
         private static int CompareItems(ShipItem a, ShipItem b)
@@ -2348,7 +2418,9 @@ namespace SailwindCoop.Sync
             _localHeld.Clear();
             _pendingDynamic.Clear();
             _hostIds.Clear();
+            _localClaimed.Clear();
             _pendingClientItem = null;
+            _pendingHeldItem = null;
             _gp = null;
             _fHeldItem = null;
             _refreshTimer = 0f;
