@@ -28,6 +28,8 @@ namespace SailwindCoop.Sync
             public Vector3 LastPos;
             public long LastTick;
             public bool HaveLast;
+            public CoordFrame LastFrame;
+            public ushort LastBoatIndex;
             public bool WasActive;   // host: was streaming this item last tick (to send a final resting pose)
             public int InventorySlot = -1;
             public bool DropWithoutProxyVelocity;
@@ -320,8 +322,8 @@ namespace SailwindCoop.Sync
                 {
                     // T-throw: the item was a kinematic puppet while held, so vanilla's deferred
                     // ThrowItemAfterDelay impulse never lands on the body (RealItemVelocity is ~0 here).
-                    // Send the throw velocity we computed from the pointer so the host launches it.
-                    msg.Vel = throwVelocity;
+                    // Send the throw velocity we computed from the pointer (world axes) in the wire frame.
+                    msg.Vel = WorldToFrameAxes(msg.Frame, msg.BoatIndex, throwVelocity);
                 }
                 e.DropWithoutProxyVelocity = false;
                 e.ForceWorldPoseUntilDrop = false;
@@ -338,9 +340,11 @@ namespace SailwindCoop.Sync
                 e.HolderNetId = 0;
                 var state = BuildState(e, _net.Clock.ServerTick);
                 state.HolderNetId = 0;
-                Vector3 rbVel = RealItemVelocity(item);
-                if (rbVel.sqrMagnitude > 0.0001f) state.Vel = rbVel;
-                else if (throwVelocity.sqrMagnitude > 0.0001f) state.Vel = throwVelocity;   // T-throw impulse hasn't hit the body yet
+                Vector3 rbVel = RealItemVelocity(item);   // proxy body → walk-copy axes
+                if (rbVel.sqrMagnitude > 0.0001f)
+                    state.Vel = state.Frame == CoordFrame.Boat ? ProxyToBoatAxes(item, rbVel) : rbVel;
+                else if (throwVelocity.sqrMagnitude > 0.0001f)   // T-throw impulse hasn't hit the body yet
+                    state.Vel = WorldToFrameAxes(state.Frame, state.BoatIndex, throwVelocity);
                 _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 Remember("исх drop(host) #" + e.Index + " '" + item.name + "'");
             }
@@ -748,8 +752,46 @@ namespace SailwindCoop.Sync
             SetRemoteInventoryVisual(item, hidden: false);
             SetRootCollider(item, true);
             SetPuppet(item, false);
+            // Boat-frame wire velocity is in boat-local axes; the proxy body simulates in the boat's
+            // static walk copy, so map the direction into that frame's axes.
+            if (frame == CoordFrame.Boat) vel = BoatToProxyAxes(item, vel);
             MoveProxyToItem(item, kinematic: false, vel);
             LogItemTransition("после free " + reason, item);
+        }
+
+        /// <summary>Boat-local axes -> the axes the item's physics proxy simulates in (the boat's static
+        /// walk copy; falls back to the boat itself if the item has no walk collider).</summary>
+        private static Vector3 BoatToProxyAxes(ShipItem item, Vector3 v)
+        {
+            try
+            {
+                var walk = item != null ? item.currentWalkCol : null;
+                if (walk != null) return walk.TransformDirection(v);
+                var boat = item != null ? item.currentActualBoat : null;
+                return boat != null ? boat.TransformDirection(v) : v;
+            }
+            catch { return v; }
+        }
+
+        /// <summary>Inverse of <see cref="BoatToProxyAxes"/>: the proxy body's velocity -> boat-local axes.</summary>
+        private static Vector3 ProxyToBoatAxes(ShipItem item, Vector3 v)
+        {
+            try
+            {
+                var walk = item != null ? item.currentWalkCol : null;
+                if (walk != null) return walk.InverseTransformDirection(v);
+                var boat = item != null ? item.currentActualBoat : null;
+                return boat != null ? boat.InverseTransformDirection(v) : v;
+            }
+            catch { return v; }
+        }
+
+        /// <summary>World axes -> the wire frame's axes (no-op for the World frame).</summary>
+        private static Vector3 WorldToFrameAxes(CoordFrame frame, ushort boatIndex, Vector3 v)
+        {
+            if (frame != CoordFrame.Boat) return v;
+            var boat = BoatLocator.FindByIndex(boatIndex);
+            return boat != null ? boat.InverseTransformDirection(v) : v;
         }
 
         private void ScheduleFreeDynamic(ShipItem item, CoordFrame frame, Vector3 vel, string reason)
@@ -899,11 +941,13 @@ namespace SailwindCoop.Sync
             }
             // On drop/throw the meaningful velocity is the impulse Sailwind just applied to the
             // item's physics proxy, not the smoothed hand motion — read it straight off the body
-            // so the host launches the throw authoritatively.
+            // so the host launches the throw authoritatively. The proxy simulates in the boat's
+            // walk copy, so re-express it in the wire frame's axes.
             if (action == ItemAction.Drop)
             {
                 Vector3 rbVel = RealItemVelocity(e.Item);
-                if (rbVel.sqrMagnitude > 0.0001f) vel = rbVel;
+                if (rbVel.sqrMagnitude > 0.0001f)
+                    vel = frame == CoordFrame.Boat ? ProxyToBoatAxes(e.Item, rbVel) : rbVel;
             }
             return new ItemRequestMsg
             {
@@ -1001,17 +1045,23 @@ namespace SailwindCoop.Sync
                 rot = item.transform.rotation;
             }
 
+            // Velocity must be in the SAME frame as the wire pos (boat-local axes for Boat frame, real
+            // space for World): receivers extrapolate pos + vel*dt in that frame, and on drop the host
+            // feeds it into the item's physics proxy, which simulates inside the boat's STATIC walk copy.
+            // Real-space history here used to leak the boat's world speed into items dropped while sailing
+            // (the item slid forward across the deck at the ship's speed).
             vel = Vector3.zero;
             if (e != null)
             {
-                Vector3 current = frame == CoordFrame.World ? pos : (boat != null ? CoordSpace.LocalToReal(boat.TransformPoint(pos)) : item.transform.position);
-                if (e.HaveLast)
+                if (e.HaveLast && e.LastFrame == frame && e.LastBoatIndex == boatIndex)
                 {
                     float secs = (tick - e.LastTick) / 1000f;
-                    if (secs > 0.0001f) vel = (current - e.LastPos) / secs;
+                    if (secs > 0.0001f) vel = (pos - e.LastPos) / secs;
                 }
-                e.LastPos = current;
+                e.LastPos = pos;
                 e.LastTick = tick;
+                e.LastFrame = frame;
+                e.LastBoatIndex = boatIndex;
                 e.HaveLast = true;
             }
         }
