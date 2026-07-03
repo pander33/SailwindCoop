@@ -259,6 +259,7 @@ namespace SailwindCoop.Net
             else
             {
                 _hostPeer = null;
+                TryReadRejectFromDisconnect(info);
                 if (State != LinkState.Rejected)
                 {
                     State = LinkState.Failed;
@@ -266,6 +267,21 @@ namespace SailwindCoop.Net
                 }
                 _log("[CoopNet] Отключено от хоста: " + info.Reason);
             }
+        }
+
+        /// <summary>The host duplicates a handshake RejectMsg into the disconnect packet (the plain
+        /// reliable send may not flush before the shutdown) — recover the reason from there.</summary>
+        private void TryReadRejectFromDisconnect(DisconnectInfo info)
+        {
+            try
+            {
+                var data = info.AdditionalData;
+                if (data == null || data.EndOfData) return;
+                MsgType type = Protocol.PeekType(data);
+                if (type != MsgType.Reject) return;
+                if (Protocol.ReadBody(type, data) is RejectMsg rej) HandleReject(rej);
+            }
+            catch { }
         }
 
         private void OnNetworkError(IPEndPoint endPoint, SocketError error)
@@ -314,8 +330,11 @@ namespace SailwindCoop.Net
             if (reason != RejectReason.None)
             {
                 _log("[CoopNet] Отказ клиенту: " + reason + " " + detail);
-                peer.Send(new RejectMsg { Reason = reason, Detail = detail }, DeliveryMethod.ReliableOrdered);
-                peer.Disconnect();
+                var rej = new RejectMsg { Reason = reason, Detail = detail };
+                peer.Send(rej, DeliveryMethod.ReliableOrdered);
+                // A reliable send may not flush before the disconnect — duplicate the reason into the
+                // disconnect packet itself, which LiteNetLib delivers as part of the shutdown handshake.
+                peer.Disconnect(Protocol.Write(rej));
                 _sessions.Remove(peer.Id);
                 return;
             }

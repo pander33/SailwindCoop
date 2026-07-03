@@ -21,6 +21,8 @@ namespace SailwindCoop.Sync
         private readonly CoopNet _net;
         private float _sendTimer;
         private bool _windDisabled;     // client: did we turn off the local Wind sim?
+        private bool _wavesDisabled;    // client: did we turn off the local WavesInertia sim?
+        private WavesInertia _waves;    // cached; no singleton on the engine type
 
         /// <summary>Environment snapshot rate (Hz). Slow — env changes gradually.</summary>
         public float EnvHz = 4f;
@@ -61,7 +63,22 @@ namespace SailwindCoop.Sync
             var moon = Moon.instance;
             if (moon != null) msg.MoonPhase = moon.currentPhase;
 
+            var waves = FindWaves();
+            if (waves != null)
+            {
+                msg.HasWaves = true;
+                msg.WavesRot = waves.transform.rotation;
+                msg.WavesInertia = waves.currentInertia;
+                msg.WavesMagnitude = waves.currentMagnitude;
+            }
+
             _net.Broadcast(msg, LiteNetLib.DeliveryMethod.Unreliable);
+        }
+
+        private WavesInertia FindWaves()
+        {
+            if (_waves == null) _waves = Object.FindObjectOfType<WavesInertia>();
+            return _waves;
         }
 
         // -----------------------------------------------------------------
@@ -96,6 +113,23 @@ namespace SailwindCoop.Sync
             // Moon phase (harmless even if Moon.Update recomputes it from the synced time).
             var moon = Moon.instance;
             if (moon != null) moon.currentPhase = msg.MoonPhase;
+
+            // Waves: same takeover as the wind — WavesInertia.Update drifts toward the local wind
+            // and would fight the snapshots. Sea state must match or the host-authoritative boat
+            // visibly sinks under (or floats above) the client's water.
+            if (msg.HasWaves)
+            {
+                var waves = FindWaves();
+                if (waves != null)
+                {
+                    if (waves.enabled)
+                    {
+                        waves.enabled = false;
+                        _wavesDisabled = true;
+                    }
+                    waves.LoadInertia(msg.WavesRot, msg.WavesInertia, msg.WavesMagnitude);
+                }
+            }
         }
 
         public void Clear()
@@ -107,6 +141,12 @@ namespace SailwindCoop.Sync
                 if (wind != null) wind.enabled = true;
                 _windDisabled = false;
             }
+            if (_wavesDisabled)
+            {
+                if (_waves != null) _waves.enabled = true;
+                _wavesDisabled = false;
+            }
+            _waves = null;
             _sendTimer = 0f;
         }
     }

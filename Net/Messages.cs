@@ -66,6 +66,7 @@ namespace SailwindCoop.Net
         SaveSnapshotBegin = 76, // host -> client : a save transfer is starting (total size, chunk count, game version)
         SaveSnapshotChunk = 77, // host -> client : one chunk of the serialized SaveContainer bytes
         SaveSnapshotEnd = 78,   // host -> client : transfer complete (final signal; client merges + loads)
+        ClientWorldLoaded = 79, // client -> host : "I finished (or failed) loading your world" — host lifts the join-pause
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -345,6 +346,12 @@ namespace SailwindCoop.Net
         public int Day;
         // moon (Moon.instance.currentPhase)
         public float MoonPhase;
+        // waves (WavesInertia: transform.rotation / currentInertia / currentMagnitude) —
+        // mismatched sea state makes the host-authoritative boat sit under/above the client's water.
+        public bool HasWaves;
+        public Quaternion WavesRot;
+        public float WavesInertia;
+        public float WavesMagnitude;
 
         public MsgType Type => MsgType.EnvState;
 
@@ -359,6 +366,10 @@ namespace SailwindCoop.Net
             w.Put(Timescale);
             w.Put(Day);
             w.Put(MoonPhase);
+            w.Put(HasWaves);
+            w.PutQuaternion(WavesRot);
+            w.Put(WavesInertia);
+            w.Put(WavesMagnitude);
         }
 
         public void Deserialize(NetDataReader r)
@@ -372,6 +383,10 @@ namespace SailwindCoop.Net
             Timescale = r.GetFloat();
             Day = r.GetInt();
             MoonPhase = r.GetFloat();
+            HasWaves = r.GetBool();
+            WavesRot = r.GetQuaternion();
+            WavesInertia = r.GetFloat();
+            WavesMagnitude = r.GetFloat();
         }
     }
 
@@ -1482,6 +1497,18 @@ namespace SailwindCoop.Net
         public bool Ok;
 
         public MsgType Type => MsgType.SaveSnapshotEnd;
+
+        public void Serialize(NetDataWriter w) { w.Put(Ok); }
+        public void Deserialize(NetDataReader r) { Ok = r.GetBool(); }
+    }
+
+    /// <summary>Client -> host: the streamed world finished loading (<see cref="Ok"/> = true) or the
+    /// load failed/was refused (false). Either way the host lifts its join-pause for this client.</summary>
+    public sealed class ClientWorldLoadedMsg : INetMessage
+    {
+        public bool Ok;
+
+        public MsgType Type => MsgType.ClientWorldLoaded;
 
         public void Serialize(NetDataWriter w) { w.Put(Ok); }
         public void Deserialize(NetDataReader r) { Ok = r.GetBool(); }

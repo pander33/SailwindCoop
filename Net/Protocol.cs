@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 40;
+        public const int Version = 41;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -90,6 +90,7 @@ namespace SailwindCoop.Net
                 case MsgType.SaveSnapshotBegin: return new SaveSnapshotBeginMsg();
                 case MsgType.SaveSnapshotChunk: return new SaveSnapshotChunkMsg();
                 case MsgType.SaveSnapshotEnd: return new SaveSnapshotEndMsg();
+                case MsgType.ClientWorldLoaded: return new ClientWorldLoadedMsg();
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

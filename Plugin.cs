@@ -66,6 +66,7 @@ namespace SailwindCoop
         // Save sharing (host streams its world to the joining client; client overlays its profile).
         public readonly ConfigEntry<int> CoopSaveSlot;
         public readonly ConfigEntry<bool> ForceHostSaveOnJoin;
+        public readonly ConfigEntry<bool> PauseHostOnJoin;
 
         // Debug.
         public readonly ConfigEntry<bool> EnableDebugPanel;
@@ -98,6 +99,7 @@ namespace SailwindCoop
 
             CoopSaveSlot = c.Bind("Save", "CoopSaveSlot", 5, "Слот сохранения (0..5), в который клиент пишет полученный мир хоста и из которого грузится. ВНИМАНИЕ: локальный сейв в этом слоте на клиенте перезаписывается. Подключаться нужно из главного меню.");
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "При подключении клиента хост делает свежее сохранение, чтобы клиент получил актуальный мир (экономика/объекты/позиция). Выключите, если хотите отдавать последний автосейв без принудительного сохранения.");
+            PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "Пока клиент грузит мир хоста, мир хоста ставится на паузу (timeScale=0, как в меню настроек) — предметы/якорь/швартовы/волны у клиента совпадут со снапшотом. Пауза снимается, когда клиент отчитается о загрузке, отключится или по таймауту 120 с.");
 
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "Дебаг-панель тест-сценариев (золото/спавн/репутация/мир) доступна и открывается по хоткою DebugPanel (стартует скрытой). Значение читается в рантайме — переключать доступность можно прямо в игре через BepInEx.ConfigurationManager (F1) без рестарта.");
 

@@ -1,9 +1,11 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization.Formatters.Binary;
 using LiteNetLib;
 using SailwindCoop.Net;
+using SailwindCoop.Runtime;
 using UnityEngine;
 
 namespace SailwindCoop.Sync
@@ -166,6 +168,7 @@ namespace SailwindCoop.Sync
                 {
                     Plugin.Logger.LogError("[SaveTransfer] Получено " + _receivedChunks + "/" +
                                            _expectedChunks + " чанков — приём сорван");
+                    NotifyHostLoaded(false);
                     return;
                 }
 
@@ -174,6 +177,7 @@ namespace SailwindCoop.Sync
                 {
                     Plugin.Logger.LogError("[SaveTransfer] Размер собранного сейва не совпадает (" +
                                            (bytes?.Length ?? 0) + " != " + _totalBytes + ")");
+                    NotifyHostLoaded(false);
                     return;
                 }
 
@@ -182,11 +186,20 @@ namespace SailwindCoop.Sync
             catch (Exception e)
             {
                 Plugin.Logger.LogError("[SaveTransfer] Ошибка применения сейва хоста: " + e);
+                NotifyHostLoaded(false);
             }
             finally
             {
                 _chunks = null;
             }
+        }
+
+        /// <summary>Client -> host: report the load outcome so the host can lift its join-pause
+        /// without waiting for the safety timeout.</summary>
+        private void NotifyHostLoaded(bool ok)
+        {
+            try { _net.Broadcast(new ClientWorldLoadedMsg { Ok = ok }, DeliveryMethod.ReliableOrdered); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[SaveTransfer] ClientWorldLoaded не отправлен: " + e.Message); }
         }
 
         private byte[] Assemble()
@@ -227,36 +240,83 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Drives the game's own load path so player controller, blackout and flags are set up
-        /// exactly like a normal "Continue". Requires being at the title screen (<c>StartMenu</c>).</summary>
+        /// exactly like a normal "Continue". Requires being at the title screen (<c>StartMenu</c>):
+        /// the menu silently ignores clicks while its fade animations play (<c>animsPlaying</c>), so the
+        /// click is retried until the game's load coroutine actually starts (<c>GameState.currentlyLoading</c>).</summary>
         private void TriggerLoad(int slot)
         {
-            try
+            var runner = CoopBehaviour.Instance;
+            if (runner == null)
             {
-                SaveSlots.currentSlot = slot;
-                if (SaveSlots.slotsActive != null && slot < SaveSlots.slotsActive.Length)
-                    SaveSlots.slotsActive[slot] = true;
+                Plugin.Logger.LogError("[SaveTransfer] Нет CoopBehaviour — загрузку запустить некому");
+                NotifyHostLoaded(false);
+                return;
+            }
+            runner.StartCoroutine(LoadRoutine(slot));
+        }
+
+        private IEnumerator LoadRoutine(int slot)
+        {
+            if (GameState.playing || GameState.currentlyLoading)
+            {
+                // Loading a save over an already-loaded world duplicates every saved prefab — refuse.
+                Plugin.Logger.LogError("[SaveTransfer] Клиент уже в игре — мир хоста не загружен. " +
+                                       "Выйдите в главное меню и подключитесь заново.");
+                NotifyHostLoaded(false);
+                yield break;
+            }
+
+            SaveSlots.currentSlot = slot;
+            if (SaveSlots.slotsActive != null && slot < SaveSlots.slotsActive.Length)
+                SaveSlots.slotsActive[slot] = true;
+
+            var fAnims = typeof(StartMenu).GetField("animsPlaying", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            for (float t = 0f; !GameState.currentlyLoading; t += Time.unscaledDeltaTime)
+            {
+                if (t >= 10f)
+                {
+                    Plugin.Logger.LogError("[SaveTransfer] Не удалось запустить загрузку мира хоста за 10 с " +
+                                           "(StartMenu занят или недоступен)");
+                    NotifyHostLoaded(false);
+                    yield break;
+                }
 
                 var menu = UnityEngine.Object.FindObjectOfType<StartMenu>();
-                if (menu != null && !GameState.playing)
+                if (menu != null && AnimsPlaying(fAnims, menu) == 0)
                 {
-                    var f = typeof(StartMenu).GetField("selectedContinue", BindingFlags.Instance | BindingFlags.NonPublic);
-                    f?.SetValue(menu, true);
-                    menu.ButtonClick(slot, 0);
-                    Plugin.Logger.LogInfo("[SaveTransfer] Запущена загрузка мира хоста через меню (слот " + slot + ")");
-                }
-                else
-                {
-                    Plugin.Logger.LogWarning("[SaveTransfer] StartMenu недоступен или игра уже идёт — " +
-                                             "клиент должен подключаться из главного меню. Прямая загрузка.");
-                    SaveLoadManager.instance?.LoadGame(0);
+                    // Public field: without it ButtonClick treats the click as "New game" (island menu).
+                    menu.selectedContinue = true;
+                    try { menu.ButtonClick(slot, 0); }
+                    catch (Exception e)
+                    {
+                        Plugin.Logger.LogError("[SaveTransfer] ButtonClick: " + e);
+                        NotifyHostLoaded(false);
+                        yield break;
+                    }
+                    // LoadGameAnimation sets currentlyLoading synchronously; if it didn't, retry next frame.
+                    if (GameState.currentlyLoading) break;
                 }
 
+                yield return null;
+            }
+            Plugin.Logger.LogInfo("[SaveTransfer] Запущена загрузка мира хоста через меню (слот " + slot + ")");
+
+            // The load itself takes a few seconds (blackout + LoadGame); report once the world is up.
+            for (float t = 0f; !GameState.playing && t < 60f; t += Time.unscaledDeltaTime)
+                yield return null;
+
+            NotifyHostLoaded(GameState.playing);
+            if (GameState.playing)
                 OnSaveLoaded?.Invoke();
-            }
-            catch (Exception e)
-            {
-                Plugin.Logger.LogError("[SaveTransfer] Не удалось запустить загрузку: " + e);
-            }
+            else
+                Plugin.Logger.LogWarning("[SaveTransfer] Загрузка стартовала, но мир так и не поднялся за 60 с");
+        }
+
+        private static int AnimsPlaying(FieldInfo f, StartMenu menu)
+        {
+            try { return f != null ? (int)f.GetValue(menu) : 0; }
+            catch { return 0; }
         }
 
         public void Reset()

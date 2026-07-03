@@ -34,6 +34,7 @@ namespace SailwindCoop.Runtime
         public MissionSync Missions { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
         public SaveTransferSync SaveTransfer { get; private set; }
+        public JoinPause Pause { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = true;
@@ -86,6 +87,7 @@ namespace SailwindCoop.Runtime
             Missions = new MissionSync(Net);
             Shipyard = new ShipyardSync(Net);
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
+            Pause = new JoinPause();
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
@@ -100,14 +102,18 @@ namespace SailwindCoop.Runtime
                                       ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
                 // Remember the bundle file this client wants; used when their first PlayerState arrives.
                 Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
+                // Freeze the world so the streamed snapshot stays true until this client is in.
+                if (Plugin.Cfg.PauseHostOnJoin.Value && GameState.playing)
+                    Pause.Hold(s.PlayerNetId);
                 // Stream the host's world to the freshly-joined client so it loads into our world.
-                StartCoroutine(StreamSaveToClient(s.Peer));
+                StartCoroutine(StreamSaveToClient(s.Peer, s.PlayerNetId));
             };
             Net.OnGameMessage += OnGameMessage;
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
                 Damage.ClearRemoteActor(netId);
+                Pause.Release(netId);
             };
 
             // Re-broadcast our own selection to the other side whenever it changes locally.
@@ -128,6 +134,7 @@ namespace SailwindCoop.Runtime
         {
             HandleHotkeys();
             Net.PollEvents();
+            Pause.Tick();
             float dt = Time.deltaTime;
             // Boat first: the slaved deck moves, then players (children) settle on it.
             Boats.Tick(dt);
@@ -257,33 +264,68 @@ namespace SailwindCoop.Runtime
                 case MsgType.SaveSnapshotEnd:
                     SaveTransfer.OnEnd((SaveSnapshotEndMsg)msg);
                     break;
+                case MsgType.ClientWorldLoaded:
+                    if (Net.Role == Role.Host)
+                    {
+                        uint netId = Net.PlayerNetIdForPeer(fromPeer);
+                        Plugin.Logger.LogInfo("[Coop] Клиент NetId=" + netId + " загрузил мир: " +
+                                              (((ClientWorldLoadedMsg)msg).Ok ? "успешно" : "с ошибкой"));
+                        Pause.Release(netId);
+                    }
+                    break;
             }
         }
 
         /// <summary>Host side: when a client finishes the handshake, save the host's world fresh (so the
         /// client gets the up-to-date economy/objects/position), then stream the save file to that client.</summary>
-        private IEnumerator StreamSaveToClient(LiteNetLib.NetPeer peer)
+        private IEnumerator StreamSaveToClient(LiteNetLib.NetPeer peer, uint netId)
         {
             // Give the handshake a frame to settle.
             yield return null;
 
-            if (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.readyToSave && SaveLoadManager.instance != null)
+            if (!GameState.playing)
             {
+                // Without a loaded world SaveSlots.currentSlot points at an arbitrary slot —
+                // never stream that to a client.
+                Plugin.Logger.LogError("[Coop] Хост не в игре (сейв не загружен) — мир клиенту не отправлен. " +
+                                       "Сначала загрузите сейв, потом принимайте клиентов.");
+                Pause.Release(netId);
+                yield break;
+            }
+
+            if (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.instance != null)
+            {
+                // SaveGame silently refuses while busy / in bed / in shipyard / not ready — wait for a
+                // window where it can run, then verify it really started (DoSaveGame flips its private
+                // 'busy' flag synchronously inside the SaveGame call).
                 bool started = false;
-                try { SaveLoadManager.instance.SaveGame(compressed: true); started = true; }
-                catch (System.Exception e) { Plugin.Logger.LogWarning("[Coop] Принудительное сохранение хоста не удалось: " + e.Message); }
+                for (float t = 0f; !started && t < 15f; t += Time.unscaledDeltaTime)
+                {
+                    if (SaveLoadManager.readyToSave && !SaveTransferSync.HostSaveBusy() &&
+                        !GameState.inBed && !GameState.currentShipyard)
+                    {
+                        try { SaveLoadManager.instance.SaveGame(compressed: true); }
+                        catch (System.Exception e)
+                        {
+                            Plugin.Logger.LogWarning("[Coop] Принудительное сохранение хоста не удалось: " + e.Message);
+                            break;
+                        }
+                        started = SaveTransferSync.HostSaveBusy();
+                    }
+                    if (!started) yield return null;
+                }
 
                 if (started)
                 {
-                    // DoSaveGame sets its private 'busy' flag synchronously; wait for it to clear so the
-                    // file is fully written before we read it (timeout guards a stuck/blocked save).
-                    float t = 0f;
-                    while (SaveTransferSync.HostSaveBusy() && t < 10f)
-                    {
-                        t += Time.unscaledDeltaTime;
+                    // Wait for DoSaveGame to finish writing the file (timeout guards a stuck save).
+                    for (float t = 0f; SaveTransferSync.HostSaveBusy() && t < 10f; t += Time.unscaledDeltaTime)
                         yield return null;
-                    }
                     yield return new WaitForEndOfFrame();
+                }
+                else
+                {
+                    Plugin.Logger.LogWarning("[Coop] Не дождался окна для свежего сейва — " +
+                                             "клиенту уйдёт последний сейв с диска");
                 }
             }
 
@@ -291,6 +333,13 @@ namespace SailwindCoop.Runtime
             if (bytes == null)
             {
                 Plugin.Logger.LogError("[Coop] Нет сейва хоста для отправки клиенту");
+                Pause.Release(netId);
+                yield break;
+            }
+            if (peer == null || peer.ConnectionState != LiteNetLib.ConnectionState.Connected)
+            {
+                Plugin.Logger.LogWarning("[Coop] Клиент отключился до отправки сейва");
+                Pause.Release(netId);
                 yield break;
             }
             SaveTransfer.SendSaveTo(peer, bytes);
@@ -325,6 +374,7 @@ namespace SailwindCoop.Runtime
             Env?.Clear();
             Boats?.Clear();
             Players?.Clear();
+            Pause?.Clear();
             Net?.Stop();
             _harmony?.UnpatchSelf();
         }
@@ -378,6 +428,7 @@ namespace SailwindCoop.Runtime
                 if (Net.Role == Role.Client && Net.State == LinkState.Connected)
                     CoopProfile.SaveFromGame();
                 SaveTransfer.Reset();
+                Pause.Clear();
                 Net.Stop();
                 Missions.Clear();
                 Sleep.Clear();
