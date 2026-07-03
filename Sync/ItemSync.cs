@@ -309,11 +309,22 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client)
             {
                 RestoreLocalInventoryVisual(item, inInventory: false);
+                // F-place (wall/surface attach): vanilla OnDrop just teleported the PROXY to the attach
+                // pose and set ItemRigidbody.attached. Read the flag before EnsureWorldParentState (its
+                // ExitBoat clears it) and adopt the proxy's pose so the wire carries the attach point,
+                // not the stale hand pose.
+                bool placedAttach = IsProxyAttached(item);
+                if (placedAttach) MoveItemToProxy(item);
                 if (LocalPlayerBoat() == null)
                     EnsureWorldParentState(item);
                 MoveProxyToItem(item, kinematic: true, Vector3.zero);
                 var msg = BuildRequest(e, ItemAction.Drop, _net.Clock.ServerTick);
-                if (e.DropWithoutProxyVelocity)
+                msg.Attached = placedAttach;
+                if (placedAttach)
+                {
+                    msg.Vel = Vector3.zero;   // BuildPose saw the hand→wall teleport as a velocity spike
+                }
+                else if (e.DropWithoutProxyVelocity)
                 {
                     msg.Vel = Vector3.zero;
                     msg.CargoIndex = -2; // sentinel: drop immediately after inventory/cargo withdraw
@@ -338,13 +349,24 @@ namespace SailwindCoop.Sync
                 // Host dropped: send exactly one reliable free-state so clients stop following the hand,
                 // place the item at the release point and resume local physics with the throw impulse.
                 e.HolderNetId = 0;
+                // F-place: only the proxy is at the attach pose yet — adopt it so the broadcast carries
+                // the wall pose instead of the hand pose (vanilla would sync the visual next FixedUpdate).
+                bool placedAttach = IsProxyAttached(item);
+                if (placedAttach) MoveItemToProxy(item);
                 var state = BuildState(e, _net.Clock.ServerTick);
                 state.HolderNetId = 0;
-                Vector3 rbVel = RealItemVelocity(item);   // proxy body → walk-copy axes
-                if (rbVel.sqrMagnitude > 0.0001f)
-                    state.Vel = state.Frame == CoordFrame.Boat ? ProxyToBoatAxes(item, rbVel) : rbVel;
-                else if (throwVelocity.sqrMagnitude > 0.0001f)   // T-throw impulse hasn't hit the body yet
-                    state.Vel = WorldToFrameAxes(state.Frame, state.BoatIndex, throwVelocity);
+                if (placedAttach)
+                {
+                    state.Vel = Vector3.zero;
+                }
+                else
+                {
+                    Vector3 rbVel = RealItemVelocity(item);   // proxy body → walk-copy axes
+                    if (rbVel.sqrMagnitude > 0.0001f)
+                        state.Vel = state.Frame == CoordFrame.Boat ? ProxyToBoatAxes(item, rbVel) : rbVel;
+                    else if (throwVelocity.sqrMagnitude > 0.0001f)   // T-throw impulse hasn't hit the body yet
+                        state.Vel = WorldToFrameAxes(state.Frame, state.BoatIndex, throwVelocity);
+                }
                 _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 Remember("исх drop(host) #" + e.Index + " '" + item.name + "'");
             }
@@ -529,6 +551,7 @@ namespace SailwindCoop.Sync
                 e.InventorySlot = -1;
                 e.HolderNetId = actor;
                 _localHeld[e.Item] = actor;
+                SetProxyAttached(e.Item, false);   // vanilla OnPickup ran only on the client's copy
             }
             else if (msg.Action == ItemAction.Drop)
             {
@@ -545,15 +568,18 @@ namespace SailwindCoop.Sync
             bool acceptClientScalars = msg.Action == ItemAction.State;
             bool worldDrop = msg.Action == ItemAction.Drop && msg.Frame == CoordFrame.World;
             bool delayedContainerDrop = msg.Action == ItemAction.Drop && msg.CargoIndex == -2;
+            bool attachedDrop = msg.Action == ItemAction.Drop && msg.Attached;
             ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
                           acceptClientScalars ? msg.Amount : e.Item.amount,
                           acceptClientScalars ? msg.Health : e.Item.health,
-                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0 || worldDrop);
+                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0 || worldDrop || attachedDrop);
             if (msg.Action == ItemAction.Pickup)
                 EnterRemoteHeldVisual(e.Item, "host pickup #" + e.Index);
             else if (msg.Action == ItemAction.Drop)
             {
-                if (delayedContainerDrop)
+                if (attachedDrop)
+                    EnterAttachedStatic(e.Item, msg.Frame, "host place #" + e.Index);
+                else if (delayedContainerDrop)
                     ScheduleFreeDynamic(e.Item, msg.Frame, msg.Vel, "host delayed drop #" + e.Index);
                 else
                     EnterFreeDynamic(e.Item, msg.Frame, msg.Vel, "host drop #" + e.Index);
@@ -585,6 +611,10 @@ namespace SailwindCoop.Sync
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
             ApplyCrateMembership(e.Item, msg.CrateId);
             ApplyCargoMembership(e.Item, msg.CargoPort);
+            // Mirror the vanilla attach flag (F-place) so the copy behaves like the host's after a
+            // reconnect/handover; puppets are kinematic anyway, so this is purely state fidelity.
+            if (msg.HolderNetId != _net.MyNetId)
+                SetProxyAttached(e.Item, msg.Attached);
 
             if (msg.HolderNetId == _net.MyNetId)
             {
@@ -794,6 +824,81 @@ namespace SailwindCoop.Sync
             return boat != null ? boat.InverseTransformDirection(v) : v;
         }
 
+        /// <summary>True if the item's physics proxy is vanilla-attached to a wall/surface
+        /// (<c>ItemRigidbody.attached</c> — the F-"положить" mechanic of wallAttachment items).</summary>
+        private static bool IsProxyAttached(ShipItem item)
+        {
+            try
+            {
+                var irb = item != null ? item.GetItemRigidbody() : null;
+                return irb != null && irb.attached;
+            }
+            catch { return false; }
+        }
+
+        private static void SetProxyAttached(ShipItem item, bool value)
+        {
+            try
+            {
+                var irb = item != null ? item.GetItemRigidbody() : null;
+                if (irb != null) irb.attached = value;
+            }
+            catch { }
+        }
+
+        /// <summary>Snap the visual item to its physics proxy — what vanilla's next
+        /// <c>ItemRigidbody.FixedUpdate</c> (MoveItemToWalkColRigidbody) would do. Needed on F-place:
+        /// vanilla <c>ShipItem.OnDrop</c> teleports only the PROXY to the wall-attach pose, and our
+        /// drop hook runs before the frame that would move the visual — so adopt that pose here
+        /// before <see cref="MoveProxyToItem"/> overwrites the proxy from the stale hand pose.</summary>
+        private static void MoveItemToProxy(ShipItem item)
+        {
+            try
+            {
+                var proxy = item != null ? item.GetItemRigidbody() : null;
+                if (proxy == null) return;
+                if (item.currentActualBoat != null && item.currentWalkCol != null)
+                {
+                    Vector3 walkLocalPos = item.currentWalkCol.InverseTransformPoint(proxy.transform.position);
+                    Quaternion walkLocalRot = Quaternion.Inverse(item.currentWalkCol.rotation) * proxy.transform.rotation;
+                    item.transform.position = item.currentActualBoat.TransformPoint(walkLocalPos);
+                    item.transform.rotation = item.currentActualBoat.rotation * walkLocalRot;
+                }
+                else
+                {
+                    item.transform.position = proxy.transform.position;
+                    item.transform.rotation = proxy.transform.rotation;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>Host: a client F-"placed" (attached) an item. Freeze the proxy at the item's wire
+        /// pose with <c>ItemRigidbody.attached</c>, so vanilla keeps it kinematic and it neither falls
+        /// nor slides; collisions stay on so other items can rest against it like in vanilla.</summary>
+        private static void EnterAttachedStatic(ShipItem item, CoordFrame frame, string reason)
+        {
+            LogItemTransition("до attach " + reason, item);
+            if (item != null)
+            {
+                if (frame == CoordFrame.World)
+                    EnsureWorldParentState(item);
+                SetRemoteInventoryVisual(item, hidden: false);
+                SetRootCollider(item, true);
+                SetPuppet(item, false);
+                MoveProxyToItem(item, kinematic: true, Vector3.zero);
+                SetProxyAttached(item, true);
+                try
+                {
+                    var irb = item.GetItemRigidbody();
+                    var body = irb != null ? irb.GetBody() : null;
+                    if (body != null) body.detectCollisions = true;   // MoveProxyToItem(kinematic) turned it off
+                }
+                catch { }
+            }
+            LogItemTransition("после attach " + reason, item);
+        }
+
         private void ScheduleFreeDynamic(ShipItem item, CoordFrame frame, Vector3 vel, string reason)
         {
             LogItemTransition("до pending-free " + reason, item);
@@ -968,6 +1073,7 @@ namespace SailwindCoop.Sync
                 CrateId = CrateIdOf(e.Item),
                 CargoPort = CargoPortOf(e.Item),
                 InventorySlot = PersonalInventorySlotOf(e.Item),
+                Attached = IsProxyAttached(e.Item),
             };
         }
 
@@ -1018,6 +1124,7 @@ namespace SailwindCoop.Sync
                 CrateId = CrateIdOf(e.Item),
                 CargoPort = CargoPortOf(e.Item),
                 InventorySlot = inventorySlot,
+                Attached = IsProxyAttached(e.Item),
             };
         }
 

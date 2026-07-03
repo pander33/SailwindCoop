@@ -358,7 +358,13 @@ Throw/drop:
 - `OnPickup` снимает wall attachment и inventory slot.
 - `OnDrop`:
   - если не sold, возвращает в shop;
-  - если wallAttachment и есть wall target, прикрепляет предмет.
+  - если wallAttachment и есть wall target (`inRangeOfWall`, зелёный ghost из `ShipItem.Update`
+    raycast от PROXY), "кладёт"/вешает предмет: телепортирует **только физический proxy**
+    (`itemRigidbody.transform`) в `attachPos/attachRot` и ставит `ItemRigidbody.attached = true`
+    (attached держит proxy kinematic в `ExtraFixedUpdate`). Визуальный `ShipItem.transform`
+    догоняет proxy лишь на следующем `FixedUpdate` (`MoveItemToWalkColRigidbody`) — хук на
+    `GoPointer.DropItem` срабатывает раньше, поэтому позу attach надо читать из proxy.
+  - `OnPickup` снимает attach (`attached = false`); `ItemRigidbody.ExitBoat` тоже сбрасывает `attached`.
 - `OnAltActivate` для unsold item пытается продать через shopkeeper.
 - `OnItemClick` разрешает placement маленьких items на `allowPlacingItems`.
 

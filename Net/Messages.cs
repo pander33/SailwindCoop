@@ -842,6 +842,7 @@ namespace SailwindCoop.Net
         public int CrateId;       // SaveablePrefab.currentCrateId — which crate contains this item (0 = none)
         public int CargoPort = -1; // CargoCarrier.portIndex this item is stored in (-1 = not in cargo)
         public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
+        public bool Attached;      // ItemRigidbody.attached — предмет "положен"/повешен (F-place), физика заморожена
 
         public MsgType Type => MsgType.ItemState;
 
@@ -864,6 +865,7 @@ namespace SailwindCoop.Net
             w.Put(CrateId);
             w.Put(CargoPort);
             w.Put(InventorySlot);
+            w.Put(Attached);
         }
 
         public void Deserialize(NetDataReader r)
@@ -885,6 +887,7 @@ namespace SailwindCoop.Net
             CrateId = r.GetInt();
             CargoPort = r.GetInt();
             InventorySlot = r.GetInt();
+            Attached = r.GetBool();
         }
     }
 
@@ -908,6 +911,7 @@ namespace SailwindCoop.Net
         public int CargoPort = -1; // Cargo action: target carrier portIndex
         public int CargoIndex = -1; // Cargo withdraw: index into the carrier's cargo list
         public int InventorySlot = -1; // Inventory action: personal belt slot 0..4 (-1 = withdraw)
+        public bool Attached;      // Drop: предмет "положен"/повешен через F-place (ItemRigidbody.attached), Vel игнорируется
 
         public MsgType Type => MsgType.ItemRequest;
 
@@ -931,6 +935,7 @@ namespace SailwindCoop.Net
             w.Put(CargoPort);
             w.Put(CargoIndex);
             w.Put(InventorySlot);
+            w.Put(Attached);
         }
 
         public void Deserialize(NetDataReader r)
@@ -953,6 +958,7 @@ namespace SailwindCoop.Net
             CargoPort = r.GetInt();
             CargoIndex = r.GetInt();
             InventorySlot = r.GetInt();
+            Attached = r.GetBool();
         }
     }
 
