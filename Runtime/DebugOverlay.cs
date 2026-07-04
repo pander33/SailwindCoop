@@ -65,6 +65,11 @@ namespace SailwindCoop.Runtime
 
                 Line("Среда", EnvText());
 
+                if (_net.Role == Role.Client && coop.Env != null && coop.Env.WaveClockValid)
+                    Line("Волн. часы", Sync.EnvironmentSync.WaveClock.ToString("0.0") + " с, Δ " +
+                         (coop.Env.WaveClockError * 1000f).ToString("0") + " мс, ts хоста " +
+                         coop.Env.HostTimeScale.ToString("0.00"));
+
                 if (coop.Controls != null)
                 {
                     //Line("Управление", coop.Controls.RopeCount + " тросов, " +

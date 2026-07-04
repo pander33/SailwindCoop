@@ -354,6 +354,12 @@ namespace SailwindCoop.Net
         public Quaternion WavesRot;
         public float WavesInertia;
         public float WavesMagnitude;
+        // wave clock (Ocean FFT phase = sqrt(g·k)·Time.time·speed) — the client re-drives
+        // Ocean.calcComplex with the HOST's Time.time so crests line up on both machines.
+        // HostTimeScale = host Time.timeScale: 0 during JoinPause, so the client's water
+        // freezes in the host's phase and unfreezes together with it.
+        public float WaveTime;
+        public float HostTimeScale;
 
         public MsgType Type => MsgType.EnvState;
 
@@ -372,6 +378,8 @@ namespace SailwindCoop.Net
             w.PutQuaternion(WavesRot);
             w.Put(WavesInertia);
             w.Put(WavesMagnitude);
+            w.Put(WaveTime);
+            w.Put(HostTimeScale);
         }
 
         public void Deserialize(NetDataReader r)
@@ -389,6 +397,8 @@ namespace SailwindCoop.Net
             WavesRot = r.GetQuaternion();
             WavesInertia = r.GetFloat();
             WavesMagnitude = r.GetFloat();
+            WaveTime = r.GetFloat();
+            HostTimeScale = r.GetFloat();
         }
     }
 
