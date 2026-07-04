@@ -52,6 +52,7 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ShipItem, uint> _localHeld = new Dictionary<ShipItem, uint>();
         private readonly List<ShipItem> _poseScratch = new List<ShipItem>();
         private readonly List<PendingDynamicRelease> _pendingDynamic = new List<PendingDynamicRelease>();
+        private readonly HashSet<ShipItem> _suppressNextDrop = new HashSet<ShipItem>();
 
         // Client: host item ids we've "claimed" into our own belt. When the host's despawn (from our claim
         // request) echoes back, we keep the local item (it's now player-local) instead of destroying it.
@@ -233,7 +234,9 @@ namespace SailwindCoop.Sync
             try
             {
                 var irb = item != null ? item.GetItemRigidbody() : null;
-                if (irb != null && irb.enabled == puppet) irb.enabled = !puppet;
+                bool keepWallAttachDriver = puppet && item != null && item.wallAttachment && item.held != null;
+                if (irb != null && keepWallAttachDriver && !irb.enabled) irb.enabled = true;
+                else if (irb != null && !keepWallAttachDriver && irb.enabled == puppet) irb.enabled = !puppet;
                 if (irb != null)
                 {
                     irb.ToggleCollider(!puppet);
@@ -294,6 +297,11 @@ namespace SailwindCoop.Sync
             if (_net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
+            if (_suppressNextDrop.Remove(item))
+            {
+                Remember("лок drop suppressed '" + item.name + "'");
+                return;
+            }
             RefreshItems(force: true);
             if (!_byItem.TryGetValue(item, out var e)) return;
 
@@ -319,7 +327,8 @@ namespace SailwindCoop.Sync
                 if (placedAttach) MoveItemToProxy(item);
                 if (LocalPlayerBoat() == null)
                     EnsureWorldParentState(item);
-                MoveProxyToItem(item, kinematic: true, Vector3.zero);
+                if (!placedAttach)
+                    MoveProxyToItem(item, kinematic: true, Vector3.zero);
                 var msg = BuildRequest(e, ItemAction.Drop, _net.Clock.ServerTick);
                 msg.Attached = placedAttach;
                 if (placedAttach)
@@ -576,6 +585,33 @@ namespace SailwindCoop.Sync
                 return;
             }
 
+            if (msg.Action == ItemAction.LampHook)
+            {
+                var hookEntry = HostLookup(msg.CrateId, msg.CargoIndex);
+                var hook = hookEntry != null ? hookEntry.Item as ShipItemLampHook : FindLiveItem(msg.CrateId, msg.CargoIndex) as ShipItemLampHook;
+                if (hook != null && e.Item != null && e.Item.GetComponent<HangableItem>() != null)
+                {
+                    e.InventorySlot = -1;
+                    e.HolderNetId = 0;
+                    _localHeld.Remove(e.Item);
+                    SetProxyAttached(e.Item, false);
+                    ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
+                                  e.Item.amount, e.Item.health, e.Item.sold, e.Item.nailed, held: false);
+                    try { hook.OnItemClick(e.Item); }
+                    catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] LampHook replay: " + ex.Message); }
+                    SnapHangableToHook(e.Item, hook);
+                    MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
+                    SetProxyAttached(e.Item, true);
+                    var hookState = BuildState(e, _net.Clock.ServerTick);
+                    hookState.HolderNetId = 0;
+                    hookState.Attached = true;
+                    _net.Broadcast(hookState, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх lamp-hook #" + e.Index + " -> hook=" + msg.CrateId + " actor=" + actor);
+                }
+                else Remember("отказ lamp-hook item=" + msg.InstanceId + " hook=" + msg.CrateId);
+                return;
+            }
+
             if (msg.Action == ItemAction.Pickup)
             {
                 e.InventorySlot = -1;
@@ -608,7 +644,7 @@ namespace SailwindCoop.Sync
             ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
                           acceptClientScalars ? msg.Amount : e.Item.amount,
                           acceptClientScalars ? msg.Health : e.Item.health,
-                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0 || worldDrop || attachedDrop);
+                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0 || worldDrop);
             if (msg.Action == ItemAction.Pickup)
                 EnterRemoteHeldVisual(e.Item, "host pickup #" + e.Index);
             else if (msg.Action == ItemAction.Drop)
@@ -942,6 +978,23 @@ namespace SailwindCoop.Sync
                 catch { }
             }
             LogItemTransition("после attach " + reason, item);
+        }
+
+        private static void SnapHangableToHook(ShipItem item, ShipItemLampHook hook)
+        {
+            try
+            {
+                if (item == null || hook == null) return;
+                item.transform.position = hook.transform.position + hook.transform.forward * -0.128f;
+                var rot = item.transform.eulerAngles;
+                rot.x = 0f;
+                rot.z = 0f;
+                item.transform.eulerAngles = rot;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] SnapHangableToHook: " + ex.Message);
+            }
         }
 
         private void ScheduleFreeDynamic(ShipItem item, CoordFrame frame, Vector3 vel, string reason)
@@ -1944,6 +1997,31 @@ namespace SailwindCoop.Sync
             ForwardHeldAction(item, ItemAction.AltActivate, reliable: true);
         }
 
+        public void NotifyLampHook(ShipItemLampHook hook, PickupableItem heldItem)
+        {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            var item = heldItem as ShipItem;
+            if (hook == null || item == null || item.GetComponent<HangableItem>() == null) return;
+            RefreshItems(force: true);
+            if (!_byItem.TryGetValue(item, out var e)) return;
+            int hookId = InstanceIdOf(hook);
+            int hookPrefab = PrefabIndexOf(hook);
+            if (hookId <= 0 || hookPrefab <= 0) return;
+
+            _suppressNextDrop.Add(item);
+            _localHeld.Remove(item);
+            SnapHangableToHook(item, hook);
+            MoveProxyToItem(item, kinematic: true, Vector3.zero);
+            SetProxyAttached(item, true);
+            var msg = BuildRequest(e, ItemAction.LampHook, _net.Clock.ServerTick);
+            msg.CrateId = hookId;
+            msg.CargoIndex = hookPrefab;
+            msg.Attached = true;
+            msg.Vel = Vector3.zero;
+            _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("исх lamp-hook #" + e.Index + " hook=" + hookId);
+        }
+
         /// <summary>Client: vanilla changed scalars on the held item locally; make the host copy authoritative.</summary>
         public void NotifyHeldItemStateChanged(ShipItem item, string reason)
         {
@@ -2310,6 +2388,19 @@ namespace SailwindCoop.Sync
         {
             if (instanceId <= 0 || prefabIndex <= 0) return null;
             if (_byInstanceId.TryGetValue(instanceId, out var e) && e.PrefabIndex == prefabIndex) return e;
+            return null;
+        }
+
+        private static ShipItem FindLiveItem(int instanceId, int prefabIndex)
+        {
+            if (instanceId <= 0 || prefabIndex <= 0) return null;
+            foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            {
+                if (item == null) continue;
+                var saveable = item.GetComponent<SaveablePrefab>();
+                if (saveable != null && saveable.instanceId == instanceId && saveable.prefabIndex == prefabIndex)
+                    return item;
+            }
             return null;
         }
 
@@ -2919,6 +3010,7 @@ namespace SailwindCoop.Sync
             _byInstanceId.Clear();
             _localHeld.Clear();
             _pendingDynamic.Clear();
+            _suppressNextDrop.Clear();
             _hostIds.Clear();
             _localClaimed.Clear();
             _pendingClientItems.Clear();
@@ -2967,6 +3059,8 @@ namespace SailwindCoop.Sync
             bool rodDetach = TryPatch(harmony, typeof(ShipItemFishingRod), "DetachHook", Type.EmptyTypes, postfixName: nameof(PostDetachHook));
             bool rodAttach = TryPatch(harmony, typeof(ShipItemFishingRod), "OnItemClick", new[] { typeof(PickupableItem) },
                 prefixName: nameof(PreRodItemClick), postfixName: nameof(PostRodItemClick));
+            bool lampHook = TryPatch(harmony, typeof(ShipItemLampHook), "OnItemClick", new[] { typeof(PickupableItem) },
+                postfixName: nameof(PostLampHookItemClick));
             // Crates: mirror inventory membership (Insert/Withdraw) and relay unseal (item creation) to host.
             bool crateIn = TryPatch(harmony, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
             bool crateOut = TryPatch(harmony, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
@@ -2985,7 +3079,7 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
-                                  ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach +
+                                  ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach + ", lampHook=" + lampHook +
                                   ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
                                   ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut +
                                   ", invIn=" + invIn + ", invOut=" + invOut +
@@ -3259,6 +3353,16 @@ namespace SailwindCoop.Sync
                 ItemSync.Instance?.OnLocalRodHook(__instance, attached: true, consumedHook: hook);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostRodItemClick: " + e.Message); }
+        }
+
+        private static void PostLampHookItemClick(ShipItemLampHook __instance, PickupableItem __0, bool __result)
+        {
+            try
+            {
+                if (!__result || __0 == null || __0.GetComponent<HangableItem>() == null) return;
+                ItemSync.Instance?.NotifyLampHook(__instance, __0);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostLampHookItemClick: " + e.Message); }
         }
 
         // FishingRodFish.CollectFish returns the freshly-instantiated fish ShipItem. Forward it so the

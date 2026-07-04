@@ -824,6 +824,7 @@ namespace SailwindCoop.Net
         Cargo = 10,       // client loaded/unloaded port cargo — host charges the wallet and moves the item
         Inventory = 11,   // client moved an item in/out of a personal belt slot
         RodHook = 12,     // крючок удочки появился/пропал (attach через OnItemClick / DetachHook при сходе рыбы) — хост ставит rod.health из Health и рассылает ItemState
+        LampHook = 13,    // client hung a ShipItemHangable on a ShipItemLampHook; CrateId/CargoIndex carry hook id/prefab
     }
 
     public sealed class ItemStateMsg : INetMessage
