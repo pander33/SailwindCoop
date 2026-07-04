@@ -1387,11 +1387,38 @@ namespace SailwindCoop.Net
     {
         public int Region;
         public int Amount;
+        public int OriginRegion = -1;
+        public int DestinationRegion = -1;
+        public int RepAmount;
+        public int GoodPrefabIndex;
+        public string DestinationName = "";
+        public int ExpectedReward;
 
         public MsgType Type => MsgType.MissionReward;
 
-        public void Serialize(NetDataWriter w) { w.Put(Region); w.Put(Amount); }
-        public void Deserialize(NetDataReader r) { Region = r.GetInt(); Amount = r.GetInt(); }
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Region);
+            w.Put(Amount);
+            w.Put(OriginRegion);
+            w.Put(DestinationRegion);
+            w.Put(RepAmount);
+            w.Put(GoodPrefabIndex);
+            w.Put(DestinationName ?? "");
+            w.Put(ExpectedReward);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Region = r.GetInt();
+            Amount = r.GetInt();
+            OriginRegion = r.GetInt();
+            DestinationRegion = r.GetInt();
+            RepAmount = r.GetInt();
+            GoodPrefabIndex = r.GetInt();
+            DestinationName = r.GetString();
+            ExpectedReward = r.GetInt();
+        }
     }
 
     /// <summary>Client → host: accept this exact mission. The mission OFFER list is generated from

@@ -207,12 +207,13 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Host: a delivery just paid out — forward the same amount to the client's own wallet.</summary>
-        public void ForwardReward(int region, int amount)
+        public void ForwardReward(MissionRewardMsg reward)
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
-            if (amount <= 0 || region < 0) return;
-            _net.Broadcast(new MissionRewardMsg { Region = region, Amount = amount }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[MissionSync] исх reward region=" + region + " amount=" + amount);
+            if (reward == null || reward.Amount <= 0 || reward.Region < 0) return;
+            _net.Broadcast(reward, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Plugin.Logger.LogInfo("[MissionSync] исх reward region=" + reward.Region + " amount=" + reward.Amount +
+                                  " rep=" + reward.RepAmount);
         }
 
         public void OnMissionReward(MissionRewardMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -223,11 +224,44 @@ namespace SailwindCoop.Sync
                 if (PlayerGold.currency != null && msg.Region >= 0 && msg.Region < PlayerGold.currency.Length && msg.Amount > 0)
                 {
                     PlayerGold.currency[msg.Region] += msg.Amount;
+                    if (msg.RepAmount != 0)
+                    {
+                        if (msg.OriginRegion >= 0) PlayerReputation.ChangeReputation(msg.RepAmount, (PortRegion)msg.OriginRegion);
+                        if (msg.DestinationRegion >= 0 && msg.DestinationRegion != msg.OriginRegion)
+                            PlayerReputation.ChangeReputation(msg.RepAmount, (PortRegion)msg.DestinationRegion);
+                        try { ReputationNotifUI.instance?.ShowNotif(); } catch { }
+                    }
+                    if (msg.GoodPrefabIndex > 0)
+                    {
+                        try { MissionLog.instance?.AddToLog(msg.GoodPrefabIndex, msg.DestinationName ?? "", msg.Amount, msg.RepAmount, msg.Region); } catch { }
+                    }
+                    try
+                    {
+                        if (DayLogs.instance != null && DayLogs.instance.dayLogs != null &&
+                            msg.Region >= 0 && msg.Region < DayLogs.instance.dayLogs.Length &&
+                            DayLogs.instance.dayLogs[msg.Region] != null)
+                            DayLogs.instance.dayLogs[msg.Region].LogMissionDelivery(msg.ExpectedReward, msg.Amount);
+                    }
+                    catch { }
                     try { MoneyNotification.instance?.PlayNotif(msg.Amount, msg.Region); } catch { }
                     Plugin.Logger.LogInfo("[MissionSync] вх reward +" + msg.Amount + " region=" + msg.Region);
+                    SaveGuestProfileNow("mission reward");
                 }
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionReward: " + ex.Message); }
+        }
+
+        public void SaveGuestProfileNow(string reason)
+        {
+            try
+            {
+                if (_net.Role == Role.Client && _net.State == LinkState.Connected)
+                {
+                    CoopProfile.SaveFromGame();
+                    Plugin.Logger.LogInfo("[MissionSync] профиль клиента сохранён: " + reason);
+                }
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] SaveGuestProfileNow: " + ex.Message); }
         }
 
         public void Clear()
@@ -246,6 +280,19 @@ namespace SailwindCoop.Sync
     /// </summary>
     public static class MissionPatches
     {
+        private sealed class DeliveryState
+        {
+            public int Region;
+            public int CurrencyBefore;
+            public int OriginRegion;
+            public int DestinationRegion;
+            public int OriginRepBefore;
+            public int DestinationRepBefore;
+            public int GoodPrefabIndex;
+            public string DestinationName;
+            public int ExpectedReward;
+        }
+
         public static void Apply(Harmony harmony)
         {
             bool deliver = TryPatch(harmony, "DeliverGood", nameof(PreDeliver), nameof(PostDeliver));
@@ -253,7 +300,12 @@ namespace SailwindCoop.Sync
             // local effect (which would spawn phantom goods and diverge the journal).
             bool accept = TryPatchStatic(harmony, "AcceptMission", new[] { AccessTools.TypeByName("Mission") }, nameof(PreAcceptMission));
             bool abandon = TryPatchStatic(harmony, "AbandonMission", new[] { typeof(int) }, nameof(PreAbandonMission));
-            Plugin.Logger.LogInfo("[MissionPatches] Патч миссий: DeliverGood=" + deliver + ", Accept=" + accept + ", Abandon=" + abandon);
+            bool buyGood = TryPatchEconomy(harmony, "BuyGood", nameof(PostEconomyChanged));
+            bool sellGood = TryPatchEconomy(harmony, "SellGood", nameof(PostEconomyChanged));
+            bool receipt = TryPatchEconomy(harmony, "PrintReceipt", nameof(PostEconomyChanged));
+            Plugin.Logger.LogInfo("[MissionPatches] Патч миссий: DeliverGood=" + deliver + ", Accept=" + accept +
+                                  ", Abandon=" + abandon + ", BuyGood=" + buyGood + ", SellGood=" + sellGood +
+                                  ", PrintReceipt=" + receipt);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)
@@ -287,6 +339,19 @@ namespace SailwindCoop.Sync
             catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] " + method + ": " + e.Message); return false; }
         }
 
+        private static bool TryPatchEconomy(Harmony harmony, string method, string postfixName)
+        {
+            try
+            {
+                var mi = typeof(EconomyUI).GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, Type.EmptyTypes, null);
+                if (mi == null) return false;
+                var postfix = new HarmonyMethod(typeof(MissionPatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
+                harmony.Patch(mi, postfix: postfix);
+                return true;
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] EconomyUI." + method + ": " + e.Message); return false; }
+        }
+
         // Return false to skip the local accept/abandon (forwarded to host). Host/offline runs vanilla.
         private static bool PreAcceptMission(Mission mission)
         {
@@ -303,7 +368,7 @@ namespace SailwindCoop.Sync
         }
 
         // Capture region + wallet before, so the postfix can forward the delta the payout added.
-        private static void PreDeliver(Mission __instance, out int[] __state)
+        private static void PreDeliver(Mission __instance, out DeliveryState __state)
         {
             __state = null;
             try
@@ -311,21 +376,56 @@ namespace SailwindCoop.Sync
                 if (__instance == null || __instance.destinationPort == null) return;
                 int region = (int)__instance.destinationPort.region;
                 if (PlayerGold.currency == null || region < 0 || region >= PlayerGold.currency.Length) return;
-                __state = new[] { region, PlayerGold.currency[region] };
+                var data = __instance.PrepareSaveData();
+                int originRegion = __instance.originPort != null ? (int)__instance.originPort.region : -1;
+                int destinationRegion = __instance.destinationPort != null ? (int)__instance.destinationPort.region : -1;
+                __state = new DeliveryState
+                {
+                    Region = region,
+                    CurrencyBefore = PlayerGold.currency[region],
+                    OriginRegion = originRegion,
+                    DestinationRegion = destinationRegion,
+                    OriginRepBefore = originRegion >= 0 ? PlayerReputation.GetRep(originRegion) : 0,
+                    DestinationRepBefore = destinationRegion >= 0 ? PlayerReputation.GetRep(destinationRegion) : 0,
+                    GoodPrefabIndex = data.goodPrefabIndex,
+                    DestinationName = __instance.destinationPort.GetPortName(),
+                    ExpectedReward = data.goodCount > 0 ? data.totalPrice / data.goodCount : 0,
+                };
             }
             catch { __state = null; }
         }
 
-        private static void PostDeliver(int[] __state)
+        private static void PostDeliver(DeliveryState __state)
         {
             try
             {
                 if (__state == null) return;
-                int region = __state[0];
-                int delta = PlayerGold.currency[region] - __state[1];
-                if (delta > 0) MissionSync.Instance?.ForwardReward(region, delta);
+                int delta = PlayerGold.currency[__state.Region] - __state.CurrencyBefore;
+                if (delta <= 0) return;
+                int repDelta = 0;
+                if (__state.OriginRegion >= 0)
+                    repDelta = Math.Max(repDelta, PlayerReputation.GetRep(__state.OriginRegion) - __state.OriginRepBefore);
+                if (__state.DestinationRegion >= 0)
+                    repDelta = Math.Max(repDelta, PlayerReputation.GetRep(__state.DestinationRegion) - __state.DestinationRepBefore);
+                MissionSync.Instance?.ForwardReward(new MissionRewardMsg
+                {
+                    Region = __state.Region,
+                    Amount = delta,
+                    OriginRegion = __state.OriginRegion,
+                    DestinationRegion = __state.DestinationRegion,
+                    RepAmount = repDelta,
+                    GoodPrefabIndex = __state.GoodPrefabIndex,
+                    DestinationName = __state.DestinationName,
+                    ExpectedReward = __state.ExpectedReward,
+                });
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PostDeliver: " + e.Message); }
+        }
+
+        private static void PostEconomyChanged()
+        {
+            try { MissionSync.Instance?.SaveGuestProfileNow("economy"); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PostEconomyChanged: " + e.Message); }
         }
     }
 }
