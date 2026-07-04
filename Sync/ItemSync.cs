@@ -817,6 +817,7 @@ namespace SailwindCoop.Sync
             if (frame == CoordFrame.World)
                 EnsureWorldParentState(item);
             SetRemoteInventoryVisual(item, hidden: false);
+            RestoreInteractableLayer(item);
             SetRootCollider(item, true);
             SetPuppet(item, false);
             // Boat-frame wire velocity is in boat-local axes; the proxy body simulates in the boat's
@@ -921,6 +922,7 @@ namespace SailwindCoop.Sync
                 if (frame == CoordFrame.World)
                     EnsureWorldParentState(item);
                 SetRemoteInventoryVisual(item, hidden: false);
+                RestoreInteractableLayer(item);
                 SetRootCollider(item, true);
                 SetPuppet(item, false);
                 MoveProxyToItem(item, kinematic: true, Vector3.zero);
@@ -967,6 +969,24 @@ namespace SailwindCoop.Sync
                 if (col != null) col.enabled = enabled;
             }
             catch { }
+        }
+
+        private static void RestoreInteractableLayer(ShipItem item)
+        {
+            try
+            {
+                if (item == null) return;
+                SetLayerRecursive(item.transform, 0);
+            }
+            catch { }
+        }
+
+        private static void SetLayerRecursive(Transform root, int layer)
+        {
+            if (root == null) return;
+            root.gameObject.layer = layer;
+            for (int i = 0; i < root.childCount; i++)
+                SetLayerRecursive(root.GetChild(i), layer);
         }
 
         private static void LogItemTransition(string label, ShipItem item)
@@ -1417,7 +1437,7 @@ namespace SailwindCoop.Sync
             }
             else if (item.gameObject.layer == 2)
             {
-                item.gameObject.layer = 0;   // restore so the client's pointer can hit it again (fixes "can't interact after host held it")
+                RestoreInteractableLayer(item);   // restore so the pointer can hit it again after inventory/held states
             }
         }
 
