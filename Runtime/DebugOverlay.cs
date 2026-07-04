@@ -22,7 +22,7 @@ namespace SailwindCoop.Runtime
         {
             EnsureStyles();
 
-            const float w = 360f, h = 720f;
+            const float w = 360f, h = 800f;
             var rect = new Rect(12, 12, w, h);
             GUI.Box(rect, "Sailwind Co-op " + Plugin.Version, _box);
 
@@ -41,6 +41,7 @@ namespace SailwindCoop.Runtime
                 Line("Клиентов", _net.PeerCount.ToString());
 
             Line("Объектов (NetId)", CountAll().ToString());
+            Line("Координаты", CoordText());
 
             var coop = CoopBehaviour.Instance;
             if (coop != null && coop.Players != null && _net.State == LinkState.Connected)
@@ -49,8 +50,8 @@ namespace SailwindCoop.Runtime
                      (coop.Players.LocalPlayerFound ? "найден" : "—"));
                 float d = coop.Players.NearestRemoteDistance;
                 if (d >= 0f) Line("До аватара", d.ToString("0.0") + " м");
-                Line("Анимация", coop.Players.NearestRemoteAnim);
-                Line("Присед", coop.Players.LocalCrouchText);
+                //Line("Анимация", coop.Players.NearestRemoteAnim);
+                //Line("Присед", coop.Players.LocalCrouchText);
                 Line("Модель", AvatarCatalog.CurrentSelection + " (" + AvatarCatalog.Entries.Count + " бандлов)");
 
                 if (coop.Boats != null)
@@ -66,18 +67,18 @@ namespace SailwindCoop.Runtime
 
                 if (coop.Controls != null)
                 {
-                    Line("Управление", coop.Controls.RopeCount + " тросов, " +
-                         coop.Controls.WinchCount + " леб., " +
-                         coop.Controls.NodeCount + " узлов");
-                    Line("Руль", coop.Controls.SteeringText);
+                    //Line("Управление", coop.Controls.RopeCount + " тросов, " +
+                    //     coop.Controls.WinchCount + " леб., " +
+                    //     coop.Controls.NodeCount + " узлов");
+                    //Line("Руль", coop.Controls.SteeringText);
                     Line("ControlRequest", coop.Controls.LastControlRequestText);
                 }
 
                 if (coop.Anchor != null)
-                    Line("Якорь", coop.Anchor.AnchorText);
+                    //Line("Якорь", coop.Anchor.AnchorText);
 
                 if (coop.Mooring != null)
-                    Line("Швартовы", coop.Mooring.MooringText);
+                    //Line("Швартовы", coop.Mooring.MooringText);
 
                 if (coop.Damage != null)
                     Line("Повреждения", coop.Damage.DamageText);
@@ -157,6 +158,29 @@ namespace SailwindCoop.Runtime
                 }
 
                 return "кн:" + btnTxt + " держит:" + heldTxt + " emb:" + emb;
+            }
+            catch (System.Exception e)
+            {
+                return "err " + e.Message;
+            }
+        }
+
+        /// <summary>
+        /// Широта/долгота локального игрока в градусах глобуса игры. Ваниль сама считает их через
+        /// FloatingOriginManager.GetGlobeCoords (1° = 9000 юнитов реального пространства): x = долгота
+        /// (E/W), z = широта (N/S) — тот же формат, что в описании миссий («36 N, 4 E»).
+        /// </summary>
+        private static string CoordText()
+        {
+            try
+            {
+                var fom = FloatingOriginManager.instance;
+                var obs = Refs.observerMirror;
+                if (fom == null || obs == null) return "—";
+                Vector3 g = fom.GetGlobeCoords(obs.transform);
+                string ns = g.z < 0f ? "S" : "N";
+                string ew = g.x < 0f ? "W" : "E";
+                return Mathf.Abs(g.z).ToString("0.00") + "° " + ns + ", " + Mathf.Abs(g.x).ToString("0.00") + "° " + ew;
             }
             catch (System.Exception e)
             {
