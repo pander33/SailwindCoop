@@ -498,11 +498,16 @@ namespace SailwindCoop.Sync
                     }
                     else
                     {
-                        ge.HolderNetId = actor; // withdraw is immediately followed by Pickup with a real hand pose
+                        // Выгрузка. Ваниль зовёт PickUpItem ВНУТРИ WithdrawItem, поэтому Pickup приходит
+                        // РАНЬШЕ этого Cargo-запроса — ждать его нельзя, он уже обработан. Cargo-запрос сам
+                        // несёт позу руки (PrepareLocalWithdrawPickup), применяем её сразу: иначе предмет
+                        // «проявляется» на месте старой парковки в телеге (для перевезённого груза — порт
+                        // погрузки, за километры) и висит там до первого Pose.
+                        ge.HolderNetId = actor;
                         _localHeld[ge.Item] = actor;
                         EnterRemoteHeldVisual(ge.Item, "host cargo out #" + ge.Index);
-                        Remember("вх cargo-out wait pickup #" + ge.Index + " actor=" + actor);
-                        return;
+                        ApplyWirePose(ge.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
+                                      ge.Item.amount, ge.Item.health, ge.Item.sold, ge.Item.nailed, held: true);
                     }
                     _net.Broadcast(BuildState(ge, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
                     Remember("вх cargo #" + ge.Index + "->" + msg.CargoPort + " actor=" + actor);
@@ -571,6 +576,12 @@ namespace SailwindCoop.Sync
                 e.HolderNetId = actor;
                 _localHeld[e.Item] = actor;
                 SetProxyAttached(e.Item, false);   // vanilla OnPickup ran only on the client's copy
+                // Выгрузка из телеги/крейта: ваниль зовёт PickUpItem ВНУТРИ WithdrawItem, поэтому этот
+                // Pickup приходит РАНЬШЕ Cargo/Crate-запроса. Зеркалим членство прямо из запроса
+                // (идемпотентно), иначе state уйдёт со старым CargoPort/CrateId и клиент по эху засунет
+                // только что выданный в руку предмет обратно в carrier/крейт.
+                ApplyCrateMembership(e.Item, msg.CrateId);
+                ApplyCargoMembership(e.Item, msg.CargoPort);
             }
             else if (msg.Action == ItemAction.Drop)
             {
@@ -628,8 +639,15 @@ namespace SailwindCoop.Sync
             e.HolderNetId = msg.HolderNetId;
             e.InventorySlot = msg.InventorySlot;
             ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
-            ApplyCrateMembership(e.Item, msg.CrateId);
-            ApplyCargoMembership(e.Item, msg.CargoPort);
+            // Членство crate/cargo НЕ зеркалим из состояния предмета, который держим МЫ: ваниль уже
+            // выполнила операцию локально, а эхо может нести устаревший CargoPort/CrateId (Pickup при
+            // выгрузке обгоняет Cargo/Crate-запрос) — по нему свежевыданный предмет засовывался
+            // обратно в carrier (scale 0, слот) прямо из руки.
+            if (msg.HolderNetId != _net.MyNetId)
+            {
+                ApplyCrateMembership(e.Item, msg.CrateId);
+                ApplyCargoMembership(e.Item, msg.CargoPort);
+            }
             // Mirror the vanilla attach flag (F-place) so the copy behaves like the host's after a
             // reconnect/handover; puppets are kinematic anyway, so this is purely state fidelity.
             if (msg.HolderNetId != _net.MyNetId)
@@ -1015,10 +1033,52 @@ namespace SailwindCoop.Sync
                 if (LocalPlayerBoat() == null)
                     EnsureWorldParentState(item);
                 MoveProxyToItem(item, kinematic: true, Vector3.zero);
+                ResetPointerBigItemCapture(item);
             }
             catch (Exception ex)
             {
                 Plugin.Logger.LogWarning("[ItemSync] PrepareLocalWithdrawPickup: " + ex.Message);
+            }
+        }
+
+        private static FieldInfo _fPointerBigItemLocalPos;
+        private static FieldInfo _fPointerDecolLocalPos;
+        private static FieldInfo _fPointerBigItemLocalRot;
+
+        /// <summary>
+        /// Big-предметы ваниль держит НЕ у руки, а на смещении, захваченном в момент PickUpItem
+        /// (GoPointer.bigItemLocalPos = pointer.InverseTransformPoint(item.pos) — «неси там, где взял»).
+        /// При выгрузке из карго-телеги WithdrawItem сперва телепортирует предмет на +10 м от телеги, а
+        /// «парковка» предмета вообще в точке вставки — захват происходит далеко впереди, и крейт так и
+        /// едет в 10+ м перед игроком (наш телепорт к руке ваниль перетирает следующим же LateUpdate).
+        /// Пере-захватываем смещение на нормальную дистанцию удержания.
+        /// </summary>
+        private static void ResetPointerBigItemCapture(ShipItem item)
+        {
+            try
+            {
+                if (item == null || item.held == null || !item.big) return;
+                Transform p = item.held.transform;
+                if (p == null) return;
+                float dist = Mathf.Max(1.6f, item.holdDistance);   // ближе 0.6 ваниль сама сбрасывает decol («Close decol limit»)
+                Vector3 holdPos = p.position + p.forward * dist + p.up * item.holdHeight;
+                Quaternion holdRot = p.rotation * Quaternion.Euler(item.heldRotationOffset, 0f, 0f);
+                item.transform.position = holdPos;
+                item.transform.rotation = holdRot;
+                if (_fPointerBigItemLocalPos == null)
+                {
+                    _fPointerBigItemLocalPos = typeof(GoPointer).GetField("bigItemLocalPos", BindingFlags.NonPublic | BindingFlags.Instance);
+                    _fPointerDecolLocalPos = typeof(GoPointer).GetField("decolLocalPos", BindingFlags.NonPublic | BindingFlags.Instance);
+                    _fPointerBigItemLocalRot = typeof(GoPointer).GetField("bigItemLocalRot", BindingFlags.NonPublic | BindingFlags.Instance);
+                }
+                Vector3 localPos = p.InverseTransformPoint(holdPos);
+                if (_fPointerBigItemLocalPos != null) _fPointerBigItemLocalPos.SetValue(item.held, localPos);
+                if (_fPointerDecolLocalPos != null) _fPointerDecolLocalPos.SetValue(item.held, localPos);
+                if (_fPointerBigItemLocalRot != null) _fPointerBigItemLocalRot.SetValue(item.held, Quaternion.Inverse(p.rotation) * holdRot);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] ResetPointerBigItemCapture: " + ex.Message);
             }
         }
 
@@ -1759,6 +1819,12 @@ namespace SailwindCoop.Sync
                 PrepareLocalWithdrawPickup(item);
                 e.DropWithoutProxyVelocity = true;
                 e.ForceWorldPoseUntilDrop = LocalPlayerBoat() == null;
+            }
+            else if (_net.Role == Role.Host && port < 0)
+            {
+                // У хоста ваниль отработала сама, но big-предмет она держит на смещении, захваченном
+                // от «парковки+10 м» — пере-захватываем к руке (та же болячка, что у клиента).
+                ResetPointerBigItemCapture(item);
             }
             long tick = _net.Clock.ServerTick;
             if (_net.Role == Role.Client)
