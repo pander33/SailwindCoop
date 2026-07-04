@@ -67,6 +67,8 @@ namespace SailwindCoop.Net
         SaveSnapshotChunk = 77, // host -> client : one chunk of the serialized SaveContainer bytes
         SaveSnapshotEnd = 78,   // host -> client : transfer complete (final signal; client merges + loads)
         ClientWorldLoaded = 79, // client -> host : "I finished (or failed) loading your world" — host lifts the join-pause
+
+        RodState = 80,          // both : fishing-rod cast visual — bobber real-pos + line length + rod bend from the holder
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -821,6 +823,7 @@ namespace SailwindCoop.Net
         Unseal = 9,       // client unsealed a crate (InstanceId=crate) — host authors the contained items
         Cargo = 10,       // client loaded/unloaded port cargo — host charges the wallet and moves the item
         Inventory = 11,   // client moved an item in/out of a personal belt slot
+        RodHook = 12,     // крючок удочки появился/пропал (attach через OnItemClick / DetachHook при сходе рыбы) — хост ставит rod.health из Health и рассылает ItemState
     }
 
     public sealed class ItemStateMsg : INetMessage
@@ -1165,6 +1168,41 @@ namespace SailwindCoop.Net
             BoatIndex = r.GetUShort();
             Pos = r.GetVector3();
             Rot = r.GetQuaternion();
+        }
+    }
+
+    /// <summary>
+    /// Держащий удочку игрок -> все остальные (клиент шлёт хосту, хост ретранслирует): косметика
+    /// заброса — позиция боббера (real-space), длина лески (linearLimit) и изгиб удилища. Получатель
+    /// кинематически ведёт боббер и подставляет currentTargetLength; леску/изгиб рисует ваниль
+    /// (ExtraLateUpdate → UpdateRope). Unreliable, ~10 Гц; пропажа потока = таймаут и возврат физики.
+    /// </summary>
+    public sealed class RodStateMsg : INetMessage
+    {
+        public int InstanceId;
+        public int PrefabIndex;
+        public Vector3 RealPos;   // боббер в real-координатах (стабильных к floating origin)
+        public float Limit;       // bobberJoint.linearLimit.limit — длина отпущенной лески
+        public float Bend;        // currentRodBend — изгиб удилища (натяжение)
+
+        public MsgType Type => MsgType.RodState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(InstanceId);
+            w.Put(PrefabIndex);
+            w.PutVector3(RealPos);
+            w.Put(Limit);
+            w.Put(Bend);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            InstanceId = r.GetInt();
+            PrefabIndex = r.GetInt();
+            RealPos = r.GetVector3();
+            Limit = r.GetFloat();
+            Bend = r.GetFloat();
         }
     }
 

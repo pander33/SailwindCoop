@@ -444,9 +444,25 @@ state + владелец-в-руках). Ниже — что синкать св
 
 - `ShipItemFishingRod`: `activated`/`holding`/`throwing`, `useAngular/Velocity/DeltaPos` (физика заброса),
   `UpdateHook`/`UpdateBend`, `OnItemClick`. Ловит `FishingRodFish`. Состояние: заброшена/натяжение/рыба.
+- Внутренности заброса (декомпил): боббер — отдельный `Rigidbody` + `ConfigurableJoint bobberJoint`
+  (private), в `OnLoad` его transform репарентится в `Refs.shiftingWorld`. Длина лески = `linearLimit.limit`;
+  заброс/смотка меняют private `currentTargetLength` (жесты в Update / `OnScroll`), а `ExtraLateUpdate`
+  (бежит на любой `sold`-удочке, held не нужен) лерпит к нему limit (`SetNewLimit`), рисует леску
+  (`UpdateRope`: `RopeEffect` между `ropeAtt` и боббером) и клампит (`LimitLength`). Изгиб удилища —
+  private `currentRodBend`, рендер через `SetRodTension`/`UpdateBend` из `FishingRodFish.FixedUpdate`.
+- `FishingRodFish`: поклёвка симулируется ТОЛЬКО при локальном `rod.held` (+ `floater.InWater`,
+  `linearLimit.limit > 1`); `CollectFish()` инстанцирует рыбу-`ShipItem` (sold + `RegisterToSave`) и
+  возвращает её. `OnAltActivate` удочки: рыба на крюке и леска смотана → `CollectFish`, иначе замах.
+- Крючок = `rod.health` (0/1): `OnItemClick(held крючок)` при `health<=0` ставит 1, зовёт private
+  `UpdateHook()` (SetActive `hookVisuals`) и уничтожает крючок-предмет (и возвращает true → GoPointer
+  дальше дропнет уже уничтоженный held). `DetachHook()` (срыв рыбы в `ReleaseFish`, ~31% шанс в
+  `CollectFish`) сбрасывает в 0. ВАЖНО для синка: сетевое присвоение `health` НЕ обновляет визуал —
+  после него надо звать `UpdateHook` рефлексией (см. `ItemAction.RodHook`, Protocol 44).
 - `ShipItemFishingHook`/`ShipItemFishingHook1`/`FishingRodFish` — крюк/рыба.
 
-Вывод: ITEM + состояние снасти (заброс/рыба). Заброс — held-физика, нужен held-канал (P3).
+Вывод: ITEM. Результат ловли — handoff `FishCatch` (постфикс на `CollectFish`). Косметика заброса — 
+`RodStateMsg` (Protocol 43): держащий стримит real-pos боббера + limit + bend, получатель ведёт боббер
+кинематически и пишет `currentTargetLength`/`currentRodBend` рефлексией; леску рисует ваниль.
 
 ### Навиг-приборы (ITEM позиция; ЧТЕНИЕ — LOCAL)
 

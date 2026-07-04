@@ -231,6 +231,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.FishCatch:
                     Items.OnFishCatch((FishCatchMsg)msg, fromPeer);
                     break;
+                case MsgType.RodState:
+                    Items.OnRodState((RodStateMsg)msg, fromPeer);
+                    break;
                 case MsgType.StormState:
                     Storms.OnStormState((StormStateMsg)msg, fromPeer);
                     break;

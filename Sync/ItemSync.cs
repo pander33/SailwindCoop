@@ -132,6 +132,7 @@ namespace SailwindCoop.Sync
             if (_net.State != LinkState.Connected) return;
             RefreshItems(dt);
             SendLocalHeldPose(dt);
+            TickRods(dt);
 
             if (_net.Role != Role.Host) return;
             ProcessPendingDynamic();
@@ -409,6 +410,24 @@ namespace SailwindCoop.Sync
                     Remember("вх consume #" + ce.Index + " actor=" + actor);
                 }
                 else Remember("отказ consume id=" + msg.InstanceId);
+                return;
+            }
+
+            if (msg.Action == ItemAction.RodHook)
+            {
+                // Крючок удочки поставлен/потерян на машине держащего (attach/DetachHook — симуляция
+                // рыбалки бежит только там). Хост принимает результат (health = наличие крючка),
+                // обновляет визуал и рассылает ItemState — покоящаяся удочка иначе не стримится.
+                var rodEntry = HostLookup(msg.InstanceId, msg.PrefabIndex);
+                var rrod = rodEntry != null ? rodEntry.Item as ShipItemFishingRod : null;
+                if (rrod != null)
+                {
+                    rrod.health = msg.Health;
+                    InvokeRodUpdateHook(rrod);
+                    _net.Broadcast(BuildState(rodEntry, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("вх rod-hook #" + rodEntry.Index + " health=" + msg.Health + " actor=" + actor);
+                }
+                else Remember("отказ rod-hook id=" + msg.InstanceId);
                 return;
             }
 
@@ -1220,6 +1239,19 @@ namespace SailwindCoop.Sync
             item.health = health;
             item.sold = sold;
             item.nailed = nailed;
+            // У удочки health = наличие крючка; ваниль обновляет hookVisuals только из своих методов
+            // (OnItemClick/DetachHook/OnLoad), поэтому после сетевого health зовём UpdateHook сами —
+            // иначе удочка «выглядит без крючка», хотя health уже 1 (и наоборот).
+            if (item is ShipItemFishingRod fr) InvokeRodUpdateHook(fr);
+        }
+
+        private static readonly MethodInfo RodUpdateHookMethod = typeof(ShipItemFishingRod).GetMethod(
+            "UpdateHook", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static void InvokeRodUpdateHook(ShipItemFishingRod rod)
+        {
+            try { RodUpdateHookMethod?.Invoke(rod, null); }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] UpdateHook удочки: " + ex.Message); }
         }
 
         // Anti-echo: set while we apply a remote crate change, so the Insert/Withdraw postfix patches
@@ -1631,6 +1663,40 @@ namespace SailwindCoop.Sync
             {
                 _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
                 Remember("nail(host) #" + e.Index + "=" + target.nailed);
+            }
+        }
+
+        /// <summary>
+        /// Крючок удочки появился/пропал ЛОКАЛЬНО: attach через ванильный OnItemClick (health 0→1,
+        /// крючок-предмет уничтожен) или DetachHook (рыба сорвалась / шанс при CollectFish). Симуляция
+        /// рыбалки бежит только на машине держащего, поэтому форвардим результат — health удочки (как
+        /// nail): клиент шлёт RodHook (+Consume за потраченный крючок), хост применяет и рассылает
+        /// ItemState; хост-рыбак просто рассылает своё уже изменённое состояние.
+        /// </summary>
+        public void OnLocalRodHook(ShipItemFishingRod rod, bool attached, ShipItem consumedHook)
+        {
+            if (_net.State != LinkState.Connected || rod == null) return;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(rod, out var e)) return;
+            long tick = _net.Clock.ServerTick;
+            if (_net.Role == Role.Client)
+            {
+                // Ваниль уже уничтожила локальную копию крючка; пусть хост убьёт общую (как еда/продажа).
+                if (consumedHook != null)
+                {
+                    int hookId = InstanceIdOf(consumedHook);
+                    int hookPrefab = PrefabIndexOf(consumedHook);
+                    if (hookId > 0 && hookPrefab > 0 && _hostIds.Contains(hookId))
+                        _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = hookId, PrefabIndex = hookPrefab },
+                                       LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+                _net.Broadcast(BuildRequest(e, ItemAction.RodHook, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("исх rod-hook #" + e.Index + "=" + (attached ? 1 : 0));
+            }
+            else
+            {
+                _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("rod-hook(host) #" + e.Index + "=" + (attached ? 1 : 0));
             }
         }
 
@@ -2567,8 +2633,177 @@ namespace SailwindCoop.Sync
             }
         }
 
+        // -----------------------------------------------------------------
+        // Рыбалка: косметика заброса. Леска/боббер — локальная физика держащего; остальные машины
+        // видели удочку «без лески» (боббер висит у удилища на min-длине). Держащий (rod.held != null —
+        // поле ставит только машина реального держателя) стримит позицию боббера (real-space) + длину
+        // лески + изгиб ~10 Гц; хост ретранслирует. Получатель делает боббер кинематическим и ведёт его
+        // к цели, а длину подставляет в currentTargetLength — ванильный ExtraLateUpdate сам лерпит
+        // linearLimit и рисует леску (UpdateRope). Поток пропал (дроп/дисконнект) → таймаут, физика
+        // боббера возвращается.
+        // -----------------------------------------------------------------
+
+        private const float RodStateHz = 10f;
+        private const float RodRemoteTimeout = 1.5f;
+
+        private sealed class RodRemote
+        {
+            public Vector3 RealPos;
+            public float Limit;
+            public float Bend;
+            public float LastTime;
+            public bool Kinematic;   // мы уже перевели боббер в kinematic (надо вернуть при выходе)
+        }
+
+        private readonly Dictionary<int, RodRemote> _rodRemote = new Dictionary<int, RodRemote>();
+        private readonly List<int> _rodDone = new List<int>();
+        private float _rodSendTimer;
+
+        private static readonly FieldInfo RodBobberJointField = typeof(ShipItemFishingRod).GetField(
+            "bobberJoint", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RodTargetLengthField = typeof(ShipItemFishingRod).GetField(
+            "currentTargetLength", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RodBendField = typeof(ShipItemFishingRod).GetField(
+            "currentRodBend", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private void TickRods(float dt)
+        {
+            SendLocalRodState(dt);
+            ApplyRemoteRods();
+        }
+
+        /// <summary>Стрим состояния заброса удочки, которую физически держит ЛОКАЛЬНЫЙ игрок.</summary>
+        private void SendLocalRodState(float dt)
+        {
+            _rodSendTimer += dt;
+            if (_rodSendTimer < 1f / RodStateHz) return;
+            _rodSendTimer = 0f;
+            if (!CoordSpace.Ready) return;
+
+            try
+            {
+                foreach (var e in _items)
+                {
+                    var rod = e.Item as ShipItemFishingRod;
+                    if (rod == null || rod.held == null || !rod.sold || e.InstanceId <= 0) continue;
+                    var joint = RodBobberJointField?.GetValue(rod) as ConfigurableJoint;
+                    if (joint == null) continue;
+                    _net.Broadcast(new RodStateMsg
+                    {
+                        InstanceId = e.InstanceId,
+                        PrefabIndex = e.PrefabIndex,
+                        RealPos = CoordSpace.LocalToReal(joint.transform.position),
+                        Limit = joint.linearLimit.limit,
+                        Bend = RodBendField != null ? (float)RodBendField.GetValue(rod) : 0f,
+                    }, LiteNetLib.DeliveryMethod.Unreliable);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] Ошибка стрима удочки: " + ex.Message);
+            }
+        }
+
+        /// <summary>Входящее состояние заброса чужой удочки; хост дополнительно ретранслирует всем.</summary>
+        public void OnRodState(RodStateMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            // Ретрансляция всем (в т.ч. отправителю — его копия held != null, он проигнорирует ниже).
+            if (_net.Role == Role.Host) _net.Broadcast(msg, LiteNetLib.DeliveryMethod.Unreliable);
+
+            if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e)) return;
+            var rod = e.Item as ShipItemFishingRod;
+            if (rod == null || rod.held != null) return;   // сами держим — эхо, игнор
+
+            if (!_rodRemote.TryGetValue(msg.InstanceId, out var r))
+            {
+                r = new RodRemote();
+                _rodRemote[msg.InstanceId] = r;
+                Remember("вх rod-cast id=" + msg.InstanceId);
+            }
+            r.RealPos = msg.RealPos;
+            r.Limit = msg.Limit;
+            r.Bend = msg.Bend;
+            r.LastTime = Time.unscaledTime;
+        }
+
+        /// <summary>Каждый кадр (origin дрейфует): ведём бобберы удочек, которые держат другие игроки.</summary>
+        private void ApplyRemoteRods()
+        {
+            if (_rodRemote.Count == 0) return;
+            _rodDone.Clear();
+
+            foreach (var kv in _rodRemote)
+            {
+                var r = kv.Value;
+                ItemEntry e;
+                var rod = _byInstanceId.TryGetValue(kv.Key, out e) ? e.Item as ShipItemFishingRod : null;
+                ConfigurableJoint joint = null;
+                try { joint = rod != null ? RodBobberJointField?.GetValue(rod) as ConfigurableJoint : null; } catch { }
+
+                bool expired = rod == null || joint == null || rod.held != null ||
+                               Time.unscaledTime - r.LastTime > RodRemoteTimeout;
+                if (expired)
+                {
+                    try
+                    {
+                        var body = joint != null ? joint.GetComponent<Rigidbody>() : null;
+                        if (r.Kinematic && body != null)
+                        {
+                            body.isKinematic = false;
+                            body.velocity = Vector3.zero;
+                            body.angularVelocity = Vector3.zero;
+                        }
+                    }
+                    catch { }
+                    _rodDone.Add(kv.Key);
+                    continue;
+                }
+
+                if (!CoordSpace.Ready) continue;
+                try
+                {
+                    var body = joint.GetComponent<Rigidbody>();
+                    if (body != null && !body.isKinematic) { body.isKinematic = true; r.Kinematic = true; }
+
+                    Vector3 target = CoordSpace.RealToLocal(r.RealPos);
+                    var t = joint.transform;
+                    t.position = (target - t.position).sqrMagnitude > 25f
+                        ? target
+                        : Vector3.Lerp(t.position, target, Time.deltaTime * 12f);
+
+                    // Ваниль сама лерпит linearLimit к currentTargetLength и рисует леску/изгиб
+                    // (ExtraLateUpdate → UpdateRope; FishingRodFish.FixedUpdate → UpdateBend).
+                    RodTargetLengthField?.SetValue(rod, r.Limit);
+                    RodBendField?.SetValue(rod, r.Bend);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Logger.LogWarning("[ItemSync] Ошибка ведения боббера id=" + kv.Key + ": " + ex.Message);
+                    _rodDone.Add(kv.Key);
+                }
+            }
+
+            foreach (int id in _rodDone) _rodRemote.Remove(id);
+        }
+
         public void Clear()
         {
+            // Вернуть физику бобберам удочек, которые мы вели удалённо (пока живы lookup-таблицы).
+            foreach (var kv in _rodRemote)
+            {
+                if (!kv.Value.Kinematic) continue;
+                try
+                {
+                    var rod = _byInstanceId.TryGetValue(kv.Key, out var re) ? re.Item as ShipItemFishingRod : null;
+                    var joint = rod != null ? RodBobberJointField?.GetValue(rod) as ConfigurableJoint : null;
+                    var body = joint != null ? joint.GetComponent<Rigidbody>() : null;
+                    if (body != null) { body.isKinematic = false; body.velocity = Vector3.zero; }
+                }
+                catch { }
+            }
+            _rodRemote.Clear();
+            _rodSendTimer = 0f;
+
             _items.Clear();
             _byItem.Clear();
             _byInstanceId.Clear();
@@ -2617,6 +2852,11 @@ namespace SailwindCoop.Sync
             // A caught fish is created on the client by FishingRodFish.CollectFish (returns the new item);
             // forward it so the host authors the authoritative copy (client item replication is host-only).
             bool fish = TryPatch(harmony, typeof(FishingRodFish), "CollectFish", Type.EmptyTypes, postfixName: nameof(PostCollectFish));
+            // Крючок удочки: наличие = rod.health; ставится/теряется только на машине держащего
+            // (OnItemClick attach / DetachHook при сходе рыбы) — форвардим результат, как nail.
+            bool rodDetach = TryPatch(harmony, typeof(ShipItemFishingRod), "DetachHook", Type.EmptyTypes, postfixName: nameof(PostDetachHook));
+            bool rodAttach = TryPatch(harmony, typeof(ShipItemFishingRod), "OnItemClick", new[] { typeof(PickupableItem) },
+                prefixName: nameof(PreRodItemClick), postfixName: nameof(PostRodItemClick));
             // Crates: mirror inventory membership (Insert/Withdraw) and relay unseal (item creation) to host.
             bool crateIn = TryPatch(harmony, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
             bool crateOut = TryPatch(harmony, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
@@ -2631,6 +2871,7 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
+                                  ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach +
                                   ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
                                   ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut +
                                   ", invIn=" + invIn + ", invOut=" + invOut);
@@ -2875,6 +3116,34 @@ namespace SailwindCoop.Sync
                 if (target != null) ItemSync.Instance?.OnLocalNail(target);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostHammerAltActivate: " + e.Message); }
+        }
+
+        // Рыба сорвалась (ReleaseFish) или шанс при CollectFish: держащий потерял крючок — форвардим.
+        private static void PostDetachHook(ShipItemFishingRod __instance)
+        {
+            try { if (__instance != null) ItemSync.Instance?.OnLocalRodHook(__instance, attached: false, consumedHook: null); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostDetachHook: " + e.Message); }
+        }
+
+        // Attach крючка: ваниль в OnItemClick ставит health=1 и уничтожает крючок-предмет. Ловим
+        // переход health 0→>0 (prefix запоминает старое значение) и форвардим + Consume за крючок.
+        private static float _rodPreClickHealth;
+
+        private static void PreRodItemClick(ShipItemFishingRod __instance)
+        {
+            try { _rodPreClickHealth = __instance != null ? __instance.health : 1f; }
+            catch { _rodPreClickHealth = 1f; }
+        }
+
+        private static void PostRodItemClick(ShipItemFishingRod __instance, PickupableItem __0)
+        {
+            try
+            {
+                if (__instance == null || _rodPreClickHealth > 0f || __instance.health <= 0f) return;
+                var hook = __0 != null ? __0.GetComponent<ShipItem>() : null;
+                ItemSync.Instance?.OnLocalRodHook(__instance, attached: true, consumedHook: hook);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostRodItemClick: " + e.Message); }
         }
 
         // FishingRodFish.CollectFish returns the freshly-instantiated fish ShipItem. Forward it so the
