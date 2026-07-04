@@ -96,9 +96,10 @@ namespace SailwindCoop.Sync
         private readonly HashSet<int> _hostIds = new HashSet<int>();
         public const float MatchRadius = 0.5f;   // metres; items at rest match near-exactly
 
-        // Client: a runtime item just authored locally (caught fish OR a freshly-bought good), awaiting the
-        // host's authoritative SpawnObject to adopt its id. Single slot — a buy and a catch racing is rare.
-        private ShipItem _pendingClientItem;
+        // Client: runtime items just authored locally (caught fish, counter-shop buys, market cargo buys),
+        // awaiting host SpawnObject ids. Keep a queue: market cargo can be bought repeatedly before the
+        // first host spawn returns, so a single pending slot would lose earlier local copies.
+        private readonly List<ShipItem> _pendingClientItems = new List<ShipItem>();
 
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
@@ -1201,7 +1202,7 @@ namespace SailwindCoop.Sync
         private ItemStateMsg BuildState(ItemEntry e, long tick)
         {
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
-            uint holder = e.Item.held != null ? _net.MyNetId : e.HolderNetId;
+            uint holder = e.HolderNetId != 0 ? e.HolderNetId : (e.Item.held != null ? _net.MyNetId : 0);
             int inventorySlot = PersonalInventorySlotOf(e.Item);
             if (inventorySlot < 0) inventorySlot = e.InventorySlot;
             return new ItemStateMsg
@@ -2281,6 +2282,8 @@ namespace SailwindCoop.Sync
                         PrefabIndex = prefabIndex,
                         NetId = NetIdFor(instanceId),
                     };
+                    if (_localHeld.TryGetValue(item, out var holder))
+                        e.HolderNetId = holder;
                 }
                 e.Index = (ushort)i;
                 e.InstanceId = instanceId;
@@ -2333,17 +2336,16 @@ namespace SailwindCoop.Sync
             if (!_baselineReady) return null;   // wait until our own save items are loaded
 
             // An item we just authored locally (caught fish / bought good) is authored by the host now;
-            // adopt the host id onto our exact local copy (deterministic, not position-radius dependent)
-            // before generic matching.
-            if (_pendingClientItem != null && PrefabIndexOf(_pendingClientItem) == prefabIndex)
+            // adopt the host id onto that exact local copy before generic matching. Market cargo can be
+            // bought in batches, so consume the oldest pending item with the matching prefab.
+            var pending = PopPendingClientItem(prefabIndex);
+            if (pending != null)
             {
-                var fish = _pendingClientItem;
-                _pendingClientItem = null;
-                RemapLocalItem(fish, instanceId);
+                RemapLocalItem(pending, instanceId);
                 RefreshItems(force: true);
                 _byInstanceId.TryGetValue(instanceId, out var fr);
                 // If this item was just withdrawn from our belt to hand, tell the host we hold it now.
-                if (fish == _pendingHeldItem)
+                if (pending == _pendingHeldItem)
                 {
                     _pendingHeldItem = null;
                     if (fr != null && fr.Item != null)
@@ -2375,6 +2377,23 @@ namespace SailwindCoop.Sync
             if (spawned == null) return null;
             RefreshItems(force: true);
             return _byInstanceId.TryGetValue(instanceId, out var e) && e.PrefabIndex == prefabIndex ? e : null;
+        }
+
+        private ShipItem PopPendingClientItem(int prefabIndex)
+        {
+            for (int i = 0; i < _pendingClientItems.Count; i++)
+            {
+                var item = _pendingClientItems[i];
+                if (item == null)
+                {
+                    _pendingClientItems.RemoveAt(i--);
+                    continue;
+                }
+                if (PrefabIndexOf(item) != prefabIndex) continue;
+                _pendingClientItems.RemoveAt(i);
+                return item;
+            }
+            return null;
         }
 
         /// <summary>Find the nearest local ShipItem (same prefab, not yet claimed by a host id) within MatchRadius.</summary>
@@ -2635,7 +2654,7 @@ namespace SailwindCoop.Sync
         // Client-authored runtime items (fishing, shop buy). Such an item is created on the client
         // (RNG id) but must be host-authoritative. The client asks the host to create the real twin;
         // the host's SpawnObject then replicates it and the client remaps its local copy (ResolveClient
-        // via _pendingClientItem). Sold goods take the inverse path: NotifySold tells the host to destroy.
+        // via _pendingClientItems). Sold goods take the inverse path: NotifySold tells the host to destroy.
         // -----------------------------------------------------------------
 
         /// <summary>
@@ -2645,7 +2664,8 @@ namespace SailwindCoop.Sync
         public void NotifyClientAuthored(ShipItem item)
         {
             if (_net.Role != Role.Client || _net.State != LinkState.Connected || item == null) return;
-            _pendingClientItem = item;
+            if (!_pendingClientItems.Contains(item))
+                _pendingClientItems.Add(item);
             BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
@@ -2897,7 +2917,7 @@ namespace SailwindCoop.Sync
             _pendingDynamic.Clear();
             _hostIds.Clear();
             _localClaimed.Clear();
-            _pendingClientItem = null;
+            _pendingClientItems.Clear();
             _pendingHeldItem = null;
             _gp = null;
             _fHeldItem = null;
@@ -2954,13 +2974,18 @@ namespace SailwindCoop.Sync
             bool cargoOut = TryPatch(harmony, typeof(CargoCarrier), "WithdrawItem", new[] { typeof(GoPointer), typeof(int) }, prefixName: nameof(PreCargoWithdraw), postfixName: nameof(PostCargoWithdraw));
             bool invIn = TryPatch(harmony, typeof(GPButtonInventorySlot), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostInventoryInsert));
             bool invOut = TryPatch(harmony, typeof(GPButtonInventorySlot), "WithdrawItem", Type.EmptyTypes, prefixName: nameof(PreInventoryWithdraw), postfixName: nameof(PostInventoryWithdraw));
+            bool marketBuy = TryPatch(harmony, typeof(IslandMarket), "SpawnGood", new[] { typeof(GameObject) },
+                prefixName: nameof(PreMarketSpawnGood), postfixName: nameof(PostMarketSpawnGood));
+            bool marketSell = TryPatch(harmony, typeof(IslandMarketWarehouseArea), "SellGood", new[] { typeof(int) },
+                prefixName: nameof(PreWarehouseSellGood));
             Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
                                   ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach +
                                   ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
                                   ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut +
-                                  ", invIn=" + invIn + ", invOut=" + invOut);
+                                  ", invIn=" + invIn + ", invOut=" + invOut +
+                                  ", marketBuy=" + marketBuy + ", marketSell=" + marketSell);
 
             // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
             // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
@@ -3238,6 +3263,122 @@ namespace SailwindCoop.Sync
         {
             try { if (__result != null) ItemSync.Instance?.NotifyClientAuthored(__result); }
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCollectFish: " + e.Message); }
+        }
+
+        private sealed class MarketSpawnState
+        {
+            public int PrefabIndex;
+            public Vector3 Pos;
+            public HashSet<int> ExistingIds;
+        }
+
+        private static void PreMarketSpawnGood(IslandMarket __instance, GameObject goodPrefab, out MarketSpawnState __state)
+        {
+            __state = new MarketSpawnState
+            {
+                PrefabIndex = PatchPrefabIndex(goodPrefab),
+                Pos = __instance != null ? __instance.transform.position : Vector3.zero,
+                ExistingIds = new HashSet<int>(),
+            };
+            try
+            {
+                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+                {
+                    int id = PatchInstanceId(item);
+                    if (id > 0) __state.ExistingIds.Add(id);
+                }
+            }
+            catch { }
+        }
+
+        private static void PostMarketSpawnGood(MarketSpawnState __state)
+        {
+            try
+            {
+                if (__state == null || __state.PrefabIndex <= 0) return;
+                ShipItem best = null;
+                float bestSq = 25f;
+                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+                {
+                    if (item == null || !item.sold) continue;
+                    int id = PatchInstanceId(item);
+                    if (id <= 0 || __state.ExistingIds.Contains(id)) continue;
+                    if (PatchPrefabIndex(item.gameObject) != __state.PrefabIndex) continue;
+                    var good = item.GetComponent<Good>();
+                    if (good == null || good.GetMissionIndex() != -1) continue;
+                    float sq = (item.transform.position - __state.Pos).sqrMagnitude;
+                    if (sq < bestSq)
+                    {
+                        bestSq = sq;
+                        best = item;
+                    }
+                }
+
+                if (best != null)
+                {
+                    ItemSync.Instance?.NotifyClientAuthored(best);
+                    Plugin.Logger.LogInfo("[ItemPatches] Market buy sync prefab=" + __state.PrefabIndex +
+                                          " id=" + PatchInstanceId(best) + " '" + best.name + "'");
+                }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostMarketSpawnGood: " + e.Message); }
+        }
+
+        private static FieldInfo _fWarehouseGoodsInArea;
+        private static MethodInfo _mWarehouseIsGoodValid;
+
+        private static void PreWarehouseSellGood(IslandMarketWarehouseArea __instance, int goodIndex)
+        {
+            try
+            {
+                var good = FindWarehouseGood(__instance, goodIndex);
+                if (good == null) return;
+                var item = good.GetComponent<ShipItem>();
+                var sv = good.GetComponent<SaveablePrefab>();
+                if (item != null && sv != null)
+                    ItemSync.Instance?.NotifySold(sv.instanceId, sv.prefabIndex);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreWarehouseSellGood: " + e.Message); }
+        }
+
+        private static Good FindWarehouseGood(IslandMarketWarehouseArea area, int goodIndex)
+        {
+            if (area == null) return null;
+            if (_fWarehouseGoodsInArea == null)
+                _fWarehouseGoodsInArea = typeof(IslandMarketWarehouseArea).GetField("goodsInArea", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (_mWarehouseIsGoodValid == null)
+                _mWarehouseIsGoodValid = typeof(IslandMarketWarehouseArea).GetMethod("IsGoodValid", BindingFlags.NonPublic | BindingFlags.Instance);
+            var goods = _fWarehouseGoodsInArea != null ? _fWarehouseGoodsInArea.GetValue(area) as System.Collections.IEnumerable : null;
+            if (goods == null) return null;
+            foreach (var obj in goods)
+            {
+                var good = obj as Good;
+                if (good == null) continue;
+                if (PatchGoodIndex(good) != goodIndex) continue;
+                bool valid = true;
+                if (_mWarehouseIsGoodValid != null)
+                    valid = (bool)_mWarehouseIsGoodValid.Invoke(area, new object[] { good });
+                if (valid) return good;
+            }
+            return null;
+        }
+
+        private static int PatchPrefabIndex(GameObject go)
+        {
+            var sv = go != null ? go.GetComponent<SaveablePrefab>() : null;
+            return sv != null ? sv.prefabIndex : 0;
+        }
+
+        private static int PatchInstanceId(ShipItem item)
+        {
+            var sv = item != null ? item.GetComponent<SaveablePrefab>() : null;
+            return sv != null ? sv.instanceId : 0;
+        }
+
+        private static int PatchGoodIndex(Good good)
+        {
+            var sv = good != null ? good.GetComponent<SaveablePrefab>() : null;
+            return sv != null ? PrefabsDirectory.ItemToGoodIndex(sv.prefabIndex) : -1;
         }
 
         // Crate Insert/Withdraw set the item's currentCrateId; forward the membership change (skipped while
