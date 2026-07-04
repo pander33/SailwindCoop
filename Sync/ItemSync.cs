@@ -533,10 +533,15 @@ namespace SailwindCoop.Sync
                     }
                     else
                     {
-                        ie.HolderNetId = actor; // withdraw is immediately followed by Pickup with a real hand pose
+                        // Fallback for the old inventory-out path: do not leave the hidden belt puppet
+                        // parked at its slot while waiting for a later Pickup/Pose. The request already
+                        // carries the client's hand pose, so reveal and move the host copy immediately.
+                        ie.InventorySlot = -1;
+                        ie.HolderNetId = actor;
                         _localHeld[ie.Item] = actor;
-                        Remember("вх inventory-out wait pickup #" + ie.Index + " actor=" + actor);
-                        return;
+                        EnterRemoteHeldVisual(ie.Item, "host inventory out #" + ie.Index);
+                        ApplyWirePose(ie.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
+                                      ie.Item.amount, ie.Item.health, ie.Item.sold, ie.Item.nailed, held: true);
                     }
 
                     var invState = BuildState(ie, _net.Clock.ServerTick);
@@ -1890,8 +1895,7 @@ namespace SailwindCoop.Sync
             // belt → hand: the item is player-local (host doesn't know it). Re-author it on the host so it
             // rejoins the shared world; mark it for a Pickup once the host id is remapped onto our copy.
             RefreshItems(force: true);
-            RestoreLocalInventoryVisual(item, inInventory: false);
-            _localClaimed.Remove(InstanceIdOf(item));
+            PrepareLocalWithdrawPickup(item);
             _pendingHeldItem = item;
             NotifyClientAuthored(item);
             Remember("исх belt->hand author '" + item.name + "'");
@@ -2232,7 +2236,7 @@ namespace SailwindCoop.Sync
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
             var alive = new Dictionary<int, ShipItem>();
             foreach (var kv in prev)
-                if (kv.Value.Item != null) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
+                if (kv.Value.Item != null && HasStableIdentity(kv.Value.Item)) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
             foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
                 if (item != null && HasStableIdentity(item)) alive[InstanceIdOf(item)] = item;
 

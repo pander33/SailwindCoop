@@ -41,6 +41,7 @@ namespace SailwindCoop.Runtime
         private DebugPanel _debugPanel;
         private AvatarSelectUI _avatarUI;
         private Harmony _harmony;
+        private bool _clientProfileSavedOnShutdown;
 
         private void Awake()
         {
@@ -363,6 +364,7 @@ namespace SailwindCoop.Runtime
 
         private void OnDestroy()
         {
+            SaveClientProfileBeforeStop("destroy");
             Missions?.Clear();
             Sleep?.Clear();
             Shop?.Clear();
@@ -384,7 +386,26 @@ namespace SailwindCoop.Runtime
 
         private void OnApplicationQuit()
         {
+            SaveClientProfileBeforeStop("quit");
             Net?.Stop();
+        }
+
+        private void SaveClientProfileBeforeStop(string reason)
+        {
+            if (_clientProfileSavedOnShutdown) return;
+            try
+            {
+                if (Net == null || Net.Role != Role.Client || Net.State != LinkState.Connected) return;
+                if (CoopProfile.SaveFromGame())
+                {
+                    _clientProfileSavedOnShutdown = true;
+                    Plugin.Logger.LogInfo("[Coop] Профиль клиента сохранён перед остановкой сессии: " + reason);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogWarning("[Coop] Не удалось сохранить профиль клиента перед остановкой: " + e.Message);
+            }
         }
 
         private void HandleHotkeys()
@@ -421,6 +442,7 @@ namespace SailwindCoop.Runtime
             if (Input.GetKeyDown(cfg.JoinKey.Value))
             {
                 Plugin.Logger.LogInfo("[Coop] Подключение по хоткею к " + cfg.JoinIp.Value);
+                _clientProfileSavedOnShutdown = false;
                 Net.StartClient(cfg.JoinIp.Value, cfg.Port.Value);
             }
 
@@ -428,8 +450,7 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
                 // Persist the guest's character before tearing the session down, so its money/reputation survive.
-                if (Net.Role == Role.Client && Net.State == LinkState.Connected)
-                    CoopProfile.SaveFromGame();
+                SaveClientProfileBeforeStop("disconnect");
                 SaveTransfer.Reset();
                 Pause.Clear();
                 Net.Stop();
