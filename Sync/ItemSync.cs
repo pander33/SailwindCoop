@@ -772,19 +772,54 @@ namespace SailwindCoop.Sync
             catch { return -1; }
         }
 
+        /// <summary>Что мы выключили/поменяли, пряча предмет в чужом инвентаре, — чтобы при
+        /// разскрытии вернуть ровно это, а не «включить все рендереры и scale=1» (белые кубы
+        /// у предметов со служебными выключенными мешами, например мангала).</summary>
+        private sealed class HiddenVisualState
+        {
+            public readonly List<Renderer> Disabled = new List<Renderer>();
+            public Vector3 RootScale = Vector3.one;
+            public readonly List<Vector3> ChildScales = new List<Vector3>();
+        }
+
+        private static readonly Dictionary<ShipItem, HiddenVisualState> _hiddenVisuals =
+            new Dictionary<ShipItem, HiddenVisualState>();
+
         private static void SetRemoteInventoryVisual(ShipItem item, bool hidden)
         {
             try
             {
                 if (item == null) return;
-                foreach (var r in item.GetComponentsInChildren<Renderer>(true))
-                    if (r != null) r.enabled = !hidden;
-                if (!hidden)
+                if (hidden)
                 {
-                    item.transform.localScale = Vector3.one;
-                    var t = item.transform;
-                    for (int i = 0; i < t.childCount; i++)
-                        t.GetChild(i).localScale = Vector3.one;
+                    // Запоминаем, что именно выключили/каким был масштаб: у сложных предметов
+                    // (мангал/печь) есть дочерние рендереры, которые ваниль ДЕРЖИТ выключенными,
+                    // и дети с неединичным масштабом. Слепое "включить всё и scale=1" при
+                    // разскрытии превращало такой предмет в белый куб.
+                    var st = new HiddenVisualState();
+                    foreach (var r in item.GetComponentsInChildren<Renderer>(true))
+                        if (r != null && r.enabled)
+                        {
+                            r.enabled = false;
+                            st.Disabled.Add(r);
+                        }
+                    st.RootScale = item.transform.localScale;
+                    var tr = item.transform;
+                    for (int i = 0; i < tr.childCount; i++)
+                        st.ChildScales.Add(tr.GetChild(i).localScale);
+                    _hiddenVisuals[item] = st;
+                }
+                else if (_hiddenVisuals.TryGetValue(item, out var st))
+                {
+                    // Восстанавливаем ровно то, что скрывали сами; без записи — не трогаем визуал
+                    // (предмет и так виден, «включать всё» ему только вредит).
+                    foreach (var r in st.Disabled)
+                        if (r != null) r.enabled = true;
+                    item.transform.localScale = st.RootScale;
+                    var tr = item.transform;
+                    for (int i = 0; i < tr.childCount && i < st.ChildScales.Count; i++)
+                        tr.GetChild(i).localScale = st.ChildScales[i];
+                    _hiddenVisuals.Remove(item);
                 }
                 var irb = item.GetItemRigidbody();
                 if (irb != null)
@@ -807,14 +842,21 @@ namespace SailwindCoop.Sync
                 if (!inInventory && irb != null && irb.GetCurrentInventorySlot() != null)
                     irb.ExitInventorySlot();
 
-                foreach (var r in item.GetComponentsInChildren<Renderer>(true))
-                    if (r != null) r.enabled = true;
-                if (!inInventory)
+                // Как и в SetRemoteInventoryVisual: включаем только те рендереры, что выключали
+                // сами, и возвращаем сохранённые масштабы — иначе служебные меши сложных
+                // предметов (мангал) становятся видимыми белыми кубами.
+                if (_hiddenVisuals.TryGetValue(item, out var st))
                 {
-                    item.transform.localScale = Vector3.one;
-                    var t = item.transform;
-                    for (int i = 0; i < t.childCount; i++)
-                        t.GetChild(i).localScale = Vector3.one;
+                    foreach (var r in st.Disabled)
+                        if (r != null) r.enabled = true;
+                    if (!inInventory)
+                    {
+                        item.transform.localScale = st.RootScale;
+                        var t = item.transform;
+                        for (int i = 0; i < t.childCount && i < st.ChildScales.Count; i++)
+                            t.GetChild(i).localScale = st.ChildScales[i];
+                    }
+                    _hiddenVisuals.Remove(item);
                 }
                 var col = item.GetComponent<Collider>();
                 if (col != null) col.enabled = !inInventory;
@@ -1034,18 +1076,14 @@ namespace SailwindCoop.Sync
         {
             try
             {
+                // Мы меняем слой ТОЛЬКО у корня (layer 2 в руке, см. PrepareForRemotePose) —
+                // и откатывать надо только его. Рекурсивный сброс всех детей в 0 выводил на
+                // экран служебные меши, которые ваниль прячет нерендеримым слоем (мангал →
+                // белый куб после взаимодействия клиента).
                 if (item == null) return;
-                SetLayerRecursive(item.transform, 0);
+                if (item.gameObject.layer == 2) item.gameObject.layer = 0;
             }
             catch { }
-        }
-
-        private static void SetLayerRecursive(Transform root, int layer)
-        {
-            if (root == null) return;
-            root.gameObject.layer = layer;
-            for (int i = 0; i < root.childCount; i++)
-                SetLayerRecursive(root.GetChild(i), layer);
         }
 
         private static void LogItemTransition(string label, ShipItem item)
