@@ -48,7 +48,7 @@ namespace SailwindCoop.Runtime
             if (!Visible) return;
             EnsureStyles();
 
-            const float w = 380f, h = 660f;
+            const float w = 380f, h = 820f;
             var rect = new Rect(Screen.width - w - 12, 12, w, h);
             GUI.Box(rect, "Дебаг-панель (F7) — тест-сценарии", _box);
 
@@ -63,6 +63,8 @@ namespace SailwindCoop.Runtime
             DrawReputation();
             GUILayout.Space(6);
             DrawWorld();
+            GUILayout.Space(6);
+            DrawIslandTeleport();
             GUILayout.Space(6);
             DrawItemSpawn();
 
@@ -254,6 +256,147 @@ namespace SailwindCoop.Runtime
         private static string SafePortName(IslandMarket m)
         {
             try { return m.GetPortName(); } catch { return m.name; }
+        }
+
+        // -----------------------------------------------------------------
+        // 3.5 Телепорт по островам — через ванильные RecoveryPort (точка спавна игрока на причале +
+        // выверенная позиция лодки GetBoatPos, всё в shifting-пространстве). Хост двигает ЛОДКУ
+        // (рецепт ванильного Recovery: отшвартовать, поднять якорь, обнулить скорость, поставить в
+        // boatPos); игрок на палубе едет вместе с ней — он ходит по статичной walk-копии, которую
+        // телепорт визуальной лодки не трогает. Пеший игрок переносится на причал (любая роль —
+        // PlayerSync стримит real-space позу). Клиент на лодке сам телепортироваться не может —
+        // лодка хост-авторитетна.
+        // -----------------------------------------------------------------
+
+        private List<RecoveryPort> _recoveryPorts;
+        private Vector2 _islandScroll;
+        private FieldInfo _fEmbarked;
+
+        private void DrawIslandTeleport()
+        {
+            GUILayout.Label("— Телепорт по островам (лодку двигает хост) —", _label);
+            if (_recoveryPorts == null) RefreshRecoveryPorts();
+            if (GUILayout.Button("Обновить список портов (" + (_recoveryPorts != null ? _recoveryPorts.Count : 0) + ")"))
+                RefreshRecoveryPorts();
+
+            if (_recoveryPorts == null || _recoveryPorts.Count == 0)
+            {
+                GUILayout.Label("recovery-порты не найдены (мир ещё грузится?)", _label);
+                return;
+            }
+
+            _islandScroll = GUILayout.BeginScrollView(_islandScroll, GUILayout.Height(140));
+            foreach (var rp in _recoveryPorts)
+            {
+                if (rp == null) continue;
+                if (GUILayout.Button(RecoveryPortName(rp)))
+                    TeleportToIsland(rp);
+            }
+            GUILayout.EndScrollView();
+        }
+
+        private void RefreshRecoveryPorts()
+        {
+            try
+            {
+                _recoveryPorts = new List<RecoveryPort>(UnityEngine.Object.FindObjectsOfType<RecoveryPort>());
+                _recoveryPorts.Sort((a, b) => string.CompareOrdinal(RecoveryPortName(a), RecoveryPortName(b)));
+            }
+            catch (Exception e)
+            {
+                _recoveryPorts = new List<RecoveryPort>();
+                Plugin.Logger.LogWarning("[DebugPanel] список recovery-портов: " + e.Message);
+            }
+        }
+
+        private static string RecoveryPortName(RecoveryPort rp)
+        {
+            try
+            {
+                if (rp != null && rp.parentPort != null)
+                {
+                    string n = rp.parentPort.GetPortName();
+                    if (!string.IsNullOrEmpty(n)) return n;
+                }
+            }
+            catch { }
+            return rp != null ? rp.name : "?";
+        }
+
+        private void TeleportToIsland(RecoveryPort rp)
+        {
+            try
+            {
+                if (rp == null) return;
+                bool hostAuthority = _net.State != LinkState.Connected || _net.Role == Role.Host;
+                bool embarked = IsEmbarked();
+
+                if (!hostAuthority && embarked)
+                {
+                    _status = "клиент на лодке: телепортирует хост";
+                    return;
+                }
+
+                if (hostAuthority)
+                {
+                    Transform boat = GameState.lastOwnedBoat != null ? GameState.lastOwnedBoat : GameState.currentBoat;
+                    if (boat != null)
+                    {
+                        try
+                        {
+                            var ropes = boat.GetComponent<BoatMooringRopes>();
+                            if (ropes != null)
+                            {
+                                ropes.UnmoorAllRopes();
+                                var anchor = ropes.GetAnchorController();
+                                if (anchor != null) anchor.ResetAnchor();
+                            }
+                            var rb = boat.GetComponent<Rigidbody>();
+                            if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+                            boat.position = rp.GetBoatPos();
+                            if (rp.boatPos != null) boat.rotation = rp.boatPos.rotation;
+                        }
+                        catch (Exception be) { Plugin.Logger.LogWarning("[DebugPanel] телепорт лодки: " + be.Message); }
+                    }
+                }
+
+                if (!embarked)
+                {
+                    // Пеший игрок → точка спавна recovery-порта. charController — как ванильный
+                    // дебаг-телепорт Port.teleportPlayer (ovrController не трогаем: тип из Oculus.VR,
+                    // сборка не в референсах).
+                    Vector3 pos = rp.transform.position + Vector3.up * 1f;
+                    if (Refs.charController != null)
+                        Refs.charController.transform.position = pos;
+                    if (Refs.observerMirror != null)
+                    {
+                        Refs.observerMirror.transform.position = pos;
+                        Refs.observerMirror.transform.rotation = rp.transform.rotation;
+                    }
+                }
+
+                _status = "телепорт → " + RecoveryPortName(rp) + (embarked ? " (на лодке)" : " (пешком)");
+                Plugin.Logger.LogInfo("[DebugPanel] телепорт → " + RecoveryPortName(rp) +
+                                      " embarked=" + embarked + " hostAuthority=" + hostAuthority);
+            }
+            catch (Exception e)
+            {
+                _status = "телепорт: " + e.Message;
+                Plugin.Logger.LogWarning("[DebugPanel] телепорт к острову: " + e);
+            }
+        }
+
+        private bool IsEmbarked()
+        {
+            try
+            {
+                var emb = Embarker();
+                if (emb == null) return false;
+                if (_fEmbarked == null)
+                    _fEmbarked = typeof(PlayerEmbarkerNew).GetField("embarked", BindingFlags.NonPublic | BindingFlags.Instance);
+                return _fEmbarked != null && (bool)_fEmbarked.GetValue(emb);
+            }
+            catch { return false; }
         }
 
         // -----------------------------------------------------------------
