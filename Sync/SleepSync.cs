@@ -9,7 +9,7 @@ namespace SailwindCoop.Sync
 {
     /// <summary>
     /// P4.2 — shared sleep / time-skip. Sleeping warps <c>Time.timeScale</c> locally
-    /// (<c>PlayerSleep.FallAsleep</c> → <c>StartSleepTimeWarp</c>); time itself is host-authoritative
+    /// (<c>Sleep.FallAsleep</c> → <c>StartSleepTimeWarp</c>); time itself is host-authoritative
     /// (EnvironmentSync re-anchors the sun each snapshot), so the client must NOT warp its own clock.
     /// Model (safe v1): only the HOST initiates. When the host falls asleep we broadcast it; the client
     /// mirrors the blackout and locks its controls but keeps <c>Time.timeScale = 1</c> — the host's
@@ -29,8 +29,17 @@ namespace SailwindCoop.Sync
         public const float MaxBlackoutSeconds = 45f;
         public const float FadeSeconds = 2.5f;
 
-        public string SleepText => _net.Role == Role.Client ? (_clientAsleep ? "сон (ведомый)" : "—")
-                                                            : (_net.Role == Role.Host ? "хост" : "—");
+        public string SleepText
+        {
+            get
+            {
+                if (_net.Role == Role.Host) return "хост";
+                if (_net.Role != Role.Client) return "—";
+                if (!_clientAsleep) return "—";
+                try { return "сон (ведомый), силы " + PlayerNeeds.sleep.ToString("0") + "%"; }
+                catch { return "сон (ведомый)"; }
+            }
+        }
 
         public SleepSync(CoopNet net)
         {
@@ -61,7 +70,43 @@ namespace SailwindCoop.Sync
             {
                 Plugin.Logger.LogWarning("[SleepSync] таймаут blackout — восстанавливаю управление");
                 SetClientAsleep(false);
+                return;
             }
+            RestoreNeeds(dt);
+        }
+
+        /// <summary>
+        /// Восстановление сил во время ведомого сна. У клиента <c>GameState.sleeping == false</c>
+        /// (свой timeScale мы сознательно не варпим), поэтому ванильный
+        /// <c>PlayerNeeds.LateUpdate</c> продолжает ТРАТИТЬ сон, а не копить. Начисляем ванильную
+        /// скорость восстановления вручную, умноженную на timeScale хоста (16 при тайм-варпе,
+        /// приходит в EnvState — см. <see cref="EnvironmentSync.HostTimeScale"/>): хост
+        /// восстанавливается в ускоренном времени, клиент должен успеть столько же за реальное.
+        /// </summary>
+        private void RestoreNeeds(float dt)
+        {
+            try
+            {
+                if (PlayerNeeds.instance == null || Sun.sun == null) return;
+
+                float hostTs = 1f;
+                var env = CoopBehaviour.Instance != null ? CoopBehaviour.Instance.Env : null;
+                if (env != null && env.WaveClockValid) hostTs = Mathf.Max(1f, env.HostTimeScale);
+
+                // Та же формула, что ванильная ветка GameState.sleeping в PlayerNeeds.LateUpdate:
+                // сначала гасится sleepDebt, на сон идёт лишь 20 % — пока долг не закрыт.
+                float num = dt * 8f * Sun.sun.timescale * hostTs;
+                if (PlayerNeeds.sleepDebt < 100f)
+                {
+                    PlayerNeeds.sleepDebt = Mathf.Min(100f, PlayerNeeds.sleepDebt + num);
+                    num *= 0.2f;
+                }
+                // Плюс компенсация ванильного расхода сна, который у бодрствующего (по мнению
+                // движка) клиента не останавливается.
+                num += dt * Sun.sun.timescale * (5f + 15f * (PlayerNeeds.alcohol / 100f));
+                PlayerNeeds.sleep = Mathf.Min(100f, PlayerNeeds.sleep + num);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[SleepSync] restore: " + e.Message); }
         }
 
         private void SetClientAsleep(bool sleeping)
@@ -93,8 +138,10 @@ namespace SailwindCoop.Sync
 
     /// <summary>
     /// Harmony bridge: the host broadcasts its own sleep transitions. Postfix on
-    /// <c>PlayerSleep.FallAsleep</c> (→ sleeping) and <c>PlayerSleep.WakeUp</c> (→ awake). Host-gated
+    /// <c>Sleep.FallAsleep</c> (→ sleeping) and <c>Sleep.WakeUp</c> (→ awake). Host-gated
     /// inside <see cref="SleepSync.BroadcastSleep"/>, so a client's own (blocked) sleep never echoes.
+    /// Движковый класс называется <c>Sleep</c> — прежний резолв по имени "PlayerSleep" находил null,
+    /// и патчи молча не ставились (совместный сон не работал вовсе).
     /// </summary>
     public static class SleepPatches
     {
@@ -109,8 +156,7 @@ namespace SailwindCoop.Sync
         {
             try
             {
-                var t = AccessTools.TypeByName("PlayerSleep");
-                if (t == null) return false;
+                var t = typeof(Sleep);
                 var mi = t.GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, Type.EmptyTypes, null);
                 if (mi == null) return false;
                 var postfix = new HarmonyMethod(typeof(SleepPatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
