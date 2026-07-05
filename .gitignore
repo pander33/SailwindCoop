@@ -1,0 +1,120 @@
+# Build intermediates / output
+[Bb]in/
+[Oo]bj/
+*.dll.config
+*.exe.config
+*.pdb
+*.mdb
+*.cache
+*.sapUnresolved
+*.sapGenerated
+_ReSharper.*/
+*.resharper
+*.DotSettings.user
+*.ncrunchproject
+*.ncrunchsolution
+
+# Build artifacts that land outside this repo (BepInEx/plugins) are not tracked here.
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+**/packages/**
+package-lock.json
+project.lock.json
+nuget.exe
+NuGet.exe
+NuGet.targets
+
+# IDE / editor
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+*.sln.docstates
+*.vscode/
+*.code-workspace
+*.annotated.txt
+
+# Build tools
+*.xcworkspacedata
+*.xccheckout
+*.xctestrun
+*.xres
+*.xsc
+*.xsc.user
+*.xbap
+*.xamlx
+*.xsd
+*.xsn
+*.xss
+*.svc
+*.swp
+*.suo
+*.suo.user
+
+# Test results
+TestResult.xml
+*.trx
+*.coverage
+*.coveragexml
+*.lastcover
+*.testsettings
+*.vsmdi
+*.vsp
+*.vspf
+*.vspx
+*.psess
+*.sgmunity
+
+# Logs
+*.log
+*.txt.log
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Unity specific (if applicable)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Ll]ogs/
+[Ff]usionCache/
+.vsconfig
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.VC.opendb
+
+# BepInEx / modding specific
+BepInEx/
+plugins/
+doorstop_config.ini
+winhttp.dll
+dobby.*
+doorstop.*
+
+# Custom build output
+build/
+dist/
+publish/
+/SailwindCoop-v0.1.0.zip

@@ -1,0 +1,110 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Sailwind LAN Co-op — BepInEx plugin.
+    Targets net46 (Unity 2019 Mono / .NET 4.x). Builds straight into the game's
+    BepInEx/plugins/SailwindCoop folder. See DESIGN.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net46</TargetFramework>
+    <AssemblyName>SailwindCoop</AssemblyName>
+    <RootNamespace>SailwindCoop</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+    <Configuration Condition="'$(Configuration)'==''">Release</Configuration>
+
+    <!-- Absolute paths to the installed game. Adjust GameDir if the game moves. -->
+    <GameDir>D:\SteamLibrary\steamapps\common\Sailwind</GameDir>
+    <ManagedDir>$(GameDir)\Sailwind_Data\Managed</ManagedDir>
+    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+    <PluginDir>$(GameDir)\BepInEx\plugins\SailwindCoop</PluginDir>
+
+    <!-- Drop the build output directly into the plugin folder. -->
+    <OutputPath>$(PluginDir)\</OutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BCL reference assemblies so net46 builds without the targeting pack installed.
+         Compile-time only; never shipped (Unity provides the runtime BCL). -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BepInEx + Harmony (do not copy: provided by the loader). -->
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- netstandard facade: the netstandard2.0 LiteNetLib surfaces types through it.
+         Provided by Unity Mono at runtime, so do not copy. -->
+    <Reference Include="netstandard">
+      <HintPath>$(ManagedDir)\netstandard.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Transport. Copied next to the plugin DLL (Private=true). -->
+    <Reference Include="LiteNetLib">
+      <HintPath>$(MSBuildProjectDirectory)\libs\LiteNetLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
+    <!-- Game + Unity (do not copy: provided by the game). -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!--
+    The netstandard2.0 LiteNetLib drags BCL facade shims into the output. Unity Mono
+    provides those at runtime; shipping them into BepInEx/plugins can cause assembly
+    load conflicts. Strip everything except our DLL + LiteNetLib after each build.
+  -->
+  <Target Name="StripFacades" AfterTargets="Build">
+    <ItemGroup>
+      <_Keep Include="$(OutputPath)SailwindCoop.dll" />
+      <_Keep Include="$(OutputPath)SailwindCoop.pdb" />
+      <_Keep Include="$(OutputPath)LiteNetLib.dll" />
+      <_AllDlls Include="$(OutputPath)*.dll" />
+      <_Strip Include="@(_AllDlls)" Exclude="@(_Keep)" />
+    </ItemGroup>
+    <Delete Files="@(_Strip)" />
+  </Target>
+
+</Project>
