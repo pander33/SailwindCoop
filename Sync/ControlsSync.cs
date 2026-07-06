@@ -116,9 +116,9 @@ namespace SailwindCoop.Sync
                 if (_lastReqIndex < 0) return "—";
                 long age = _net.Clock.ServerTick - _lastReqTick;
                 if (age < 0) age = 0;
-                string dir = _lastReqIncoming ? "вх" : "исх";
-                string rot = _lastReqHasWinchRotation ? "+ручка" : "без ручки";
-                return dir + " #" + _lastReqIndex + " len=" + _lastReqLength.ToString("0.00") + " " + rot + " " + age + "мс";
+                string dir = _lastReqIncoming ? "in" : "out";
+                string rot = _lastReqHasWinchRotation ? "+handle" : "no handle";
+                return dir + " #" + _lastReqIndex + " len=" + _lastReqLength.ToString("0.00") + " " + rot + " " + age + "ms";
             }
         }
 

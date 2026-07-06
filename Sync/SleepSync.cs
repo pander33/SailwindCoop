@@ -33,11 +33,11 @@ namespace SailwindCoop.Sync
         {
             get
             {
-                if (_net.Role == Role.Host) return "хост";
+                if (_net.Role == Role.Host) return "host";
                 if (_net.Role != Role.Client) return "—";
                 if (!_clientAsleep) return "—";
-                try { return "сон (ведомый), силы " + PlayerNeeds.sleep.ToString("0") + "%"; }
-                catch { return "сон (ведомый)"; }
+                try { return "sleep (slaved), energy " + PlayerNeeds.sleep.ToString("0") + "%"; }
+                catch { return "sleep (slaved)"; }
             }
         }
 

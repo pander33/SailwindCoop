@@ -28,92 +28,92 @@ namespace SailwindCoop.Runtime
 
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 26, w - 20, h - 34));
 
-            Line("Роль", _net.Role.ToString());
-            Line("Состояние", StateText(_net.State));
+            Line("Role", _net.Role.ToString());
+            Line("State", StateText(_net.State));
 
             if (_net.Role == Role.Client || _net.State == LinkState.Connected)
             {
-                Line("RTT", _net.Clock.HasSample ? _net.Clock.RttMs.ToString("0") + " мс" : "—");
-                Line("Смещение часов", _net.Clock.HasSample ? _net.Clock.OffsetMs.ToString("0") + " мс" : "—");
+                Line("RTT", _net.Clock.HasSample ? _net.Clock.RttMs.ToString("0") + " ms" : "—");
+                Line("Clock offset", _net.Clock.HasSample ? _net.Clock.OffsetMs.ToString("0") + " ms" : "—");
             }
 
             if (_net.Role == Role.Host)
-                Line("Клиентов", _net.PeerCount.ToString());
+                Line("Clients", _net.PeerCount.ToString());
 
-            Line("Объектов (NetId)", CountAll().ToString());
-            Line("Координаты", CoordText());
+            Line("Objects (NetId)", CountAll().ToString());
+            Line("Coordinates", CoordText());
 
             var coop = CoopBehaviour.Instance;
             if (coop != null && coop.Players != null && _net.State == LinkState.Connected)
             {
-                Line("Аватары / игрок", coop.Players.RemoteCount + " / " +
-                     (coop.Players.LocalPlayerFound ? "найден" : "—"));
+                //Line("Avatars / player", coop.Players.RemoteCount + " / " +
+                //     (coop.Players.LocalPlayerFound ? "found" : "—"));
                 float d = coop.Players.NearestRemoteDistance;
-                if (d >= 0f) Line("До аватара", d.ToString("0.0") + " м");
-                //Line("Анимация", coop.Players.NearestRemoteAnim);
-                //Line("Присед", coop.Players.LocalCrouchText);
-                Line("Модель", AvatarCatalog.CurrentSelection + " (" + AvatarCatalog.Entries.Count + " бандлов)");
+                if (d >= 0f) Line("Avatar distance", d.ToString("0.0") + " m");
+                //Line("Animation", coop.Players.NearestRemoteAnim);
+                //Line("Crouch", coop.Players.LocalCrouchText);
+                //Line("Model", AvatarCatalog.CurrentSelection + " (" + AvatarCatalog.Entries.Count + " bundles)");
 
-                if (coop.Boats != null)
-                {
-                    if (_net.Role == Role.Host)
-                        Line("Корабли", coop.Boats.BoatCount + " шт" +
-                             (coop.Boats.BoatNetId != 0 ? ", первый NetId=" + coop.Boats.BoatNetId : ""));
-                    else
-                        Line("Корабли", coop.Boats.IsSlaving ? "ведомых " + coop.Boats.BoatCount : "ждёт лодку");
-                }
+                //if (coop.Boats != null)
+                //{
+                //    if (_net.Role == Role.Host)
+                //        Line("Boats", coop.Boats.BoatCount +
+                //             (coop.Boats.BoatNetId != 0 ? ", first NetId=" + coop.Boats.BoatNetId : ""));
+                //    else
+                //        Line("Boats", coop.Boats.IsSlaving ? "slaved " + coop.Boats.BoatCount : "waiting for boat");
+                //}
 
-                Line("Среда", EnvText());
+                Line("Environment", EnvText());
 
                 if (_net.Role == Role.Client && coop.Env != null && coop.Env.WaveClockValid)
-                    Line("Волн. часы", Sync.EnvironmentSync.WaveClock.ToString("0.0") + " с, Δ " +
-                         (coop.Env.WaveClockError * 1000f).ToString("0") + " мс, ts хоста " +
+                    Line("Wave clock", Sync.EnvironmentSync.WaveClock.ToString("0.0") + " s, Δ " +
+                         (coop.Env.WaveClockError * 1000f).ToString("0") + " ms, host ts " +
                          coop.Env.HostTimeScale.ToString("0.00"));
 
                 if (coop.Controls != null)
                 {
-                    //Line("Управление", coop.Controls.RopeCount + " тросов, " +
-                    //     coop.Controls.WinchCount + " леб., " +
-                    //     coop.Controls.NodeCount + " узлов");
-                    //Line("Руль", coop.Controls.SteeringText);
+                    //Line("Controls", coop.Controls.RopeCount + " ropes, " +
+                    //     coop.Controls.WinchCount + " winches, " +
+                    //     coop.Controls.NodeCount + " nodes");
+                    //Line("Steering", coop.Controls.SteeringText);
                     Line("ControlRequest", coop.Controls.LastControlRequestText);
                 }
 
-                if (coop.Anchor != null)
-                    //Line("Якорь", coop.Anchor.AnchorText);
+                //if (coop.Anchor != null)
+                //    Line("Anchor", coop.Anchor.AnchorText);
 
-                if (coop.Mooring != null)
-                    //Line("Швартовы", coop.Mooring.MooringText);
+                //if (coop.Mooring != null)
+                //    Line("Mooring", coop.Mooring.MooringText);
 
-                if (coop.Damage != null)
-                    Line("Повреждения", coop.Damage.DamageText);
+                //if (coop.Damage != null)
+                //    Line("Damage", coop.Damage.DamageText);
 
-                if (coop.Lights != null)
-                    Line("Свет", coop.Lights.LightText);
+                //if (coop.Lights != null)
+                //    Line("Lights", coop.Lights.LightText);
 
-                if (coop.Items != null)
-                    Line("Предметы", coop.Items.ItemText);
+                //if (coop.Items != null)
+                //    Line("Items", coop.Items.ItemText);
 
-                if (coop.Shop != null)
-                    Line("Магазин", coop.Shop.ShopText);
+                //if (coop.Shop != null)
+                //    Line("Shop", coop.Shop.ShopText);
 
-                if (coop.Sleep != null)
-                    Line("Сон", coop.Sleep.SleepText);
+                //if (coop.Sleep != null)
+                //    Line("Sleep", coop.Sleep.SleepText);
 
-                if (coop.Missions != null)
-                    Line("Миссии", coop.Missions.MissionText);
+                //if (coop.Missions != null)
+                //    Line("Missions", coop.Missions.MissionText);
 
-                if (coop.WindTotem != null && coop.WindTotem.Active)
-                    Line("Ветр.тотем", "сила " + coop.WindTotem.LastWind.magnitude.ToString("0.0"));
+                //if (coop.WindTotem != null && coop.WindTotem.Active)
+                //    Line("Wind totem", "power " + coop.WindTotem.LastWind.magnitude.ToString("0.0"));
 
-                if (coop.Interactions != null)
-                    Line("Событие", coop.Interactions.ButtonCount + " кн · " + coop.Interactions.LastEventText);
+                //if (coop.Interactions != null)
+                //    Line("Event", coop.Interactions.ButtonCount + " btns · " + coop.Interactions.LastEventText);
 
-                Line("Прицел", InteractText());
+                //Line("Pointer", InteractText());
             }
 
             if (!string.IsNullOrEmpty(_net.LastError))
-                Line("Ошибка", _net.LastError);
+                Line("Error", _net.LastError);
 
             GUILayout.EndArea();
         }
@@ -135,7 +135,7 @@ namespace SailwindCoop.Runtime
             try
             {
                 if (_gp == null) _gp = Object.FindObjectOfType<GoPointer>();
-                if (_gp == null) return "GoPointer не найден";
+                if (_gp == null) return "GoPointer not found";
 
                 var tp = typeof(GoPointer);
                 if (_fPointed == null) _fPointed = tp.GetField("pointedAtButton", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -152,7 +152,7 @@ namespace SailwindCoop.Runtime
 
                 if (_fSticky == null) _fSticky = tp.GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
                 var held = _fSticky != null ? _fSticky.GetValue(_gp) as GoPointerButton : null;
-                string heldTxt = held != null ? "ДА" : "—";
+                string heldTxt = held != null ? "YES" : "—";
 
                 if (_emb == null) _emb = Object.FindObjectOfType<PlayerEmbarkerNew>();
                 string emb = "?";
@@ -162,7 +162,7 @@ namespace SailwindCoop.Runtime
                     if (_fEmbarked != null) emb = ((bool)_fEmbarked.GetValue(_emb)).ToString();
                 }
 
-                return "кн:" + btnTxt + " держит:" + heldTxt + " emb:" + emb;
+                return "btn:" + btnTxt + " holding:" + heldTxt + " emb:" + emb;
             }
             catch (System.Exception e)
             {
@@ -198,7 +198,7 @@ namespace SailwindCoop.Runtime
         {
             float windMag = Wind.currentWind.magnitude;
             string t = Sun.sun != null ? Sun.sun.localTime.ToString("0.00") : "—";
-            return "ветер " + windMag.ToString("0.0") + ", t " + t;
+            return "wind " + windMag.ToString("0.0") + ", t " + t;
         }
 
         private int CountAll()
@@ -212,12 +212,12 @@ namespace SailwindCoop.Runtime
         {
             switch (s)
             {
-                case LinkState.Idle: return "не активно (F9 хост / F10 подключиться)";
-                case LinkState.Connecting: return "подключение...";
-                case LinkState.Handshaking: return "рукопожатие...";
-                case LinkState.Connected: return "соединено";
-                case LinkState.Rejected: return "отклонено хостом";
-                case LinkState.Failed: return "сбой";
+                case LinkState.Idle: return "idle (F9 host / F10 join)";
+                case LinkState.Connecting: return "connecting...";
+                case LinkState.Handshaking: return "handshaking...";
+                case LinkState.Connected: return "connected";
+                case LinkState.Rejected: return "rejected by host";
+                case LinkState.Failed: return "failed";
                 default: return s.ToString();
             }
         }

@@ -38,9 +38,9 @@ namespace SailwindCoop.Sync
                 {
                     long age = _net.Clock.ServerTick - _lastTick;
                     if (age < 0) age = 0;
-                    last = _last + " " + age + "мс";
+                    last = _last + " " + age + "ms";
                 }
-                return _lights.Count + " шт · " + last;
+                return _lights.Count + " pcs · " + last;
             }
         }
 

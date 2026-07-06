@@ -63,9 +63,9 @@ namespace SailwindCoop.Sync
                 {
                     long pushAge = _net.Clock.ServerTick - _lastPushTick;
                     if (pushAge < 0) pushAge = 0;
-                    push = _lastPush + " " + pushAge + "мс";
+                    push = _lastPush + " " + pushAge + "ms";
                 }
-                return _lastEvent + " " + age + "мс" + " · push " + push;
+                return _lastEvent + " " + age + "ms" + " · push " + push;
             }
         }
         public int ButtonCount => _buttons.Length;

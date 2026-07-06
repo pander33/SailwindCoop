@@ -117,9 +117,9 @@ namespace SailwindCoop.Sync
                 {
                     long age = _net.Clock.ServerTick - _lastEventTick;
                     if (age < 0) age = 0;
-                    last = _last + " " + age + "мс";
+                    last = _last + " " + age + "ms";
                 }
-                return _items.Count + " шт, в руках " + _localHeld.Count + " · " + last;
+                return _items.Count + " pcs, held " + _localHeld.Count + " · " + last;
             }
         }
 

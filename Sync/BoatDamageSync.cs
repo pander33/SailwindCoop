@@ -47,25 +47,25 @@ namespace SailwindCoop.Sync
         {
             get
             {
-                if (_damage == null) return "нет BoatDamage";
+                if (_damage == null) return "no BoatDamage";
                 string pump = "—";
                 if (_lastPumpTick != 0)
                 {
                     long age = _net.Clock.ServerTick - _lastPumpTick;
                     if (age < 0) age = 0;
-                    pump = _lastPump + " " + age + "мс";
+                    pump = _lastPump + " " + age + "ms";
                 }
                 string repair = "—";
                 if (_lastRepairTick != 0)
                 {
                     long age = _net.Clock.ServerTick - _lastRepairTick;
                     if (age < 0) age = 0;
-                    repair = _lastRepair + " " + age + "мс";
+                    repair = _lastRepair + " " + age + "ms";
                 }
-                return "вода=" + _damage.waterLevel.ToString("0.000") +
-                       " корпус=" + _damage.hullDamage.ToString("0.000") +
-                       " пакля=" + _damage.oakum.ToString("0.0") +
-                       " помпа " + ActivePumpCount() + "/" + _pumps.Length +
+                return "water=" + _damage.waterLevel.ToString("0.000") +
+                       " hull=" + _damage.hullDamage.ToString("0.000") +
+                       " oakum=" + _damage.oakum.ToString("0.0") +
+                       " pump " + ActivePumpCount() + "/" + _pumps.Length +
                        " · " + pump + " · " + repair;
             }
         }

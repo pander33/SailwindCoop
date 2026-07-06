@@ -48,7 +48,7 @@ namespace SailwindCoop.Sync
             _heartbeat = 0f;
             _lastSig = sig;
             _net.Broadcast(new MissionJournalMsg { Missions = entries }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            MissionText = entries.Length + " миссий (хост)";
+            MissionText = entries.Length + " missions (host)";
         }
 
         // -----------------------------------------------------------------
@@ -103,7 +103,7 @@ namespace SailwindCoop.Sync
             if (sig == _lastApplied) return;
             _lastApplied = sig;
             ApplyJournal(msg.Missions);
-            MissionText = msg.Missions.Length + " миссий (зеркало)";
+            MissionText = msg.Missions.Length + " missions (mirror)";
         }
 
         private void ApplyJournal(MissionEntry[] entries)
