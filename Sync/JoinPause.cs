@@ -38,21 +38,21 @@ namespace SailwindCoop.Sync
             Physics.autoSyncTransforms = false;
             _pausedAt = Time.realtimeSinceStartup;
             _paused = true;
-            Plugin.Logger.LogInfo("[JoinPause] Мир хоста на паузе: ждём загрузку клиента NetId=" + netId);
+            Plugin.Logger.LogInfo("[JoinPause] Host world paused: waiting for client load NetId=" + netId);
         }
 
         /// <summary>Host: this client finished loading (or left) — lift the pause if it was the last one.</summary>
         public void Release(uint netId)
         {
             if (!_pending.Remove(netId)) return;
-            if (_pending.Count == 0) Unpause("клиент NetId=" + netId + " загрузился");
+            if (_pending.Count == 0) Unpause("client NetId=" + netId + " loaded");
         }
 
         /// <summary>Lift the pause unconditionally (disconnect/teardown).</summary>
         public void Clear()
         {
             _pending.Clear();
-            if (_paused) Unpause("сброс сессии");
+            if (_paused) Unpause("session reset");
         }
 
         /// <summary>Call every frame on the host: enforces the safety timeout.</summary>
@@ -60,10 +60,10 @@ namespace SailwindCoop.Sync
         {
             if (_paused && Time.realtimeSinceStartup - _pausedAt > TimeoutSec)
             {
-                Plugin.Logger.LogWarning("[JoinPause] Клиент не отчитался о загрузке за " + TimeoutSec +
-                                         " с — снимаю паузу принудительно");
+                Plugin.Logger.LogWarning("[JoinPause] Client did not report loaded within " + TimeoutSec +
+                                         " s - force releasing pause");
                 _pending.Clear();
-                Unpause("таймаут");
+                Unpause("timeout");
             }
         }
 
@@ -74,7 +74,7 @@ namespace SailwindCoop.Sync
             if (Time.timeScale == 0f)
                 Time.timeScale = _prevTimeScale > 0f ? _prevTimeScale : 1f;
             Physics.autoSyncTransforms = true;
-            Plugin.Logger.LogInfo("[JoinPause] Пауза снята (" + why + ")");
+            Plugin.Logger.LogInfo("[JoinPause] Pause released (" + why + ")");
         }
     }
 }

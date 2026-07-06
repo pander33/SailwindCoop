@@ -37,14 +37,14 @@ namespace SailwindCoop.Sync
         {
             if (item == null) return;
             ItemSync.Instance?.NotifyClientAuthored(item);
-            Remember("куплено '" + item.name + "'");
+            Remember("bought '" + item.name + "'");
         }
 
         /// <summary>A good is about to be sold locally (own wallet); have the host despawn its copy.</summary>
         public void OnSold(int instanceId, int prefabIndex)
         {
             ItemSync.Instance?.NotifySold(instanceId, prefabIndex);
-            Remember("продано id=" + instanceId);
+            Remember("sold id=" + instanceId);
         }
 
         public void Clear() { _last = "—"; }
@@ -69,7 +69,7 @@ namespace SailwindCoop.Sync
         {
             bool buy = TryPatch(harmony, "TryToSellItem", nameof(PreBuy), nameof(PostBuy));
             bool sell = TryPatch(harmony, "TryToBuyItem", nameof(PreSell), null);
-            Plugin.Logger.LogInfo("[ShopPatches] Патчи магазина (локальные деньги): buy(TryToSellItem)=" + buy + ", sell(TryToBuyItem)=" + sell);
+            Plugin.Logger.LogInfo("[ShopPatches] Shop patches (local money): buy(TryToSellItem)=" + buy + ", sell(TryToBuyItem)=" + sell);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)

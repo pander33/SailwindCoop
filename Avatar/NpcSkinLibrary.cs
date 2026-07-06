@@ -71,13 +71,13 @@ namespace SailwindCoop.Avatar
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[NpcSkins] Скан NPC: " + e.Message);
+				Plugin.Logger?.LogWarning("[NpcSkins] NPC scan: " + e.Message);
 			}
 
 			if (_skins.Count != before || _skins.Count > 0)
-				Plugin.Logger?.LogInfo("[NpcSkins] Скинов NPC в каталоге: " + _skins.Count +
-					", шаблон " + (_template != null ? "есть" : "НЕТ") +
-					", материалов " + _materials.Count);
+				Plugin.Logger?.LogInfo("[NpcSkins] NPC skins in catalog: " + _skins.Count +
+					", template " + (_template != null ? "present" : "NONE") +
+					", materials " + _materials.Count);
 		}
 
 		/// <summary>
@@ -118,14 +118,14 @@ namespace SailwindCoop.Avatar
 
 				if (matched == 0)
 				{
-					Plugin.Logger?.LogWarning("[NpcSkins] Ни одна часть из ключа не нашлась в шаблоне: " + key);
+					Plugin.Logger?.LogWarning("[NpcSkins] No parts from key were found in template: " + key);
 					UnityEngine.Object.Destroy(model);
 					return null;
 				}
 
 				model.SetActive(true);
-				Plugin.Logger?.LogInfo("[NpcSkins] Модель собрана: частей " + matched + "/" + wanted.Count +
-					", материал " + (mat != null ? "'" + matName + "'" : "по умолчанию"));
+				Plugin.Logger?.LogInfo("[NpcSkins] Model built: parts " + matched + "/" + wanted.Count +
+					", material " + (mat != null ? "'" + matName + "'" : "default"));
 				return model;
 			}
 			catch (Exception e)
@@ -175,11 +175,11 @@ namespace SailwindCoop.Avatar
 
 				clone.transform.localScale = Vector3.one;
 				_template = clone;
-				Plugin.Logger?.LogInfo("[NpcSkins] Шаблон NPC захвачен из '" + cc.gameObject.name + "'");
+				Plugin.Logger?.LogInfo("[NpcSkins] NPC template captured from '" + cc.gameObject.name + "'");
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[NpcSkins] Не удалось захватить шаблон: " + e.Message);
+				Plugin.Logger?.LogWarning("[NpcSkins] Failed to capture template: " + e.Message);
 			}
 		}
 

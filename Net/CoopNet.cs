@@ -122,8 +122,8 @@ namespace SailwindCoop.Net
             if (!started)
             {
                 State = LinkState.Failed;
-                LastError = "Не удалось открыть UDP-порт " + port +
-                            (bindAll ? "" : " на интерфейсе " + ListenIp);
+                LastError = "Failed to open UDP port " + port +
+                            (bindAll ? "" : " on interface " + ListenIp);
                 _log("[CoopNet] " + LastError);
                 return;
             }
@@ -132,8 +132,8 @@ namespace SailwindCoop.Net
             MyNetId = NetRegistry.HostPlayerNetId;
             // Host registers its own player as NetId 1.
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
-            _log("[CoopNet] Хост слушает " + (bindAll ? "все интерфейсы" : ListenIp) +
-                 " порт " + port + " (protocol " + Protocol.Version + ")");
+            _log("[CoopNet] Host listening on " + (bindAll ? "all interfaces" : ListenIp) +
+                 " port " + port + " (protocol " + Protocol.Version + ")");
         }
 
         public void StartClient(string ip, int port)
@@ -143,13 +143,13 @@ namespace SailwindCoop.Net
             if (!_net.Start())
             {
                 State = LinkState.Failed;
-                LastError = "Не удалось запустить сетевой менеджер";
+                LastError = "Failed to start network manager";
                 _log("[CoopNet] " + LastError);
                 return;
             }
             Role = Role.Client;
             State = LinkState.Connecting;
-            _log("[CoopNet] Подключение к " + ip + ":" + port + " ...");
+            _log("[CoopNet] Connecting to " + ip + ":" + port + " ...");
             _net.Connect(ip, port, ConnKey);   // Hello is sent once the peer connects
         }
 
@@ -226,7 +226,7 @@ namespace SailwindCoop.Net
                 string mySelection = "";
                 try { mySelection = SailwindCoop.Avatar.AvatarCatalog.CurrentSelection; }
                 catch { mySelection = ""; }
-                _log("[CoopNet] Соединение установлено, отправляю Hello (avatar=" + mySelection + ")");
+                _log("[CoopNet] Connected, sending Hello (avatar=" + mySelection + ")");
                 peer.Send(new HelloMsg
                 {
                     ProtocolVersion = Protocol.Version,
@@ -239,7 +239,7 @@ namespace SailwindCoop.Net
             else // Host
             {
                 _sessions[peer.Id] = new PeerSession { Peer = peer };
-                _log("[CoopNet] Клиент подключился (peer " + peer.Id + "), жду Hello");
+                _log("[CoopNet] Client connected (peer " + peer.Id + "), waiting for Hello");
             }
         }
 
@@ -254,7 +254,7 @@ namespace SailwindCoop.Net
                     OnPlayerLeft?.Invoke(s.PlayerNetId);
                 }
                 _sessions.Remove(peer.Id);
-                _log("[CoopNet] Клиент отключился (peer " + peer.Id + "): " + info.Reason);
+                _log("[CoopNet] Client disconnected (peer " + peer.Id + "): " + info.Reason);
             }
             else
             {
@@ -263,9 +263,9 @@ namespace SailwindCoop.Net
                 if (State != LinkState.Rejected)
                 {
                     State = LinkState.Failed;
-                    LastError = "Отключено: " + info.Reason;
+                    LastError = "Disconnected: " + info.Reason;
                 }
-                _log("[CoopNet] Отключено от хоста: " + info.Reason);
+                _log("[CoopNet] Disconnected from host: " + info.Reason);
             }
         }
 
@@ -286,7 +286,7 @@ namespace SailwindCoop.Net
 
         private void OnNetworkError(IPEndPoint endPoint, SocketError error)
         {
-            LastError = "Сетевая ошибка: " + error;
+            LastError = "Network error: " + error;
             _log("[CoopNet] " + LastError + " (" + endPoint + ")");
         }
 
@@ -296,7 +296,7 @@ namespace SailwindCoop.Net
             INetMessage msg = Protocol.ReadBody(type, reader);
             if (msg == null)
             {
-                _log("[CoopNet] Неизвестный msgType " + (byte)type + " — пропущен");
+                _log("[CoopNet] Unknown msgType " + (byte)type + " - skipped");
                 return;
             }
 
@@ -329,7 +329,7 @@ namespace SailwindCoop.Net
             RejectReason reason = ValidateHello(hello, out string detail);
             if (reason != RejectReason.None)
             {
-                _log("[CoopNet] Отказ клиенту: " + reason + " " + detail);
+                _log("[CoopNet] Rejecting client: " + reason + " " + detail);
                 var rej = new RejectMsg { Reason = reason, Detail = detail };
                 peer.Send(rej, DeliveryMethod.ReliableOrdered);
                 // A reliable send may not flush before the disconnect — duplicate the reason into the
@@ -355,7 +355,7 @@ namespace SailwindCoop.Net
                 HostPlayerName = PlayerName,
             }, DeliveryMethod.ReliableOrdered);
 
-            _log("[CoopNet] Клиент принят: " + session.PlayerName + " -> NetId " + assigned);
+            _log("[CoopNet] Client accepted: " + session.PlayerName + " -> NetId " + assigned);
             OnClientReady?.Invoke(session);
         }
 
@@ -364,19 +364,19 @@ namespace SailwindCoop.Net
             detail = "";
             if (h.ProtocolVersion != Protocol.Version)
             {
-                detail = "сервер " + Protocol.Version + ", клиент " + h.ProtocolVersion;
+                detail = "server " + Protocol.Version + ", client " + h.ProtocolVersion;
                 return RejectReason.ProtocolMismatch;
             }
             if (!string.IsNullOrEmpty(ModVersion) && !string.IsNullOrEmpty(h.ModVersion) && h.ModVersion != ModVersion)
             {
-                detail = "сервер " + ModVersion + ", клиент " + h.ModVersion;
+                detail = "server " + ModVersion + ", client " + h.ModVersion;
                 return RejectReason.ModVersionMismatch;
             }
             string hostWorld = WorldIdProvider() ?? "";
             // Only enforce when both sides actually know their world (Stage 0 may not).
             if (!string.IsNullOrEmpty(hostWorld) && !string.IsNullOrEmpty(h.WorldId) && h.WorldId != hostWorld)
             {
-                detail = "разные миры/сейвы";
+                detail = "different worlds/saves";
                 return RejectReason.WorldMismatch;
             }
             return RejectReason.None;
@@ -397,7 +397,7 @@ namespace SailwindCoop.Net
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
             _playerNames[ack.AssignedNetId] = PlayerName;
             _playerNames[NetRegistry.HostPlayerNetId] = string.IsNullOrEmpty(ack.HostPlayerName) ? "Host" : ack.HostPlayerName;
-            _log("[CoopNet] Принят хостом. Мой NetId=" + ack.AssignedNetId + ", хост='" + ack.HostPlayerName + "'");
+            _log("[CoopNet] Accepted by host. My NetId=" + ack.AssignedNetId + ", host='" + ack.HostPlayerName + "'");
             OnAccepted?.Invoke(ack);
         }
 
@@ -405,7 +405,7 @@ namespace SailwindCoop.Net
         {
             if (Role != Role.Client) return;
             State = LinkState.Rejected;
-            LastError = "Хост отклонил: " + rej.Reason + " (" + rej.Detail + ")";
+            LastError = "Host rejected: " + rej.Reason + " (" + rej.Detail + ")";
             _log("[CoopNet] " + LastError);
         }
 

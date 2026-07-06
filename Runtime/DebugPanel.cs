@@ -50,12 +50,12 @@ namespace SailwindCoop.Runtime
 
             const float w = 380f, h = 820f;
             var rect = new Rect(Screen.width - w - 12, 12, w, h);
-            GUI.Box(rect, "Дебаг-панель (F7) — тест-сценарии", _box);
+            GUI.Box(rect, "Debug Panel (F7) - Test Scenarios", _box);
 
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 28, w - 20, h - 36));
 
-            string role = _net.State == LinkState.Connected ? _net.Role.ToString() : "оффлайн";
-            GUILayout.Label("Роль: " + role + "   ·   " + _status, _label);
+            string role = _net.State == LinkState.Connected ? _net.Role.ToString() : "offline";
+            GUILayout.Label("Role: " + role + "   ·   " + _status, _label);
             GUILayout.Space(4);
 
             DrawGold();
@@ -77,13 +77,13 @@ namespace SailwindCoop.Runtime
 
         private void DrawGold()
         {
-            GUILayout.Label("— Золото (локально) —", _label);
-            GUILayout.Label("Текущее: " + CurrentGoldText(), _label);
+            GUILayout.Label("- Gold (local) -", _label);
+            GUILayout.Label("Current: " + CurrentGoldText(), _label);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("+1000")) GiveGold(1000);
             if (GUILayout.Button("+10000")) GiveGold(10000);
             _goldAmount = GUILayout.TextField(_goldAmount, GUILayout.Width(80));
-            if (GUILayout.Button("Выдать") && int.TryParse(_goldAmount, out int amt)) GiveGold(amt);
+            if (GUILayout.Button("Give") && int.TryParse(_goldAmount, out int amt)) GiveGold(amt);
             GUILayout.EndHorizontal();
         }
 
@@ -111,10 +111,10 @@ namespace SailwindCoop.Runtime
                 if (PlayerGold.currency != null)
                     for (int i = 0; i < PlayerGold.currency.Length; i++)
                         PlayerGold.currency[i] += amount;
-                _status = "выдано " + amount + " золота";
-                Plugin.Logger.LogInfo("[DebugPanel] +" + amount + " золота (локально)");
+                _status = "given " + amount + " gold";
+                Plugin.Logger.LogInfo("[DebugPanel] +" + amount + " gold (local)");
             }
-            catch (Exception e) { _status = "золото: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] золото: " + e); }
+            catch (Exception e) { _status = "gold: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] gold: " + e); }
         }
 
         // -----------------------------------------------------------------
@@ -123,7 +123,7 @@ namespace SailwindCoop.Runtime
 
         private void DrawReputation()
         {
-            GUILayout.Label("— Репутация (локально) —", _label);
+            GUILayout.Label("- Reputation (local) -", _label);
             GUILayout.BeginHorizontal();
             GiveRepButton("Al'Ankh", PortRegion.alankh);
             GiveRepButton("Emerald", PortRegion.emerald);
@@ -135,15 +135,15 @@ namespace SailwindCoop.Runtime
         {
             int lvl;
             try { lvl = PlayerReputation.GetRepLevel(region); } catch { lvl = -1; }
-            if (GUILayout.Button(title + " +100 (ур." + lvl + ")"))
+            if (GUILayout.Button(title + " +100 (lvl " + lvl + ")"))
             {
                 try
                 {
                     PlayerReputation.ChangeReputation(100, region);
-                    _status = "+100 реп " + title;
-                    Plugin.Logger.LogInfo("[DebugPanel] +100 репутации " + region + " (локально)");
+                    _status = "+100 rep " + title;
+                    Plugin.Logger.LogInfo("[DebugPanel] +100 reputation " + region + " (local)");
                 }
-                catch (Exception e) { _status = "реп: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] реп: " + e); }
+                catch (Exception e) { _status = "rep: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] rep: " + e); }
             }
         }
 
@@ -153,20 +153,20 @@ namespace SailwindCoop.Runtime
 
         private void DrawWorld()
         {
-            GUILayout.Label("— Мир: время / шторм / телепорт (хост) —", _label);
+            GUILayout.Label("- World: time / storm / teleport (host) -", _label);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("+1 час")) AdvanceTime(1f);
-            if (GUILayout.Button("+1 день")) AdvanceTime(24f);
-            if (GUILayout.Button("Шторм здесь")) ForceStorm();
+            if (GUILayout.Button("+1 hour")) AdvanceTime(1f);
+            if (GUILayout.Button("+1 day")) AdvanceTime(24f);
+            if (GUILayout.Button("Storm here")) ForceStorm();
             GUILayout.EndHorizontal();
-            if (GUILayout.Button("Телепорт к ближайшему порту (эксперим.)")) TeleportNearestPort();
+            if (GUILayout.Button("Teleport to nearest port (experimental)")) TeleportNearestPort();
         }
 
         private bool HostGateFail()
         {
             if (_net.State == LinkState.Connected && _net.Role != Role.Host)
             {
-                _status = "только хост (это реплицируется)";
+                _status = "host only (this is replicated)";
                 return true;
             }
             return false;
@@ -185,10 +185,10 @@ namespace SailwindCoop.Runtime
                     while (sun.localTime >= 24f) sun.localTime -= 24f;
                 }
                 if (hours >= 24f) GameState.day += Mathf.RoundToInt(hours / 24f);
-                _status = "+" + hours + " ч";
-                Plugin.Logger.LogInfo("[DebugPanel] время +" + hours + " ч");
+                _status = "+" + hours + " h";
+                Plugin.Logger.LogInfo("[DebugPanel] time +" + hours + " h");
             }
-            catch (Exception e) { _status = "время: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] время: " + e); }
+            catch (Exception e) { _status = "time: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] time: " + e); }
         }
 
         private void ForceStorm()
@@ -197,11 +197,11 @@ namespace SailwindCoop.Runtime
             try
             {
                 var ws = WeatherStorms.instance;
-                if (ws == null) { _status = "нет WeatherStorms"; return; }
+                if (ws == null) { _status = "WeatherStorms missing"; return; }
                 if (_fStorms == null)
                     _fStorms = typeof(WeatherStorms).GetField("storms", BindingFlags.NonPublic | BindingFlags.Instance);
                 var storms = _fStorms != null ? _fStorms.GetValue(ws) as WanderingStorm[] : null;
-                if (storms == null || storms.Length == 0) { _status = "штормов нет в сцене"; return; }
+                if (storms == null || storms.Length == 0) { _status = "no storms in scene"; return; }
 
                 Vector3 player = Camera.main != null ? Camera.main.transform.position : Vector3.zero;
                 WanderingStorm nearest = null;
@@ -212,13 +212,13 @@ namespace SailwindCoop.Runtime
                     float d = Vector3.Distance(s.transform.position, player);
                     if (d < best) { best = d; nearest = s; }
                 }
-                if (nearest == null) { _status = "штормы пустые"; return; }
+                if (nearest == null) { _status = "storms list is empty"; return; }
                 nearest.active = true;
                 nearest.transform.position = player;
-                _status = "шторм перемещён к игроку";
-                Plugin.Logger.LogInfo("[DebugPanel] шторм '" + nearest.name + "' к игроку");
+                _status = "storm moved to player";
+                Plugin.Logger.LogInfo("[DebugPanel] storm '" + nearest.name + "' moved to player");
             }
-            catch (Exception e) { _status = "шторм: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] шторм: " + e); }
+            catch (Exception e) { _status = "storm: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] storm: " + e); }
         }
 
         private void TeleportNearestPort()
@@ -240,17 +240,17 @@ namespace SailwindCoop.Runtime
                     float d = Vector3.Distance(m.transform.position, player);
                     if (d < best) { best = d; nearest = m; }
                 }
-                if (nearest == null) { _status = "порт не найден (далёкие не загружены)"; return; }
-                if (boat == null) { _status = "нет лодки для телепорта"; return; }
+                if (nearest == null) { _status = "port not found (far ports not loaded)"; return; }
+                if (boat == null) { _status = "no boat to teleport"; return; }
 
                 // Move the whole boat so the player (its child) ends up next to the port. Far islands
                 // aren't streamed in under the floating origin, so this only reaches a loaded port.
                 Vector3 target = nearest.transform.position + Vector3.up * 2f;
                 boat.position += (target - player);
-                _status = "лодка → порт " + SafePortName(nearest) + " (" + best.ToString("0") + " м)";
-                Plugin.Logger.LogInfo("[DebugPanel] телепорт лодки к порту " + SafePortName(nearest));
+                _status = "boat -> port " + SafePortName(nearest) + " (" + best.ToString("0") + " m)";
+                Plugin.Logger.LogInfo("[DebugPanel] boat teleported to port " + SafePortName(nearest));
             }
-            catch (Exception e) { _status = "телепорт: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] телепорт: " + e); }
+            catch (Exception e) { _status = "teleport: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] teleport: " + e); }
         }
 
         private static string SafePortName(IslandMarket m)
@@ -274,14 +274,14 @@ namespace SailwindCoop.Runtime
 
         private void DrawIslandTeleport()
         {
-            GUILayout.Label("— Телепорт по островам (лодку двигает хост) —", _label);
+            GUILayout.Label("- Island teleport (host moves the boat) -", _label);
             if (_recoveryPorts == null) RefreshRecoveryPorts();
-            if (GUILayout.Button("Обновить список портов (" + (_recoveryPorts != null ? _recoveryPorts.Count : 0) + ")"))
+            if (GUILayout.Button("Refresh port list (" + (_recoveryPorts != null ? _recoveryPorts.Count : 0) + ")"))
                 RefreshRecoveryPorts();
 
             if (_recoveryPorts == null || _recoveryPorts.Count == 0)
             {
-                GUILayout.Label("recovery-порты не найдены (мир ещё грузится?)", _label);
+                GUILayout.Label("Recovery ports not found (world still loading?)", _label);
                 return;
             }
 
@@ -305,7 +305,7 @@ namespace SailwindCoop.Runtime
             catch (Exception e)
             {
                 _recoveryPorts = new List<RecoveryPort>();
-                Plugin.Logger.LogWarning("[DebugPanel] список recovery-портов: " + e.Message);
+                Plugin.Logger.LogWarning("[DebugPanel] recovery port list: " + e.Message);
             }
         }
 
@@ -333,7 +333,7 @@ namespace SailwindCoop.Runtime
 
                 if (!hostAuthority && embarked)
                 {
-                    _status = "клиент на лодке: телепортирует хост";
+                    _status = "client on boat: host teleports";
                     return;
                 }
 
@@ -356,7 +356,7 @@ namespace SailwindCoop.Runtime
                             boat.position = rp.GetBoatPos();
                             if (rp.boatPos != null) boat.rotation = rp.boatPos.rotation;
                         }
-                        catch (Exception be) { Plugin.Logger.LogWarning("[DebugPanel] телепорт лодки: " + be.Message); }
+                        catch (Exception be) { Plugin.Logger.LogWarning("[DebugPanel] boat teleport: " + be.Message); }
                     }
                 }
 
@@ -375,14 +375,14 @@ namespace SailwindCoop.Runtime
                     }
                 }
 
-                _status = "телепорт → " + RecoveryPortName(rp) + (embarked ? " (на лодке)" : " (пешком)");
-                Plugin.Logger.LogInfo("[DebugPanel] телепорт → " + RecoveryPortName(rp) +
+                _status = "teleport -> " + RecoveryPortName(rp) + (embarked ? " (on boat)" : " (on foot)");
+                Plugin.Logger.LogInfo("[DebugPanel] teleport -> " + RecoveryPortName(rp) +
                                       " embarked=" + embarked + " hostAuthority=" + hostAuthority);
             }
             catch (Exception e)
             {
-                _status = "телепорт: " + e.Message;
-                Plugin.Logger.LogWarning("[DebugPanel] телепорт к острову: " + e);
+                _status = "teleport: " + e.Message;
+                Plugin.Logger.LogWarning("[DebugPanel] teleport to island: " + e);
             }
         }
 
@@ -405,11 +405,11 @@ namespace SailwindCoop.Runtime
 
         private void DrawItemSpawn()
         {
-            GUILayout.Label("— Спавн предмета (хост) —", _label);
+            GUILayout.Label("- Item Spawn (host) -", _label);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("фильтр:", _label, GUILayout.Width(50));
+            GUILayout.Label("filter:", _label, GUILayout.Width(50));
             _itemFilter = GUILayout.TextField(_itemFilter, GUILayout.Width(180));
-            if (GUILayout.Button("Сброс", GUILayout.Width(60))) _itemFilter = "";
+            if (GUILayout.Button("Reset", GUILayout.Width(60))) _itemFilter = "";
             GUILayout.EndHorizontal();
 
             EnsurePrefabs();
@@ -420,13 +420,13 @@ namespace SailwindCoop.Runtime
             foreach (var kv in _prefabs)
             {
                 if (flt.Length > 0 && kv.Value.ToLowerInvariant().IndexOf(flt, StringComparison.Ordinal) < 0) continue;
-                if (++shown > 60) { GUILayout.Label("… уточни фильтр (>60 совпадений)", _label); break; }
+                if (++shown > 60) { GUILayout.Label("... narrow the filter (>60 matches)", _label); break; }
                 GUILayout.BeginHorizontal();
                 GUILayout.Label(kv.Value, _label);
-                if (GUILayout.Button("Спавн", GUILayout.Width(70))) SpawnItem(kv.Key);
+                if (GUILayout.Button("Spawn", GUILayout.Width(70))) SpawnItem(kv.Key);
                 GUILayout.EndHorizontal();
             }
-            if (shown == 0) GUILayout.Label("нет совпадений", _label);
+            if (shown == 0) GUILayout.Label("no matches", _label);
             GUILayout.EndScrollView();
         }
 
@@ -445,9 +445,9 @@ namespace SailwindCoop.Runtime
                         if (si != null) _prefabs.Add(new KeyValuePair<int, string>(i, si.name));
                     }
                 }
-                Plugin.Logger.LogInfo("[DebugPanel] каталог предметов: " + _prefabs.Count);
+                Plugin.Logger.LogInfo("[DebugPanel] item catalog: " + _prefabs.Count);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[DebugPanel] каталог: " + e.Message); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[DebugPanel] catalog: " + e.Message); }
         }
 
         private void SpawnItem(int prefabIndex)
@@ -457,9 +457,9 @@ namespace SailwindCoop.Runtime
             {
                 var dir = PrefabsDirectory.instance;
                 if (dir == null || dir.directory == null || prefabIndex < 0 || prefabIndex >= dir.directory.Length)
-                { _status = "нет префаба #" + prefabIndex; return; }
+                { _status = "missing prefab #" + prefabIndex; return; }
                 var prefab = dir.directory[prefabIndex];
-                if (prefab == null) { _status = "префаб #" + prefabIndex + " пуст"; return; }
+                if (prefab == null) { _status = "prefab #" + prefabIndex + " is empty"; return; }
 
                 var emb = Embarker();
                 Vector3 pos; Quaternion rot;
@@ -481,10 +481,10 @@ namespace SailwindCoop.Runtime
                     try { item.OnLoad(); }            // run the vanilla post-load init (crate inventory, value, …)
                     catch (Exception le) { Plugin.Logger.LogWarning("[DebugPanel] OnLoad '" + prefab.name + "': " + le.Message); }
                 }
-                _status = "заспавнен " + prefab.name;
-                Plugin.Logger.LogInfo("[DebugPanel] спавн '" + prefab.name + "' idx=" + prefabIndex);
+                _status = "spawned " + prefab.name;
+                Plugin.Logger.LogInfo("[DebugPanel] spawned '" + prefab.name + "' idx=" + prefabIndex);
             }
-            catch (Exception e) { _status = "спавн: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] спавн: " + e); }
+            catch (Exception e) { _status = "spawn: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] spawn: " + e); }
         }
 
         private PlayerEmbarkerNew Embarker()

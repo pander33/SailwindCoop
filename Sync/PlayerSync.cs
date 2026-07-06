@@ -107,7 +107,7 @@ namespace SailwindCoop.Sync
 
         public int RemoteCount => _remotes.Count;
         public bool LocalPlayerFound => _localPlayer != null;
-        public string LocalCrouchText => "local " + (_lastLocalCrouch ? "ДА" : "—") +
+        public string LocalCrouchText => "local " + (_lastLocalCrouch ? "YES" : "—") +
                                          ", h " + _lastLocalCrouchHeight.ToString("0.00");
         public string NearestRemoteAnim
         {
@@ -131,8 +131,8 @@ namespace SailwindCoop.Sync
                        ", Turn " + best.AnimTurn.ToString("0.00") +
                        ", Crouch " + best.AnimCrouch.ToString("0.00") +
                        " -> " + best.AnimTargetCrouch.ToString("0.0") +
-                       ", param " + (best.HasCrouchFloatParam ? "float" : best.HasCrouchBoolParam ? "bool" : best.HasIsCrouchingParam ? "IsCrouching" : "НЕТ") +
-                       ", moving " + (best.AnimMoving ? "ДА" : "—");
+                       ", param " + (best.HasCrouchFloatParam ? "float" : best.HasCrouchBoolParam ? "bool" : best.HasIsCrouchingParam ? "IsCrouching" : "NO") +
+                       ", moving " + (best.AnimMoving ? "YES" : "—");
             }
         }
 
@@ -176,7 +176,7 @@ namespace SailwindCoop.Sync
             if (_remotes.TryGetValue(netId, out var existing) && existing.Go != null)
             {
                 Plugin.Logger.LogInfo("[PlayerSync] AvatarChange NetId=" + netId + " -> '" + key +
-                                      "' (пересоздаю аватар)");
+                                      "' (recreating avatar)");
                 // Tear down the old avatar; the next PlayerState will rebuild from the new bundle.
                 Object.Destroy(existing.Go);
                 _remotes.Remove(netId);
@@ -184,7 +184,7 @@ namespace SailwindCoop.Sync
             else
             {
                 Plugin.Logger.LogInfo("[PlayerSync] AvatarChange NetId=" + netId + " -> '" + key +
-                                      "' (аватар ещё не создан, выбор запомнен)");
+                                      "' (avatar not created yet, selection remembered)");
             }
         }
 
@@ -486,7 +486,7 @@ namespace SailwindCoop.Sync
             }
             catch (System.Exception e)
             {
-                Plugin.Logger.LogWarning("[PlayerSync] Не удалось прочитать состояние приседа: " + e.Message);
+                Plugin.Logger.LogWarning("[PlayerSync] Failed to read crouch state: " + e.Message);
                 return false;
             }
         }
@@ -567,12 +567,12 @@ namespace SailwindCoop.Sync
             if (lookCol != null) Object.Destroy(lookCol);
             SetUnlit(look.GetComponent<Renderer>(), sh, new Color(0.1f, 0.1f, 0.12f));
 
-            Plugin.Logger.LogInfo("[PlayerSync] Аватар NetId=" + netId +
-                                  " шейдер='" + (sh != null ? sh.name : "НЕТ") +
-                                  "' слой=" + go.layer);
+            Plugin.Logger.LogInfo("[PlayerSync] Avatar NetId=" + netId +
+                                  " shader='" + (sh != null ? sh.name : "NO") +
+                                  "' layer=" + go.layer);
 
             Object.DontDestroyOnLoad(go);
-            Plugin.Logger.LogInfo("[PlayerSync] Создан аватар игрока NetId=" + netId);
+            Plugin.Logger.LogInfo("[PlayerSync] Created player avatar NetId=" + netId);
             return new RemoteAvatar { Go = go, Body = body.transform, Head = head.transform };
         }
 
@@ -584,7 +584,7 @@ namespace SailwindCoop.Sync
             {
                 RemoteAvatar npc = TryCreateNpcAvatar(netId, bundleFile);
                 if (npc != null) return npc;
-                Plugin.Logger.LogWarning("[PlayerSync] NPC-скин недоступен (нет шаблона), fallback на " +
+                Plugin.Logger.LogWarning("[PlayerSync] NPC skin unavailable (template missing), fallback to " +
                                          AvatarCatalog.DefaultBundleFile);
                 bundleFile = AvatarCatalog.DefaultBundleFile;
             }
@@ -653,12 +653,12 @@ namespace SailwindCoop.Sync
             pose.CaptureBase();
 
             Object.DontDestroyOnLoad(go);
-            Plugin.Logger.LogInfo("[PlayerSync] Создан avatar.bundle аватар NetId=" + netId +
-                                  ", head=" + (head != null ? head.name : "нет") +
+            Plugin.Logger.LogInfo("[PlayerSync] Created avatar.bundle avatar NetId=" + netId +
+                                  ", head=" + (head != null ? head.name : "none") +
                                   ", offsetY=" + verticalOffset.ToString("F2"));
-            Plugin.Logger.LogInfo("[PlayerSync] Pose bones: spine=" + (spine != null ? spine.name : "нет") +
-                                  ", chest=" + (chest != null ? chest.name : "нет") +
-                                  ", neck=" + (neck != null ? neck.name : "нет"));
+            Plugin.Logger.LogInfo("[PlayerSync] Pose bones: spine=" + (spine != null ? spine.name : "none") +
+                                  ", chest=" + (chest != null ? chest.name : "none") +
+                                  ", neck=" + (neck != null ? neck.name : "none"));
             return new RemoteAvatar
             {
                 Go = go,
@@ -704,8 +704,8 @@ namespace SailwindCoop.Sync
             if (head == null) head = FindChildRecursive(model.transform, "Neck");
 
             Object.DontDestroyOnLoad(go);
-            Plugin.Logger.LogInfo("[PlayerSync] Создан NPC-скин аватар NetId=" + netId +
-                                  ", head=" + (head != null ? head.name : "нет") +
+            Plugin.Logger.LogInfo("[PlayerSync] Created NPC skin avatar NetId=" + netId +
+                                  ", head=" + (head != null ? head.name : "none") +
                                   ", offsetY=" + verticalOffset.ToString("F2"));
             return new RemoteAvatar
             {
@@ -737,19 +737,19 @@ namespace SailwindCoop.Sync
                 // Fallback chain: requested bundle missing locally -> default avatar.bundle -> primitive.
                 if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
                 {
-                    Plugin.Logger.LogWarning("[PlayerSync] '" + key + "' не найден, fallback на " +
+                    Plugin.Logger.LogWarning("[PlayerSync] '" + key + "' not found, fallback to " +
                                              AvatarCatalog.DefaultBundleFile);
                     return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
                 }
                 Plugin.Logger.LogInfo("[PlayerSync] " + AvatarCatalog.DefaultBundleFile +
-                                      " не найден, используется примитивный аватар");
+                                      " not found, using primitive avatar");
                 return null;
             }
 
             var bundle = AssetBundle.LoadFromFile(path);
             if (bundle == null)
             {
-                Plugin.Logger.LogWarning("[PlayerSync] Не удалось загрузить " + key + ": " + path +
+                Plugin.Logger.LogWarning("[PlayerSync] Failed to load " + key + ": " + path +
                                          " (" + ReadBundleHeader(path) + ")");
                 if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
                     return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
@@ -772,7 +772,7 @@ namespace SailwindCoop.Sync
 
             if (prefab == null)
             {
-                Plugin.Logger.LogWarning("[PlayerSync] В " + key + " не найден GameObject prefab");
+                Plugin.Logger.LogWarning("[PlayerSync] In " + key + " GameObject prefab not found");
                 bundle.Unload(false);
                 if (!string.Equals(key, AvatarCatalog.DefaultBundleFile, System.StringComparison.OrdinalIgnoreCase))
                     return GetAvatarPrefab(AvatarCatalog.DefaultBundleFile);
@@ -781,7 +781,7 @@ namespace SailwindCoop.Sync
 
             _bundleCache[key] = bundle;
             _prefabCache[key] = prefab;
-            Plugin.Logger.LogInfo("[PlayerSync] Загружен '" + key + "' prefab '" + prefab.name + "'");
+            Plugin.Logger.LogInfo("[PlayerSync] Loaded '" + key + "' prefab '" + prefab.name + "'");
             return prefab;
         }
 
@@ -801,7 +801,7 @@ namespace SailwindCoop.Sync
             float offset = Plugin.Cfg.AvatarVerticalOffset.Value;
             if (Mathf.Abs(offset - (-0.25f)) < 0.001f)
             {
-                Plugin.Logger.LogInfo("[PlayerSync] Avatar.VerticalOffset=-0.25 устарел, применяется " + defaultOffset.ToString("F2"));
+                Plugin.Logger.LogInfo("[PlayerSync] Avatar.VerticalOffset=-0.25 is obsolete, applying " + defaultOffset.ToString("F2"));
                 return defaultOffset;
             }
 
@@ -818,7 +818,7 @@ namespace SailwindCoop.Sync
                 var go = bundle.LoadAsset<GameObject>(name);
                 if (go != null)
                 {
-                    Plugin.Logger.LogInfo("[PlayerSync] выбран asset '" + name + "' -> '" + go.name + "'");
+                    Plugin.Logger.LogInfo("[PlayerSync] selected asset '" + name + "' -> '" + go.name + "'");
                     return go;
                 }
             }
@@ -835,7 +835,7 @@ namespace SailwindCoop.Sync
                 var go = bundle.LoadAsset<GameObject>(name);
                 if (go != null)
                 {
-                    Plugin.Logger.LogInfo("[PlayerSync] выбран asset '" + name + "' -> '" + go.name + "'");
+                    Plugin.Logger.LogInfo("[PlayerSync] selected asset '" + name + "' -> '" + go.name + "'");
                     return go;
                 }
             }

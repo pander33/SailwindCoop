@@ -102,10 +102,10 @@ namespace SailwindCoop.Sync
         {
             get
             {
-                if (_wheels.Length == 0) return "нет штурвала";
+                if (_wheels.Length == 0) return "no wheel";
                 string len = _steerRope != null ? _steerRope.currentLength.ToString("0.000") : "—";
                 string ang = RudderAngleText();
-                return _wheels.Length + "шт len=" + len + " угол=" + ang;
+                return _wheels.Length + " pcs len=" + len + " angle=" + ang;
             }
         }
 
@@ -193,7 +193,7 @@ namespace SailwindCoop.Sync
             {
                 if (msg.Lengths.Length != _ropes.Length)
                 {
-                    WarnMismatch("тросов", msg.Lengths.Length, _ropes.Length);
+                    WarnMismatch("ropes", msg.Lengths.Length, _ropes.Length);
                 }
                 else
                 {
@@ -217,7 +217,7 @@ namespace SailwindCoop.Sync
             {
                 if (msg.Rotations.Length != _nodes.Length)
                 {
-                    WarnMismatch("узлов", msg.Rotations.Length, _nodes.Length);
+                    WarnMismatch("nodes", msg.Rotations.Length, _nodes.Length);
                 }
                 else
                 {
@@ -303,7 +303,7 @@ namespace SailwindCoop.Sync
             }
             catch (System.Exception e)
             {
-                Plugin.Logger.LogWarning("[ControlsSync] ApplyRudderRotation не удалось: " + e.Message);
+                Plugin.Logger.LogWarning("[ControlsSync] ApplyRudderRotation failed: " + e.Message);
             }
         }
 
@@ -465,8 +465,8 @@ namespace SailwindCoop.Sync
                 nodes.Add(new Node { T = h.transform, Rb = h.GetComponent<Rigidbody>() });
             _nodes = nodes.ToArray();
 
-            Plugin.Logger.LogInfo("[ControlsSync] Корабль сменился: тросов=" + _ropes.Length +
-                                  ", узлов=" + _nodes.Length + ", штурвалов=" + _wheels.Length +
+            Plugin.Logger.LogInfo("[ControlsSync] Boat changed: ropes=" + _ropes.Length +
+                                  ", nodes=" + _nodes.Length + ", wheels=" + _wheels.Length +
                                   (boat != null ? " ('" + boat.name + "')" : ""));
         }
 
@@ -493,8 +493,8 @@ namespace SailwindCoop.Sync
         {
             if (_warnedMismatch) return;
             _warnedMismatch = true;
-            Plugin.Logger.LogWarning("[ControlsSync] Несовпадение числа " + what + ": хост=" + host +
-                                     ", клиент=" + client + " — эта часть не применяется");
+            Plugin.Logger.LogWarning("[ControlsSync] Count mismatch for " + what + ": host=" + host +
+                                     ", client=" + client + " - this part is not applied");
         }
 
         private GPButtonRopeWinch FindWinchForRope(RopeController rope)

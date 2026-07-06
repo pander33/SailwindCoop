@@ -42,14 +42,14 @@ namespace SailwindCoop.Avatar
 			GUI.Box(rect, GUIContent.none, _windowStyle);
 			GUILayout.BeginArea(new Rect(x + 10f, y + 8f, w - 20f, h - 16f));
 
-			GUILayout.Label("Выбор модели персонажа", _headerStyle);
-			GUILayout.Label("Бандлы — из папки мода (avatar*.bundle); NPC-скины — с загруженных островов (подойдите к острову и откройте окно заново).", _hintStyle);
+			GUILayout.Label("Character Model Selection", _headerStyle);
+			GUILayout.Label("Bundles come from the mod folder (avatar*.bundle); NPC skins come from loaded islands (approach an island and reopen the window).", _hintStyle);
 			GUILayout.Space(4f);
 
 			var entries = AvatarCatalog.Entries;
 			if (entries == null || entries.Count == 0)
 			{
-				GUILayout.Label("Бандлы не найдены.", _hintStyle);
+				GUILayout.Label("No bundles found.", _hintStyle);
 			}
 			else
 			{
@@ -61,7 +61,7 @@ namespace SailwindCoop.Avatar
 					bool selected = string.Equals(e.FileName, current, System.StringComparison.OrdinalIgnoreCase);
 					string title = e.IsNpc ? e.DisplayName : e.FileName;
 					var label = (e.Exists ? "● " : "○ ") + title +
-								(selected ? "   ✓" : (e.Exists ? "" : (e.IsNpc ? "   (нет шаблона)" : "   (нет файла)")));
+								(selected ? "   ✓" : (e.Exists ? "" : (e.IsNpc ? "   (template missing)" : "   (file missing)")));
 					var style = selected ? _entrySelectedStyle : _entryStyle;
 					if (GUILayout.Button(label, style, GUILayout.ExpandWidth(true)))
 					{
@@ -72,8 +72,8 @@ namespace SailwindCoop.Avatar
 			}
 
 			GUILayout.FlexibleSpace();
-			GUILayout.Label("Текущий: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _hintStyle);
-			GUILayout.Label("Закрыть: " + Plugin.Cfg.AvatarSelectKey.Value, _hintStyle);
+			GUILayout.Label("Current: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _hintStyle);
+			GUILayout.Label("Close: " + Plugin.Cfg.AvatarSelectKey.Value, _hintStyle);
 
 			GUILayout.EndArea();
 		}

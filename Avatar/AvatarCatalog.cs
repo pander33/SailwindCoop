@@ -43,7 +43,7 @@ namespace SailwindCoop.Avatar
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[AvatarCatalog] Не удалось определить папку мода: " + e.Message);
+				Plugin.Logger?.LogWarning("[AvatarCatalog] Failed to determine mod folder: " + e.Message);
 				_modDir = "";
 			}
 			Scan();
@@ -73,7 +73,7 @@ namespace SailwindCoop.Avatar
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[AvatarCatalog] Ошибка сканирования папки: " + e.Message);
+				Plugin.Logger?.LogWarning("[AvatarCatalog] Folder scan error: " + e.Message);
 			}
 
 			found = found
@@ -111,12 +111,12 @@ namespace SailwindCoop.Avatar
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[AvatarCatalog] Скан NPC-скинов: " + e.Message);
+				Plugin.Logger?.LogWarning("[AvatarCatalog] NPC skin scan: " + e.Message);
 			}
 
 			_entries = found;
-			Plugin.Logger?.LogInfo("[AvatarCatalog] Найдено бандлов: " + _entries.Count(e => !e.IsNpc) +
-				", NPC-скинов: " + _entries.Count(e => e.IsNpc));
+			Plugin.Logger?.LogInfo("[AvatarCatalog] Bundles found: " + _entries.Count(e => !e.IsNpc) +
+				", NPC skins: " + _entries.Count(e => e.IsNpc));
 		}
 
 		/// <summary>Human-friendly label for any selection string (bundle file or NPC key).</summary>
@@ -125,7 +125,7 @@ namespace SailwindCoop.Avatar
 			if (string.IsNullOrEmpty(selection)) return DefaultBundleFile;
 			var e = _entries.FirstOrDefault(x => string.Equals(x.FileName, selection, StringComparison.OrdinalIgnoreCase));
 			if (e != null) return e.IsNpc ? e.DisplayName : e.FileName;
-			return NpcSkinLibrary.IsNpcKey(selection) ? "NPC (незнакомый скин)" : selection;
+			return NpcSkinLibrary.IsNpcKey(selection) ? "NPC (unknown skin)" : selection;
 		}
 
 		/// <summary>Returns the full path for a given file name, or empty string if not on disk.</summary>
@@ -157,7 +157,7 @@ namespace SailwindCoop.Avatar
 			}
 			CurrentSelection = normalized;
 			SaveSelection();
-			Plugin.Logger?.LogInfo("[AvatarCatalog] Выбор модели: " + CurrentSelection);
+			Plugin.Logger?.LogInfo("[AvatarCatalog] Model selection: " + CurrentSelection);
 			try { OnSelectionChanged?.Invoke(CurrentSelection); }
 			catch (Exception e) { Plugin.Logger?.LogWarning("[AvatarCatalog] OnSelectionChanged: " + e.Message); }
 		}
@@ -171,11 +171,11 @@ namespace SailwindCoop.Avatar
 				if (!File.Exists(path)) { CurrentSelection = DefaultBundleFile; return; }
 				string raw = File.ReadAllText(path).Trim();
 				CurrentSelection = string.IsNullOrEmpty(raw) ? DefaultBundleFile : raw;
-				Plugin.Logger?.LogInfo("[AvatarCatalog] Загружен выбор: " + CurrentSelection);
+				Plugin.Logger?.LogInfo("[AvatarCatalog] Loaded selection: " + CurrentSelection);
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[AvatarCatalog] Не удалось прочитать выбор: " + e.Message);
+				Plugin.Logger?.LogWarning("[AvatarCatalog] Failed to read selection: " + e.Message);
 				CurrentSelection = DefaultBundleFile;
 			}
 		}
@@ -190,7 +190,7 @@ namespace SailwindCoop.Avatar
 			}
 			catch (Exception e)
 			{
-				Plugin.Logger?.LogWarning("[AvatarCatalog] Не удалось сохранить выбор: " + e.Message);
+				Plugin.Logger?.LogWarning("[AvatarCatalog] Failed to save selection: " + e.Message);
 			}
 		}
 

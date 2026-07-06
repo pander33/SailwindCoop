@@ -125,9 +125,9 @@ namespace SailwindCoop.Sync
                             e.DeliveredGoods, e.DueDay);
                         missions[e.MissionIndex] = new Mission(data);
                     }
-                    catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] миссия " + e.MissionIndex + ": " + ex.Message); }
+                    catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] mission " + e.MissionIndex + ": " + ex.Message); }
                 }
-                Plugin.Logger.LogInfo("[MissionSync] журнал зеркалирован: " + entries.Length + " миссий");
+                Plugin.Logger.LogInfo("[MissionSync] journal mirrored: " + entries.Length + " missions");
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] ApplyJournal: " + ex.Message); }
         }
@@ -159,7 +159,7 @@ namespace SailwindCoop.Sync
                     DueDay = d.dueDay,
                 },
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[MissionSync] исх accept dest=" + d.destinationPort + " good=" + d.goodPrefabIndex);
+            Plugin.Logger.LogInfo("[MissionSync] out accept dest=" + d.destinationPort + " good=" + d.goodPrefabIndex);
             return true;
         }
 
@@ -169,7 +169,7 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return false;
             if (missionIndex < 0 || missionIndex >= Slots) return false;
             _net.Broadcast(new MissionAbandonMsg { MissionIndex = (byte)missionIndex }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[MissionSync] исх abandon slot=" + missionIndex);
+            Plugin.Logger.LogInfo("[MissionSync] out abandon slot=" + missionIndex);
             return true;
         }
 
@@ -184,7 +184,7 @@ namespace SailwindCoop.Sync
                 var mission = new Mission(data);
                 PlayerMissions.AcceptMission(mission);   // host vanilla: assigns slot, spawns goods, reduces demand
                 _heartbeat = HeartbeatSeconds;           // force a journal resend next Tick
-                Plugin.Logger.LogInfo("[MissionSync] вх accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
+                Plugin.Logger.LogInfo("[MissionSync] in accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionAccept: " + ex.Message); }
         }
@@ -199,9 +199,9 @@ namespace SailwindCoop.Sync
                 {
                     PlayerMissions.AbandonMission(idx);
                     _heartbeat = HeartbeatSeconds;
-                    Plugin.Logger.LogInfo("[MissionSync] вх abandon slot=" + idx);
+                    Plugin.Logger.LogInfo("[MissionSync] in abandon slot=" + idx);
                 }
-                else Plugin.Logger.LogInfo("[MissionSync] вх abandon: пустой слот " + idx);
+                else Plugin.Logger.LogInfo("[MissionSync] in abandon: empty slot " + idx);
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionAbandon: " + ex.Message); }
         }
@@ -212,7 +212,7 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
             if (reward == null || reward.Amount <= 0 || reward.Region < 0) return;
             _net.Broadcast(reward, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[MissionSync] исх reward region=" + reward.Region + " amount=" + reward.Amount +
+            Plugin.Logger.LogInfo("[MissionSync] out reward region=" + reward.Region + " amount=" + reward.Amount +
                                   " rep=" + reward.RepAmount);
         }
 
@@ -244,7 +244,7 @@ namespace SailwindCoop.Sync
                     }
                     catch { }
                     try { MoneyNotification.instance?.PlayNotif(msg.Amount, msg.Region); } catch { }
-                    Plugin.Logger.LogInfo("[MissionSync] вх reward +" + msg.Amount + " region=" + msg.Region);
+                    Plugin.Logger.LogInfo("[MissionSync] in reward +" + msg.Amount + " region=" + msg.Region);
                     SaveGuestProfileNow("mission reward");
                 }
             }
@@ -258,7 +258,7 @@ namespace SailwindCoop.Sync
                 if (_net.Role == Role.Client && _net.State == LinkState.Connected)
                 {
                     CoopProfile.SaveFromGame();
-                    Plugin.Logger.LogInfo("[MissionSync] профиль клиента сохранён: " + reason);
+                    Plugin.Logger.LogInfo("[MissionSync] client profile saved: " + reason);
                 }
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] SaveGuestProfileNow: " + ex.Message); }
@@ -303,7 +303,7 @@ namespace SailwindCoop.Sync
             bool buyGood = TryPatchEconomy(harmony, "BuyGood", nameof(PostEconomyChanged));
             bool sellGood = TryPatchEconomy(harmony, "SellGood", nameof(PostEconomyChanged));
             bool receipt = TryPatchEconomy(harmony, "PrintReceipt", nameof(PostEconomyChanged));
-            Plugin.Logger.LogInfo("[MissionPatches] Патч миссий: DeliverGood=" + deliver + ", Accept=" + accept +
+            Plugin.Logger.LogInfo("[MissionPatches] Mission patch: DeliverGood=" + deliver + ", Accept=" + accept +
                                   ", Abandon=" + abandon + ", BuyGood=" + buyGood + ", SellGood=" + sellGood +
                                   ", PrintReceipt=" + receipt);
         }

@@ -93,13 +93,13 @@ namespace SailwindCoop.Runtime
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
             try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); OceanPatches.Apply(_harmony); }
-            catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Не удалось применить Harmony-патчи: " + e); }
+            catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
 
             Net.OnAccepted += ack =>
-                Plugin.Logger.LogInfo("[Coop] Подключение принято, NetId=" + ack.AssignedNetId);
+                Plugin.Logger.LogInfo("[Coop] Connection accepted, NetId=" + ack.AssignedNetId);
             Net.OnClientReady += s =>
             {
-                Plugin.Logger.LogInfo("[Coop] Клиент готов: " + s.PlayerName +
+                Plugin.Logger.LogInfo("[Coop] Client ready: " + s.PlayerName +
                                       ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
                 // Remember the bundle file this client wants; used when their first PlayerState arrives.
                 Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
@@ -272,8 +272,8 @@ namespace SailwindCoop.Runtime
                     if (Net.Role == Role.Host)
                     {
                         uint netId = Net.PlayerNetIdForPeer(fromPeer);
-                        Plugin.Logger.LogInfo("[Coop] Клиент NetId=" + netId + " загрузил мир: " +
-                                              (((ClientWorldLoadedMsg)msg).Ok ? "успешно" : "с ошибкой"));
+                        Plugin.Logger.LogInfo("[Coop] Client NetId=" + netId + " loaded world: " +
+                                              (((ClientWorldLoadedMsg)msg).Ok ? "ok" : "with error"));
                         Pause.Release(netId);
                     }
                     break;
@@ -291,8 +291,8 @@ namespace SailwindCoop.Runtime
             {
                 // Without a loaded world SaveSlots.currentSlot points at an arbitrary slot —
                 // never stream that to a client.
-                Plugin.Logger.LogError("[Coop] Хост не в игре (сейв не загружен) — мир клиенту не отправлен. " +
-                                       "Сначала загрузите сейв, потом принимайте клиентов.");
+                Plugin.Logger.LogError("[Coop] Host is not in-game (save not loaded) - world was not sent to client. " +
+                                       "Load a save before accepting clients.");
                 Pause.Release(netId);
                 yield break;
             }
@@ -311,7 +311,7 @@ namespace SailwindCoop.Runtime
                         try { SaveLoadManager.instance.SaveGame(compressed: true); }
                         catch (System.Exception e)
                         {
-                            Plugin.Logger.LogWarning("[Coop] Принудительное сохранение хоста не удалось: " + e.Message);
+                            Plugin.Logger.LogWarning("[Coop] Forced host save failed: " + e.Message);
                             break;
                         }
                         started = SaveTransferSync.HostSaveBusy();
@@ -328,21 +328,21 @@ namespace SailwindCoop.Runtime
                 }
                 else
                 {
-                    Plugin.Logger.LogWarning("[Coop] Не дождался окна для свежего сейва — " +
-                                             "клиенту уйдёт последний сейв с диска");
+                    Plugin.Logger.LogWarning("[Coop] Timed out waiting for a fresh save window - " +
+                                             "client will receive the last save from disk");
                 }
             }
 
             byte[] bytes = SaveTransferSync.ReadHostSaveBytes();
             if (bytes == null)
             {
-                Plugin.Logger.LogError("[Coop] Нет сейва хоста для отправки клиенту");
+                Plugin.Logger.LogError("[Coop] No host save available to send to client");
                 Pause.Release(netId);
                 yield break;
             }
             if (peer == null || peer.ConnectionState != LiteNetLib.ConnectionState.Connected)
             {
-                Plugin.Logger.LogWarning("[Coop] Клиент отключился до отправки сейва");
+                Plugin.Logger.LogWarning("[Coop] Client disconnected before save transfer");
                 Pause.Release(netId);
                 yield break;
             }
@@ -399,12 +399,12 @@ namespace SailwindCoop.Runtime
                 if (CoopProfile.SaveFromGame())
                 {
                     _clientProfileSavedOnShutdown = true;
-                    Plugin.Logger.LogInfo("[Coop] Профиль клиента сохранён перед остановкой сессии: " + reason);
+                    Plugin.Logger.LogInfo("[Coop] Client profile saved before session stop: " + reason);
                 }
             }
             catch (System.Exception e)
             {
-                Plugin.Logger.LogWarning("[Coop] Не удалось сохранить профиль клиента перед остановкой: " + e.Message);
+                Plugin.Logger.LogWarning("[Coop] Failed to save client profile before stop: " + e.Message);
             }
         }
 
@@ -435,20 +435,20 @@ namespace SailwindCoop.Runtime
 
             if (Input.GetKeyDown(cfg.HostKey.Value))
             {
-                Plugin.Logger.LogInfo("[Coop] Старт хоста по хоткею");
+                Plugin.Logger.LogInfo("[Coop] Starting host via hotkey");
                 Net.StartHost(cfg.Port.Value);
             }
 
             if (Input.GetKeyDown(cfg.JoinKey.Value))
             {
-                Plugin.Logger.LogInfo("[Coop] Подключение по хоткею к " + cfg.JoinIp.Value);
+                Plugin.Logger.LogInfo("[Coop] Joining via hotkey to " + cfg.JoinIp.Value);
                 _clientProfileSavedOnShutdown = false;
                 Net.StartClient(cfg.JoinIp.Value, cfg.Port.Value);
             }
 
             if (Input.GetKeyDown(cfg.DisconnectKey.Value))
             {
-                Plugin.Logger.LogInfo("[Coop] Отключение по хоткею");
+                Plugin.Logger.LogInfo("[Coop] Disconnect via hotkey");
                 // Persist the guest's character before tearing the session down, so its money/reputation survive.
                 SaveClientProfileBeforeStop("disconnect");
                 SaveTransfer.Reset();

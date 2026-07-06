@@ -58,7 +58,7 @@ namespace SailwindCoop.Sync
         {
             if (peer == null || bytes == null || bytes.Length == 0)
             {
-                Plugin.Logger.LogWarning("[SaveTransfer] Нечего отправлять клиенту (пустой сейв)");
+                Plugin.Logger.LogWarning("[SaveTransfer] Nothing to send to client (empty save)");
                 return;
             }
 
@@ -80,8 +80,8 @@ namespace SailwindCoop.Sync
             }
 
             peer.Send(new SaveSnapshotEndMsg { Ok = true }, DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[SaveTransfer] Отправлен сейв хоста клиенту: " + bytes.Length +
-                                  " байт в " + count + " чанках");
+            Plugin.Logger.LogInfo("[SaveTransfer] Sent host save to client: " + bytes.Length +
+                                  " bytes in " + count + " chunks");
         }
 
         /// <summary>Reads the host's current save file bytes (the world the client will join).</summary>
@@ -92,14 +92,14 @@ namespace SailwindCoop.Sync
                 string path = SaveSlots.GetCurrentSavePath();
                 if (!File.Exists(path))
                 {
-                    Plugin.Logger.LogWarning("[SaveTransfer] Файл сейва хоста не найден: " + path);
+                    Plugin.Logger.LogWarning("[SaveTransfer] Host save file not found: " + path);
                     return null;
                 }
                 return File.ReadAllBytes(path);
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogError("[SaveTransfer] Не удалось прочитать сейв хоста: " + e);
+                Plugin.Logger.LogError("[SaveTransfer] Failed to read host save: " + e);
                 return null;
             }
         }
@@ -145,8 +145,8 @@ namespace SailwindCoop.Sync
             _chunks = new byte[_expectedChunks][];
             _receivedChunks = 0;
             _receiving = true;
-            Plugin.Logger.LogInfo("[SaveTransfer] Приём сейва хоста: " + _totalBytes + " байт, " +
-                                  _expectedChunks + " чанков (gameVersion=" + _hostGameVersion + ")");
+            Plugin.Logger.LogInfo("[SaveTransfer] Receiving host save: " + _totalBytes + " bytes, " +
+                                  _expectedChunks + " chunks (gameVersion=" + _hostGameVersion + ")");
         }
 
         public void OnChunk(SaveSnapshotChunkMsg msg)
@@ -166,8 +166,8 @@ namespace SailwindCoop.Sync
             {
                 if (_receivedChunks != _expectedChunks)
                 {
-                    Plugin.Logger.LogError("[SaveTransfer] Получено " + _receivedChunks + "/" +
-                                           _expectedChunks + " чанков — приём сорван");
+                    Plugin.Logger.LogError("[SaveTransfer] Received " + _receivedChunks + "/" +
+                                           _expectedChunks + " chunks - receive aborted");
                     NotifyHostLoaded(false);
                     return;
                 }
@@ -175,7 +175,7 @@ namespace SailwindCoop.Sync
                 byte[] bytes = Assemble();
                 if (bytes == null || bytes.Length != _totalBytes)
                 {
-                    Plugin.Logger.LogError("[SaveTransfer] Размер собранного сейва не совпадает (" +
+                    Plugin.Logger.LogError("[SaveTransfer] Assembled save size mismatch (" +
                                            (bytes?.Length ?? 0) + " != " + _totalBytes + ")");
                     NotifyHostLoaded(false);
                     return;
@@ -185,7 +185,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogError("[SaveTransfer] Ошибка применения сейва хоста: " + e);
+                Plugin.Logger.LogError("[SaveTransfer] Failed to apply host save: " + e);
                 NotifyHostLoaded(false);
             }
             finally
@@ -199,7 +199,7 @@ namespace SailwindCoop.Sync
         private void NotifyHostLoaded(bool ok)
         {
             try { _net.Broadcast(new ClientWorldLoadedMsg { Ok = ok }, DeliveryMethod.ReliableOrdered); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[SaveTransfer] ClientWorldLoaded не отправлен: " + e.Message); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[SaveTransfer] ClientWorldLoaded not sent: " + e.Message); }
         }
 
         private byte[] Assemble()
@@ -234,13 +234,13 @@ namespace SailwindCoop.Sync
             {
                 new BinaryFormatter().Serialize(fs, host);
             }
-            Plugin.Logger.LogInfo("[SaveTransfer] Merged-сейв записан в слот " + slot + ": " + path);
+            Plugin.Logger.LogInfo("[SaveTransfer] Merged save written to slot " + slot + ": " + path);
 
             TriggerLoad(slot);
         }
 
         /// <summary>Drives the game's own load path so player controller, blackout and flags are set up
-        /// exactly like a normal "Continue". Requires being at the title screen (<c>StartMenu</c>):
+        /// exactly like a normal "lontinue". Requires being at the title screen (<c>StartMenu</c>):
         /// the menu silently ignores clicks while its fade animations play (<c>animsPlaying</c>), so the
         /// click is retried until the game's load coroutine actually starts (<c>GameState.currentlyLoading</c>).</summary>
         private void TriggerLoad(int slot)
@@ -248,7 +248,7 @@ namespace SailwindCoop.Sync
             var runner = CoopBehaviour.Instance;
             if (runner == null)
             {
-                Plugin.Logger.LogError("[SaveTransfer] Нет CoopBehaviour — загрузку запустить некому");
+                Plugin.Logger.LogError("[SaveTransfer] No CoopBehaviour - nothing can start the load");
                 NotifyHostLoaded(false);
                 return;
             }
@@ -260,8 +260,8 @@ namespace SailwindCoop.Sync
             if (GameState.playing || GameState.currentlyLoading)
             {
                 // Loading a save over an already-loaded world duplicates every saved prefab — refuse.
-                Plugin.Logger.LogError("[SaveTransfer] Клиент уже в игре — мир хоста не загружен. " +
-                                       "Выйдите в главное меню и подключитесь заново.");
+                Plugin.Logger.LogError("[SaveTransfer] Client is already in-game - host world was not loaded. " +
+                                       "Return to the main menu and reconnect.");
                 NotifyHostLoaded(false);
                 yield break;
             }
@@ -276,8 +276,8 @@ namespace SailwindCoop.Sync
             {
                 if (t >= 10f)
                 {
-                    Plugin.Logger.LogError("[SaveTransfer] Не удалось запустить загрузку мира хоста за 10 с " +
-                                           "(StartMenu занят или недоступен)");
+                    Plugin.Logger.LogError("[SaveTransfer] Failed to start host world load within 10 s " +
+                                           "(StartMenu busy or unavailable)");
                     NotifyHostLoaded(false);
                     yield break;
                 }
@@ -300,7 +300,7 @@ namespace SailwindCoop.Sync
 
                 yield return null;
             }
-            Plugin.Logger.LogInfo("[SaveTransfer] Запущена загрузка мира хоста через меню (слот " + slot + ")");
+            Plugin.Logger.LogInfo("[SaveTransfer] Started host world load through menu (slot " + slot + ")");
 
             // The load itself takes a few seconds (blackout + LoadGame); report once the world is up.
             for (float t = 0f; !GameState.playing && t < 60f; t += Time.unscaledDeltaTime)
@@ -310,7 +310,7 @@ namespace SailwindCoop.Sync
             if (GameState.playing)
                 OnSaveLoaded?.Invoke();
             else
-                Plugin.Logger.LogWarning("[SaveTransfer] Загрузка стартовала, но мир так и не поднялся за 60 с");
+                Plugin.Logger.LogWarning("[SaveTransfer] Load started, but the world still did not come up within 60 s");
         }
 
         private static int AnimsPlaying(FieldInfo f, StartMenu menu)

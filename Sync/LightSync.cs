@@ -83,7 +83,7 @@ namespace SailwindCoop.Sync
 
             var msg = new LightRequestMsg { Index = idx, On = IsOn(light), Health = light.health };
             _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх #" + idx + " " + (msg.On ? "on" : "off"));
+            Remember("out #" + idx + " " + (msg.On ? "on" : "off"));
         }
 
         public void OnLightRequest(LightRequestMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -94,7 +94,7 @@ namespace SailwindCoop.Sync
             if (light == null) return;
 
             Apply(light, msg.On, msg.Health);
-            Remember("вх #" + msg.Index + " " + (msg.On ? "on" : "off"));
+            Remember("in #" + msg.Index + " " + (msg.On ? "on" : "off"));
 
             _net.Broadcast(new LightStateMsg { Index = msg.Index, On = IsOn(light), Health = light.health },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -108,7 +108,7 @@ namespace SailwindCoop.Sync
             if (light == null) return;
 
             Apply(light, msg.On, msg.Health);
-            Remember("вх #" + msg.Index + " " + (msg.On ? "on" : "off"));
+            Remember("in #" + msg.Index + " " + (msg.On ? "on" : "off"));
         }
 
         private void Apply(ShipItemLight light, bool on, float health)
@@ -124,7 +124,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[LightSync] SetLight не удалось: " + e.Message);
+                Plugin.Logger.LogWarning("[LightSync] SetLight failed: " + e.Message);
             }
         }
 
@@ -188,7 +188,7 @@ namespace SailwindCoop.Sync
         {
             bool alt = TryPatch(harmony, "OnAltActivate", Type.EmptyTypes, nameof(PostLightChanged));
             bool item = TryPatch(harmony, "OnItemClick", new[] { typeof(PickupableItem) }, nameof(PostLightChanged));
-            Plugin.Logger.LogInfo("[LightPatches] Патчи света: Alt=" + alt + ", ItemClick=" + item);
+            Plugin.Logger.LogInfo("[LightPatches] Light patches: Alt=" + alt + ", ItemClick=" + item);
         }
 
         private static bool TryPatch(Harmony harmony, string method, Type[] args, string postfixName)

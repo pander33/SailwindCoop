@@ -28,16 +28,16 @@ namespace SailwindCoop
             Cfg = new CoopConfig(Config);
             Avatar.AvatarCatalog.Initialize();
 
-            Logger.LogInfo("Sailwind LAN Co-op " + Version + " загружается...");
+            Logger.LogInfo("Sailwind LAN Co-op " + Version + " loading...");
 
             var go = new GameObject("SailwindCoop");
             DontDestroyOnLoad(go);
             go.hideFlags = HideFlags.HideAndDontSave;
             go.AddComponent<Runtime.CoopBehaviour>();
 
-            Logger.LogInfo("Sailwind LAN Co-op готов. " +
+            Logger.LogInfo("Sailwind LAN Co-op ready. " +
                            "Host: " + Cfg.HostKey.Value + ", Join: " + Cfg.JoinKey.Value +
-                           ", оверлей: " + Cfg.OverlayKey.Value);
+                           ", overlay: " + Cfg.OverlayKey.Value);
         }
     }
 
@@ -80,35 +80,35 @@ namespace SailwindCoop
 
         public CoopConfig(ConfigFile c)
         {
-            Port = c.Bind("Network", "Port", 7777, "UDP-порт хоста.");
-            ListenIp = c.Bind("Network", "ListenIp", "0.0.0.0", "IP/интерфейс, который слушает хост (0.0.0.0 = все интерфейсы). Применяется при старте хоста: конкретный адрес = принимать подключения только на нём.");
-            JoinIp = c.Bind("Network", "JoinIp", "127.0.0.1", "IP хоста для подключения клиентом.");
-            PlayerName = c.Bind("Network", "PlayerName", "Player", "Отображаемое имя игрока.");
-            SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "Частота отправки снапшотов состояния (Гц), этап 1+.");
-            InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Задержка буфера интерполяции (мс), этап 1+.");
-            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели относительно сетевой позиции игрока. Отрицательное значение опускает модель.");
-            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.65f, "Вертикальный сдвиг визуальной bundle-модели хоста. Нужен отдельно, потому что root-поза хоста в Sailwind обычно выше клиентской.");
+            Port = c.Bind("Network", "Port", 7777, "Host UDP port.");
+            ListenIp = c.Bind("Network", "ListenIp", "0.0.0.0", "IP/interface the host listens on (0.0.0.0 = all interfaces). Applied when starting the host: a specific address accepts connections only on that interface.");
+            JoinIp = c.Bind("Network", "JoinIp", "127.0.0.1", "Host IP for the client to join.");
+            PlayerName = c.Bind("Network", "PlayerName", "Player", "Displayed player name.");
+            SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "State snapshot send rate (Hz), Stage 1+.");
+            InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Interpolation buffer delay (ms), Stage 1+.");
+            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.65f, "Vertical offset of the visual bundle model relative to the networked player position. Negative values move the model down.");
+            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.65f, "Vertical offset of the host visual bundle model. Separate because the host root pose in Sailwind is usually higher than the client pose.");
 
-            MaxClients = c.Bind("Server", "MaxClients", 4, "Максимум одновременно подключённых клиентов к хосту (1 = только один гость). Применяется при входящем подключении.");
-            DisconnectTimeoutMs = c.Bind("Server", "DisconnectTimeoutMs", 5000, "Таймаут (мс) без пакетов от пира, после которого он считается отключённым.");
-            UpdateTimeMs = c.Bind("Server", "UpdateTimeMs", 15, "Интервал внутреннего обновления сетевого менеджера (мс). Меньше = чаще опрос/отправка, выше нагрузка на CPU.");
-            PingIntervalMs = c.Bind("Server", "PingIntervalMs", 1000, "Интервал ping (мс) для оценки задержки и keepalive соединения.");
+            MaxClients = c.Bind("Server", "MaxClients", 4, "Maximum number of clients connected to the host at once (1 = single guest only). Applied on incoming connections.");
+            DisconnectTimeoutMs = c.Bind("Server", "DisconnectTimeoutMs", 5000, "Timeout (ms) without packets from a peer before it is considered disconnected.");
+            UpdateTimeMs = c.Bind("Server", "UpdateTimeMs", 15, "Internal network manager update interval (ms). Lower = more frequent polling/sending, higher CPU load.");
+            PingIntervalMs = c.Bind("Server", "PingIntervalMs", 1000, "Ping interval (ms) for latency estimation and connection keepalive.");
 
-            ConnectAttempts = c.Bind("Client", "ConnectAttempts", 10, "Сколько раз клиент пытается достучаться до хоста перед ошибкой подключения.");
-            ReconnectDelayMs = c.Bind("Client", "ReconnectDelayMs", 500, "Задержка (мс) между попытками подключения клиента к хосту.");
+            ConnectAttempts = c.Bind("Client", "ConnectAttempts", 10, "How many times the client tries to reach the host before reporting a connection error.");
+            ReconnectDelayMs = c.Bind("Client", "ReconnectDelayMs", 500, "Delay (ms) between client connection attempts.");
 
-            CoopSaveSlot = c.Bind("Save", "CoopSaveSlot", 5, "Слот сохранения (0..5), в который клиент пишет полученный мир хоста и из которого грузится. ВНИМАНИЕ: локальный сейв в этом слоте на клиенте перезаписывается. Подключаться нужно из главного меню.");
-            ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "При подключении клиента хост делает свежее сохранение, чтобы клиент получил актуальный мир (экономика/объекты/позиция). Выключите, если хотите отдавать последний автосейв без принудительного сохранения.");
-            PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "Пока клиент грузит мир хоста, мир хоста ставится на паузу (timeScale=0, как в меню настроек) — предметы/якорь/швартовы/волны у клиента совпадут со снапшотом. Пауза снимается, когда клиент отчитается о загрузке, отключится или по таймауту 120 с.");
+            CoopSaveSlot = c.Bind("Save", "CoopSaveSlot", 5, "Save slot (0..5) where the client writes the received host world and loads from it. WARNING: the local save in this slot on the client is overwritten. Join from the main menu.");
+            ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
+            PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
 
-            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "Дебаг-панель тест-сценариев (золото/спавн/репутация/мир) доступна и открывается по хоткою DebugPanel (стартует скрытой). Значение читается в рантайме — переключать доступность можно прямо в игре через BepInEx.ConfigurationManager (F1) без рестарта.");
+            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "The debug panel for test scenarios (gold/spawn/reputation/world) is available and opens with the DebugPanel hotkey (starts hidden). This value is read at runtime, so availability can be toggled in-game via BepInEx.ConfigurationManager (F1) without restarting.");
 
-            HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Запустить хост.");
-            JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Подключиться к JoinIp.");
-            DisconnectKey = c.Bind("Hotkeys", "Disconnect", KeyCode.F11, "Разорвать соединение.");
-            OverlayKey = c.Bind("Hotkeys", "Overlay", KeyCode.F8, "Показать/скрыть диагностический оверлей.");
-            DebugPanelKey = c.Bind("Hotkeys", "DebugPanel", KeyCode.F7, "Показать/скрыть дебаг-панель тест-сценариев (золото/спавн/репутация/мир).");
-            AvatarSelectKey = c.Bind("Hotkeys", "AvatarSelect", KeyCode.F6, "Показать/скрыть меню выбора модели персонажа.");
+            HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Start host.");
+            JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Join JoinIp.");
+            DisconnectKey = c.Bind("Hotkeys", "Disconnect", KeyCode.F11, "Disconnect.");
+            OverlayKey = c.Bind("Hotkeys", "Overlay", KeyCode.F8, "Show/hide diagnostic overlay.");
+            DebugPanelKey = c.Bind("Hotkeys", "DebugPanel", KeyCode.F7, "Show/hide the debug test-scenarios panel (gold/spawn/reputation/world).");
+            AvatarSelectKey = c.Bind("Hotkeys", "AvatarSelect", KeyCode.F6, "Show/hide the character model selection menu.");
         }
     }
 }

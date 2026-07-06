@@ -52,13 +52,13 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
             _net.Broadcast(new SleepStateMsg { Sleeping = sleeping }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[SleepSync] исх sleep=" + sleeping);
+            Plugin.Logger.LogInfo("[SleepSync] out sleep=" + sleeping);
         }
 
         public void OnSleepState(SleepStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
-            Plugin.Logger.LogInfo("[SleepSync] вх sleep=" + msg.Sleeping);
+            Plugin.Logger.LogInfo("[SleepSync] in sleep=" + msg.Sleeping);
             SetClientAsleep(msg.Sleeping);
         }
 
@@ -68,7 +68,7 @@ namespace SailwindCoop.Sync
             _safetyTimer += dt;
             if (_safetyTimer > MaxBlackoutSeconds)
             {
-                Plugin.Logger.LogWarning("[SleepSync] таймаут blackout — восстанавливаю управление");
+                Plugin.Logger.LogWarning("[SleepSync] blackout timeout - restoring control");
                 SetClientAsleep(false);
                 return;
             }
@@ -149,7 +149,7 @@ namespace SailwindCoop.Sync
         {
             bool fall = TryPatch(harmony, "FallAsleep", nameof(PostFallAsleep));
             bool wake = TryPatch(harmony, "WakeUp", nameof(PostWakeUp));
-            Plugin.Logger.LogInfo("[SleepPatches] Патчи сна: FallAsleep=" + fall + ", WakeUp=" + wake);
+            Plugin.Logger.LogInfo("[SleepPatches] Sleep patches: FallAsleep=" + fall + ", WakeUp=" + wake);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string postfixName)

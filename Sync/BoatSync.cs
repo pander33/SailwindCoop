@@ -167,7 +167,7 @@ namespace SailwindCoop.Sync
                     _hostBoats[idx] = hb;
                     _net.Registry.Register(hb.NetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
                     if (_firstBoatNetId == 0) _firstBoatNetId = hb.NetId;
-                    Plugin.Logger.LogInfo("[BoatSync] Лодка #" + idx + " зарегистрирована NetId=" + hb.NetId +
+                    Plugin.Logger.LogInfo("[BoatSync] Boat #" + idx + " registered NetId=" + hb.NetId +
                                           " ('" + BoatLocator.PathOf(boat) + "')");
                 }
                 else if (hb.Boat != boat)
@@ -175,7 +175,7 @@ namespace SailwindCoop.Sync
                     hb.Boat = boat;
                     hb.HaveLast = false;
                     _net.Registry.Register(hb.NetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
-                    Plugin.Logger.LogInfo("[BoatSync] Лодка #" + idx + " перепривязана ('" + BoatLocator.PathOf(boat) + "')");
+                    Plugin.Logger.LogInfo("[BoatSync] Boat #" + idx + " rebound ('" + BoatLocator.PathOf(boat) + "')");
                 }
             }
 
@@ -217,7 +217,7 @@ namespace SailwindCoop.Sync
             _net.Registry.Register(netId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
             if (_firstBoatNetId == 0) _firstBoatNetId = netId;
 
-            Plugin.Logger.LogInfo("[BoatSync] Лодка клиента #" + index + " в ведомом режиме: NetId=" + netId +
+            Plugin.Logger.LogInfo("[BoatSync] Client boat #" + index + " in slave mode: NetId=" + netId +
                                   " ('" + BoatLocator.PathOf(boat) + "'), rb=" + (cb.Rb != null) +
                                   ", physSwitcher=" + (cb.PhysSwitcher != null));
             return cb;
@@ -268,7 +268,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[BoatSync] BoatPhysicsSwitcher.paused недоступен: " + e.Message);
+                Plugin.Logger.LogWarning("[BoatSync] BoatPhysicsSwitcher.paused unavailable: " + e.Message);
             }
         }
 

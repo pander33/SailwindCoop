@@ -18,7 +18,7 @@ namespace SailwindCoop.Sync
         public static void Apply(Harmony harmony)
         {
             bool save = TryPatch(harmony, typeof(SaveLoadManager), "SaveGame", new[] { typeof(bool) }, nameof(PreSaveGame));
-            Plugin.Logger.LogInfo("[SavePatches] Патч сейва (гость не пишет мир хоста): SaveGame=" + save);
+            Plugin.Logger.LogInfo("[SavePatches] Save patch (guest does not write host world): SaveGame=" + save);
         }
 
         /// <summary>True while we are a connected guest — saving the host's world locally is suppressed.</summary>
@@ -54,7 +54,7 @@ namespace SailwindCoop.Sync
                 {
                     // Don't write the host's world to the guest's disk; persist the guest's CHARACTER instead.
                     CoopProfile.SaveFromGame();
-                    Plugin.Logger.LogInfo("[SavePatches] Мир хоста не сохранён; профиль персонажа гостя записан");
+                    Plugin.Logger.LogInfo("[SavePatches] Host world not saved; guest character profile was written");
                     return false;
                 }
             }

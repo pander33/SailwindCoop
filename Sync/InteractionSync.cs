@@ -84,7 +84,7 @@ namespace SailwindCoop.Sync
             if (self._net.Role != Role.Client || self._net.State != LinkState.Connected) return false;
             if (InteractionPolicy.Classify(btn) != InteractPolicy.HostOnly) return false;
 
-            self.Remember("блок(host-only) '" + ButtonLabel(btn) + "'");
+            self.Remember("block(host-only) '" + ButtonLabel(btn) + "'");
             return true;
         }
 
@@ -96,7 +96,7 @@ namespace SailwindCoop.Sync
             if (!IsPushButton(btn)) return false;
             if (!self.HasHeldItem()) return false;
 
-            self.RememberPush("блок held '" + ButtonLabel(btn) + "'");
+            self.RememberPush("block held '" + ButtonLabel(btn) + "'");
             return true;
         }
 
@@ -129,7 +129,7 @@ namespace SailwindCoop.Sync
             for (int i = 0; i < _buttons.Length; i++)
                 if (_buttons[i] != null) _index[_buttons[i]] = i;
 
-            Plugin.Logger.LogInfo("[InteractionSync] Корабль сменился: кнопок=" + _buttons.Length +
+            Plugin.Logger.LogInfo("[InteractionSync] Boat changed: buttons=" + _buttons.Length +
                                   (boat != null ? " ('" + boat.name + "')" : ""));
         }
 
@@ -154,7 +154,7 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new ControlEventMsg { Index = (ushort)idx, Kind = kind },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх " + kind + " #" + idx + " '" + ButtonLabel(btn) + "'");
+            Remember("out " + kind + " #" + idx + " '" + ButtonLabel(btn) + "'");
         }
 
         /// <summary>
@@ -174,7 +174,7 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new HoldRequestMsg { Index = (ushort)idx, Kind = kind, Down = down },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
+            Remember("out hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
         }
 
         // -----------------------------------------------------------------
@@ -194,7 +194,7 @@ namespace SailwindCoop.Sync
             if (IsExcluded(btn, msg.Kind)) return;   // never replay something we'd never forward
 
             string method = msg.Kind == InteractKind.AltActivate ? "OnAltActivate" : "OnActivate";
-            Remember("вх " + msg.Kind + " #" + i + " '" + ButtonLabel(btn) + "'");
+            Remember("in " + msg.Kind + " #" + i + " '" + ButtonLabel(btn) + "'");
 
             try
             {
@@ -205,7 +205,7 @@ namespace SailwindCoop.Sync
                     null, args, null);
                 if (mi == null)
                 {
-                    Plugin.Logger.LogWarning("[InteractionSync] У '" + btn.GetType().Name + "' нет " + method +
+                    Plugin.Logger.LogWarning("[InteractionSync] '" + btn.GetType().Name + "' missing " + method +
                                              (msg.Kind == InteractKind.ActivateNoArg ? "()" : "(GoPointer)"));
                     return;
                 }
@@ -214,7 +214,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[InteractionSync] Ошибка воспроизведения " + method + " на '" +
+                Plugin.Logger.LogWarning("[InteractionSync] Replay error " + method + " on '" +
                                          btn.GetType().Name + "': " + e.Message);
             }
             finally
@@ -240,7 +240,7 @@ namespace SailwindCoop.Sync
             if (btn is BilgePump)
             {
                 BoatDamageSync.Instance?.SetRemotePump(msg.Index, msg.Down, actor);
-                Remember("вх hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
+                Remember("in hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
             }
         }
 
@@ -263,7 +263,7 @@ namespace SailwindCoop.Sync
             Vector3 pos = CoordSpace.RealToLocal(msg.RealPos);
             float dt = Mathf.Clamp(msg.DeltaTime, 0.001f, 0.2f);
             body.AddForceAtPosition(msg.Force * dt, pos, ForceMode.Impulse);
-            RememberPush("вх #" + i + " '" + ButtonLabel(btn) + "'");
+            RememberPush("in #" + i + " '" + ButtonLabel(btn) + "'");
         }
 
         // -----------------------------------------------------------------
@@ -341,7 +341,7 @@ namespace SailwindCoop.Sync
                 Force = force,
                 DeltaTime = sampleDt,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            RememberPush("исх #" + idx + " '" + ButtonLabel(btn) + "'");
+            RememberPush("out #" + idx + " '" + ButtonLabel(btn) + "'");
         }
 
         private GoPointerButton ClickedButton()
@@ -539,7 +539,7 @@ namespace SailwindCoop.Sync
                 var mi = type.GetMethod("ExtraFixedUpdate", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (mi == null)
                 {
-                    Plugin.Logger.LogWarning("[InteractionPatches] У " + type.Name + " нет ExtraFixedUpdate");
+                    Plugin.Logger.LogWarning("[InteractionPatches] " + type.Name + " missing ExtraFixedUpdate");
                     return;
                 }
                 var prefix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
@@ -549,7 +549,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[InteractionPatches] Не удалось пропатчить " + type.Name +
+                Plugin.Logger.LogWarning("[InteractionPatches] Failed to patch " + type.Name +
                                          ".ExtraFixedUpdate: " + e.Message);
             }
         }
@@ -585,12 +585,12 @@ namespace SailwindCoop.Sync
                 }
                 catch (Exception e)
                 {
-                    Plugin.Logger.LogWarning("[InteractionPatches] Не удалось пропатчить " +
+                    Plugin.Logger.LogWarning("[InteractionPatches] Failed to patch " +
                                              t.Name + "." + gameMethod + ": " + e.Message);
                 }
             }
             string sig = args.Length == 0 ? "()" : "(GoPointer)";
-            Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + sig + ": пропатчено " + patched + " методов");
+            Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + sig + ": patched " + patched + " methods");
         }
 
         // The first GoPointer parameter is __0 (its name varies across overrides).

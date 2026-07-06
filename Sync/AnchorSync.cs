@@ -57,9 +57,9 @@ namespace SailwindCoop.Sync
         {
             get
             {
-                if (_anchor == null) return "нет якоря";
-                if (_net.Role == Role.Host) return _anchor.IsSet() ? "хост: уложен" : "хост: поднят";
-                return (_slaved ? "ведомый" : "—") + (ClientSet ? " уложен" : " поднят") +
+                if (_anchor == null) return "no anchor";
+                if (_net.Role == Role.Host) return _anchor.IsSet() ? "host: dropped" : "host: raised";
+                return (_slaved ? "slaved" : "—") + (ClientSet ? " dropped" : " raised") +
                        " [" + _curFrame + "]";
             }
         }
@@ -180,7 +180,7 @@ namespace SailwindCoop.Sync
                 _anchorRb.interpolation = RigidbodyInterpolation.None;
             }
             _slaved = true;
-            Plugin.Logger.LogInfo("[AnchorSync] Якорь клиента в ведомом режиме (rb=" + (_anchorRb != null) + ")");
+            Plugin.Logger.LogInfo("[AnchorSync] Client anchor in slave mode (rb=" + (_anchorRb != null) + ")");
         }
 
         private void RestoreSlaved()
@@ -216,7 +216,7 @@ namespace SailwindCoop.Sync
             {
                 if (_fBody == null) _fBody = typeof(Anchor).GetField("body", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (_fSet == null) _fSet = typeof(Anchor).GetField("set", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                Plugin.Logger.LogInfo("[AnchorSync] Якорь найден на '" + (boat != null ? boat.name : "?") + "'");
+                Plugin.Logger.LogInfo("[AnchorSync] Anchor found on '" + (boat != null ? boat.name : "?") + "'");
             }
         }
 

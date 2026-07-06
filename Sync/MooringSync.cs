@@ -45,7 +45,7 @@ namespace SailwindCoop.Sync
             get
             {
                 var ropes = _bm != null ? _bm.ropes : null;
-                if (ropes == null || ropes.Length == 0) return "нет швартов";
+                if (ropes == null || ropes.Length == 0) return "no moorings";
                 int moored = 0;
                 for (int i = 0; i < ropes.Length; i++)
                     if (ropes[i] != null && ropes[i].IsMoored()) moored++;
@@ -54,9 +54,9 @@ namespace SailwindCoop.Sync
                 {
                     long age = _net.Clock.ServerTick - _lastActionTick;
                     if (age < 0) age = 0;
-                    act = _lastAction + " " + age + "мс";
+                    act = _lastAction + " " + age + "ms";
                 }
-                return moored + "/" + ropes.Length + " пришв · " + act;
+                return moored + "/" + ropes.Length + " moored · " + act;
             }
         }
 
@@ -113,7 +113,7 @@ namespace SailwindCoop.Sync
                 int idx = IndexOf(rope);
                 if (idx < 0)
                 {
-                    Plugin.Logger.LogWarning("[MooringSync] Локальное " + kind + ": индекс троса не найден (тросов в карте=" + _ropeIndex.Count + ")");
+                    Plugin.Logger.LogWarning("[MooringSync] Local " + kind + ": rope index not found (rope count in map=" + _ropeIndex.Count + ")");
                     return;
                 }
 
@@ -124,8 +124,8 @@ namespace SailwindCoop.Sync
                     _net.Broadcast(new MooringRequestMsg { Index = (ushort)idx, Kind = kind, DockReal = dockReal, LengthSq = lengthSq },
                                    LiteNetLib.DeliveryMethod.ReliableOrdered);
 
-                Remember("исх " + kind + " #" + idx);
-                Plugin.Logger.LogInfo("[MooringSync] Локальное " + kind + " троса #" + idx + " (роль " + _net.Role + ") → отправлено");
+                Remember("out " + kind + " #" + idx);
+                Plugin.Logger.LogInfo("[MooringSync] Local " + kind + " rope #" + idx + " (role " + _net.Role + ") -> sent");
             }
             catch (Exception e)
             {
@@ -141,16 +141,16 @@ namespace SailwindCoop.Sync
         public void OnMooringState(MooringStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
-            Plugin.Logger.LogInfo("[MooringSync] Клиент получил от хоста " + msg.Kind + " троса #" + msg.Index);
-            Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "вх");
+            Plugin.Logger.LogInfo("[MooringSync] Client received from host " + msg.Kind + " rope #" + msg.Index);
+            Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in");
         }
 
         /// <summary>Host: a client's mooring request — apply authoritatively, then relay to the others.</summary>
         public void OnMooringRequest(MooringRequestMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Host) return;
-            Plugin.Logger.LogInfo("[MooringSync] Хост получил запрос " + msg.Kind + " троса #" + msg.Index);
-            Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "вх запрос");
+            Plugin.Logger.LogInfo("[MooringSync] Host received request " + msg.Kind + " rope #" + msg.Index);
+            Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in request");
 
             // Relay to the other clients so everyone converges (not back to the sender).
             _net.RelayExcept(new MooringStateMsg { Index = msg.Index, Kind = msg.Kind, DockReal = msg.DockReal, LengthSq = msg.LengthSq },
@@ -182,7 +182,7 @@ namespace SailwindCoop.Sync
                     {
                         var dock = FindDockNear(dockReal);
                         if (dock != null) rope.MoorTo(dock);
-                        else Plugin.Logger.LogWarning("[MooringSync] Причал рядом не найден для троса #" + index);
+                        else Plugin.Logger.LogWarning("[MooringSync] Nearby dock not found for rope #" + index);
                     }
                 }
                 else // Length — set the authoritative rope length + spring distance (only while moored)
@@ -199,7 +199,7 @@ namespace SailwindCoop.Sync
             finally { _applying = false; }
 
             Remember(tag + " " + kind + " #" + index);
-            Plugin.Logger.LogInfo("[MooringSync] Применено " + kind + " троса #" + index);
+            Plugin.Logger.LogInfo("[MooringSync] Applied " + kind + " rope #" + index);
         }
 
         // -----------------------------------------------------------------
@@ -284,7 +284,7 @@ namespace SailwindCoop.Sync
             bool a = TryPatch(harmony, t, "Unmoor", Type.EmptyTypes, nameof(PostUnmoor));
             bool b = TryPatch(harmony, t, "MoorTo", new[] { typeof(GPButtonDockMooring) }, nameof(PostMoorTo));
             bool c = TryPatch(harmony, t, "ChangeRopeLength", new[] { typeof(float) }, nameof(PostChangeLength));
-            Plugin.Logger.LogInfo("[MooringPatches] Патчи швартовки: Unmoor=" + a + ", MoorTo=" + b + ", ChangeRopeLength=" + c);
+            Plugin.Logger.LogInfo("[MooringPatches] Mooring patches: Unmoor=" + a + ", MoorTo=" + b + ", ChangeRopeLength=" + c);
         }
 
         private static bool TryPatch(Harmony harmony, Type t, string method, Type[] args, string postfixName)
@@ -292,7 +292,7 @@ namespace SailwindCoop.Sync
             try
             {
                 var mi = t.GetMethod(method, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, args, null);
-                if (mi == null) { Plugin.Logger.LogWarning("[MooringPatches] Не найден " + method); return false; }
+                if (mi == null) { Plugin.Logger.LogWarning("[MooringPatches] Not found " + method); return false; }
                 var postfix = new HarmonyMethod(typeof(MooringPatches).GetMethod(postfixName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic));
                 harmony.Patch(mi, postfix: postfix);
                 return true;

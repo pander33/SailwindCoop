@@ -89,7 +89,7 @@ namespace SailwindCoop.Sync
             RefreshBoat();
             if (index >= _pumps.Length)
             {
-                Plugin.Logger.LogWarning("[BoatDamageSync] Запрос помпы #" + index + ": на лодке только " + _pumps.Length);
+                Plugin.Logger.LogWarning("[BoatDamageSync] Pump request #" + index + ": boat only has " + _pumps.Length);
                 return;
             }
 
@@ -103,14 +103,14 @@ namespace SailwindCoop.Sync
             else set.Remove(index);
             if (set.Count == 0) _heldPumpsByActor.Remove(actorNetId);
 
-            RememberPump((down ? "вх down" : "вх up") + " #" + index + " p" + actorNetId);
-            Plugin.Logger.LogInfo("[BoatDamageSync] Помпа #" + index + " от игрока " + actorNetId + ": " + (down ? "зажата" : "отпущена"));
+            RememberPump((down ? "in down" : "in up") + " #" + index + " p" + actorNetId);
+            Plugin.Logger.LogInfo("[BoatDamageSync] Pump #" + index + " from player " + actorNetId + ": " + (down ? "held" : "released"));
         }
 
         public void ClearRemoteActor(uint actorNetId)
         {
             if (_heldPumpsByActor.Remove(actorNetId))
-                Plugin.Logger.LogInfo("[BoatDamageSync] Сброшены удержания помпы игрока " + actorNetId);
+                Plugin.Logger.LogInfo("[BoatDamageSync] Cleared pump holds for player " + actorNetId);
         }
 
         public void OnDamageState(BoatDamageStateMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -133,7 +133,7 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new DamageRequestMsg { Action = action, Amount = amount },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            RememberRepair("исх " + action + " +" + amount.ToString("0.000"));
+            RememberRepair("out " + action + " +" + amount.ToString("0.000"));
         }
 
         public void OnDamageRequest(DamageRequestMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -150,13 +150,13 @@ namespace SailwindCoop.Sync
                 float need = Mathf.Max(0f, _damage.hullDamage * _damage.waterUnitsCapacity - _damage.oakum);
                 float applied = Mathf.Min(amount, need);
                 if (applied > 0f) _damage.oakum += applied;
-                RememberRepair("вх пакля +" + applied.ToString("0.000"));
+                RememberRepair("in oakum +" + applied.ToString("0.000"));
             }
             else if (msg.Action == DamageAction.BailWater)
             {
                 float before = _damage.waterLevel;
                 _damage.waterLevel = Mathf.Clamp01(_damage.waterLevel - amount);
-                RememberRepair("вх вода -" + (before - _damage.waterLevel).ToString("0.000"));
+                RememberRepair("in water -" + (before - _damage.waterLevel).ToString("0.000"));
             }
 
             BroadcastSnapshot();
@@ -251,8 +251,8 @@ namespace SailwindCoop.Sync
                       ?? boat.GetComponentInChildren<BoatDamage>(true);
             _pumps = boat.GetComponentsInChildren<BilgePump>(true);
 
-            Plugin.Logger.LogInfo("[BoatDamageSync] Корабль сменился: damage=" + (_damage != null) +
-                                  ", помп=" + _pumps.Length + " ('" + boat.name + "')");
+            Plugin.Logger.LogInfo("[BoatDamageSync] Boat changed: damage=" + (_damage != null) +
+                                  ", pumps=" + _pumps.Length + " ('" + boat.name + "')");
         }
 
         private void RememberPump(string text)
@@ -297,7 +297,7 @@ namespace SailwindCoop.Sync
             bool oakumAlt = TryPatch(harmony, typeof(ShipItemOakum), "OnAltActivate", System.Type.EmptyTypes,
                 nameof(PreOakumAlt), nameof(PostOakumAlt));
 
-            Plugin.Logger.LogInfo("[BoatDamagePatches] Патчи повреждений: HullOakum=" + hull +
+            Plugin.Logger.LogInfo("[BoatDamagePatches] Damage patches: HullOakum=" + hull +
                                   ", WaterBail=" + water + ", OakumAlt=" + oakumAlt);
         }
 
@@ -308,7 +308,7 @@ namespace SailwindCoop.Sync
                 var mi = type.GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, args, null);
                 if (mi == null)
                 {
-                    Plugin.Logger.LogWarning("[BoatDamagePatches] Не найден " + type.Name + "." + method);
+                    Plugin.Logger.LogWarning("[BoatDamagePatches] Not found " + type.Name + "." + method);
                     return false;
                 }
                 var prefix = new HarmonyMethod(typeof(BoatDamagePatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));

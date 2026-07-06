@@ -32,7 +32,7 @@ namespace SailwindCoop.Sync
         {
             if (_net.State != LinkState.Connected || sceneIndex < 0) return;
             _net.Broadcast(new BoatPurchaseMsg { SceneIndex = sceneIndex }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[ShipyardSync] исх покупка лодки sceneIndex=" + sceneIndex);
+            Plugin.Logger.LogInfo("[ShipyardSync] out boat purchase sceneIndex=" + sceneIndex);
         }
 
         public void OnBoatPurchase(BoatPurchaseMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -43,7 +43,7 @@ namespace SailwindCoop.Sync
                 var objects = slm != null ? slm.GetCurrentObjects() : null;
                 if (objects == null || msg.SceneIndex < 0 || msg.SceneIndex >= objects.Length)
                 {
-                    Plugin.Logger.LogWarning("[ShipyardSync] вх покупка: нет объекта sceneIndex=" + msg.SceneIndex);
+                    Plugin.Logger.LogWarning("[ShipyardSync] in purchase: missing object sceneIndex=" + msg.SceneIndex);
                     return;
                 }
                 var so = objects[msg.SceneIndex];
@@ -51,13 +51,13 @@ namespace SailwindCoop.Sync
                 if (boat != null)
                 {
                     boat.LoadAsPurchased();   // extraSetting = true + hide for-sale UI, no money charged
-                    Plugin.Logger.LogInfo("[ShipyardSync] вх покупка лодки sceneIndex=" + msg.SceneIndex + " отмечена");
+                    Plugin.Logger.LogInfo("[ShipyardSync] in boat purchase sceneIndex=" + msg.SceneIndex + " marked");
                 }
                 else
                 {
                     // Fallback: no PurchasableBoat component — flip the flag directly so BoatLocator includes it.
                     if (so != null) so.extraSetting = true;
-                    Plugin.Logger.LogInfo("[ShipyardSync] вх покупка sceneIndex=" + msg.SceneIndex + " (extraSetting напрямую)");
+                    Plugin.Logger.LogInfo("[ShipyardSync] in purchase sceneIndex=" + msg.SceneIndex + " (extraSetting directly)");
                 }
 
                 // Host relays a client's purchase to any other clients (2-player needs nothing more).
@@ -78,7 +78,7 @@ namespace SailwindCoop.Sync
         public static void Apply(Harmony harmony)
         {
             bool buy = TryPatch(harmony);
-            Plugin.Logger.LogInfo("[ShipyardPatches] Патч покупки лодки: PurchaseBoat=" + buy);
+            Plugin.Logger.LogInfo("[ShipyardPatches] Boat purchase patch: PurchaseBoat=" + buy);
         }
 
         private static bool TryPatch(Harmony harmony)

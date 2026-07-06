@@ -285,11 +285,11 @@ namespace SailwindCoop.Sync
             // host can't resolve. OnLocalInventory(slot<0) re-authors it; the deferred Pickup follows the remap.
             if (!_hostIds.Contains(e.InstanceId))
             {
-                Remember("лок pickup (player-local, ждём авторинг) '" + item.name + "'");
+                Remember("local pickup (player-local, waiting for authoring) '" + item.name + "'");
                 return;
             }
             SendRequest(e, ItemAction.Pickup, reliable: true);
-            Remember("исх pickup #" + e.Index + " '" + item.name + "'");
+            Remember("out pickup #" + e.Index + " '" + item.name + "'");
         }
 
         public void NotifyDrop(GoPointer pointer, PickupableItem pickup, Vector3 throwVelocity)
@@ -299,7 +299,7 @@ namespace SailwindCoop.Sync
             if (item == null) return;
             if (_suppressNextDrop.Remove(item))
             {
-                Remember("лок drop suppressed '" + item.name + "'");
+                Remember("local drop suppressed '" + item.name + "'");
                 return;
             }
             RefreshItems(force: true);
@@ -353,7 +353,7 @@ namespace SailwindCoop.Sync
                 e.HolderNetId = _net.MyNetId;  // keep ApplyRemote off until the host sends the free state
                 e.Net.Clear();
                 SetPuppet(item, true);    // wait for the host's authoritative free pose
-                Remember("исх drop #" + e.Index + " '" + item.name + "' " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
+                Remember("out drop #" + e.Index + " '" + item.name + "' " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
             }
             else if (_net.Role == Role.Host)
             {
@@ -379,7 +379,7 @@ namespace SailwindCoop.Sync
                         state.Vel = WorldToFrameAxes(state.Frame, state.BoatIndex, throwVelocity);
                 }
                 _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                Remember("исх drop(host) #" + e.Index + " '" + item.name + "'");
+                Remember("out drop(host) #" + e.Index + " '" + item.name + "'");
             }
         }
 
@@ -393,14 +393,14 @@ namespace SailwindCoop.Sync
             if (msg.InstanceId == 0)
             {
                 SendManifest();
-                Remember("манифест по запросу");
+                Remember("manifest on request");
                 return;
             }
 
             var e = HostLookup(msg.InstanceId, msg.PrefabIndex);
             if (e == null || e.Item == null)
             {
-                Remember("отказ req id=" + msg.InstanceId + " prefab=" + msg.PrefabIndex);
+                Remember("reject req id=" + msg.InstanceId + " prefab=" + msg.PrefabIndex);
                 return;
             }
 
@@ -417,9 +417,9 @@ namespace SailwindCoop.Sync
                 {
                     try { ce.Item.DestroyItem(); } catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Consume destroy: " + ex.Message); }
                     RefreshItems(force: true);   // emit the despawn now
-                    Remember("вх consume #" + ce.Index + " actor=" + actor);
+                    Remember("in consume #" + ce.Index + " actor=" + actor);
                 }
-                else Remember("отказ consume id=" + msg.InstanceId);
+                else Remember("reject consume id=" + msg.InstanceId);
                 return;
             }
 
@@ -435,9 +435,9 @@ namespace SailwindCoop.Sync
                     rrod.health = msg.Health;
                     InvokeRodUpdateHook(rrod);
                     _net.Broadcast(BuildState(rodEntry, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх rod-hook #" + rodEntry.Index + " health=" + msg.Health + " actor=" + actor);
+                    Remember("in rod-hook #" + rodEntry.Index + " health=" + msg.Health + " actor=" + actor);
                 }
-                else Remember("отказ rod-hook id=" + msg.InstanceId);
+                else Remember("reject rod-hook id=" + msg.InstanceId);
                 return;
             }
 
@@ -451,9 +451,9 @@ namespace SailwindCoop.Sync
                 {
                     ne.Item.nailed = msg.Nailed;
                     _net.Broadcast(BuildState(ne, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх nail #" + ne.Index + "=" + msg.Nailed + " actor=" + actor);
+                    Remember("in nail #" + ne.Index + "=" + msg.Nailed + " actor=" + actor);
                 }
-                else Remember("отказ nail id=" + msg.InstanceId);
+                else Remember("reject nail id=" + msg.InstanceId);
                 return;
             }
 
@@ -466,9 +466,9 @@ namespace SailwindCoop.Sync
                 {
                     ApplyCrateMembership(ie.Item, msg.CrateId);
                     _net.Broadcast(BuildState(ie, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
+                    Remember("in crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
                 }
-                else Remember("отказ crate id=" + msg.InstanceId);
+                else Remember("reject crate id=" + msg.InstanceId);
                 return;
             }
 
@@ -488,9 +488,9 @@ namespace SailwindCoop.Sync
                     // broadcasts them as SpawnObject WITH their CrateId — so we deliberately don't force a
                     // refresh here, which would send them before they're marked as crate contents.
                     if (ce != null) _net.Broadcast(BuildState(ce, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх unseal crate #" + (ce != null ? ce.Index.ToString() : "?") + " actor=" + actor);
+                    Remember("in unseal crate #" + (ce != null ? ce.Index.ToString() : "?") + " actor=" + actor);
                 }
-                else Remember("отказ unseal id=" + msg.InstanceId);
+                else Remember("reject unseal id=" + msg.InstanceId);
                 return;
             }
 
@@ -520,9 +520,9 @@ namespace SailwindCoop.Sync
                                       ge.Item.amount, ge.Item.health, ge.Item.sold, ge.Item.nailed, held: true);
                     }
                     _net.Broadcast(BuildState(ge, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх cargo #" + ge.Index + "->" + msg.CargoPort + " actor=" + actor);
+                    Remember("in cargo #" + ge.Index + "->" + msg.CargoPort + " actor=" + actor);
                 }
-                else Remember("отказ cargo id=" + msg.InstanceId);
+                else Remember("reject cargo id=" + msg.InstanceId);
                 return;
             }
 
@@ -556,9 +556,9 @@ namespace SailwindCoop.Sync
                     var invState = BuildState(ie, _net.Clock.ServerTick);
                     invState.InventorySlot = ie.InventorySlot;
                     _net.Broadcast(invState, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх inventory #" + ie.Index + " slot=" + msg.InventorySlot + " actor=" + actor);
+                    Remember("in inventory #" + ie.Index + " slot=" + msg.InventorySlot + " actor=" + actor);
                 }
-                else Remember("отказ inventory id=" + msg.InstanceId);
+                else Remember("reject inventory id=" + msg.InstanceId);
                 return;
             }
 
@@ -574,14 +574,14 @@ namespace SailwindCoop.Sync
                 {
                     var afterOar = BuildState(e, _net.Clock.ServerTick);
                     _net.Broadcast(afterOar, LiteNetLib.DeliveryMethod.Unreliable);
-                    Remember("вх oar-row #" + e.Index + " actor=" + actor);
+                    Remember("in oar-row #" + e.Index + " actor=" + actor);
                     return;
                 }
 
                 ReplayHeldAction(e, msg.Action, actor);
                 var afterAction = BuildState(e, _net.Clock.ServerTick);
                 _net.Broadcast(afterAction, LiteNetLib.DeliveryMethod.Unreliable);
-                Remember("вх " + msg.Action + " #" + e.Index + " actor=" + actor);
+                Remember("in " + msg.Action + " #" + e.Index + " actor=" + actor);
                 return;
             }
 
@@ -606,9 +606,9 @@ namespace SailwindCoop.Sync
                     hookState.HolderNetId = 0;
                     hookState.Attached = true;
                     _net.Broadcast(hookState, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("вх lamp-hook #" + e.Index + " -> hook=" + msg.CrateId + " actor=" + actor);
+                    Remember("in lamp-hook #" + e.Index + " -> hook=" + msg.CrateId + " actor=" + actor);
                 }
-                else Remember("отказ lamp-hook item=" + msg.InstanceId + " hook=" + msg.CrateId);
+                else Remember("reject lamp-hook item=" + msg.InstanceId + " hook=" + msg.CrateId);
                 return;
             }
 
@@ -662,7 +662,7 @@ namespace SailwindCoop.Sync
             // instead, or the dropped item would be flung off the ship on every receiver.
             if (msg.Action == ItemAction.Drop) state.Vel = msg.Vel;
             _net.Broadcast(state, msg.Action == ItemAction.Pose ? LiteNetLib.DeliveryMethod.Unreliable : LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("вх " + msg.Action + " #" + e.Index + " actor=" + actor + " " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
+            Remember("in " + msg.Action + " #" + e.Index + " actor=" + actor + " " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
         }
 
         public void OnItemState(ItemStateMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -673,7 +673,7 @@ namespace SailwindCoop.Sync
                                   msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: msg.HolderNetId == 0);
             if (e == null || e.Item == null)
             {
-                Remember("нет item id=" + msg.InstanceId + " prefab=" + msg.PrefabIndex);
+                Remember("missing item id=" + msg.InstanceId + " prefab=" + msg.PrefabIndex);
                 return;
             }
 
@@ -698,7 +698,7 @@ namespace SailwindCoop.Sync
             if (msg.HolderNetId == _net.MyNetId)
             {
                 SetRemoteInventoryVisual(e.Item, hidden: false);
-                Remember("эхо #" + e.Index);   // my own held item echoed back; the game drives it
+                Remember("echo #" + e.Index);   // my own held item echoed back; the game drives it
                 return;
             }
 
@@ -710,7 +710,7 @@ namespace SailwindCoop.Sync
             if (prevHolder == _net.MyNetId && msg.HolderNetId == 0)
                 e.Net.Clear();
             e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
-            Remember("вх " + (msg.HolderNetId != 0 ? "held " + msg.HolderNetId : "free") + " #" + e.Index);
+            Remember("in " + (msg.HolderNetId != 0 ? "held " + msg.HolderNetId : "free") + " #" + e.Index);
         }
 
         private void SendLocalHeldPose(float dt)
@@ -872,32 +872,32 @@ namespace SailwindCoop.Sync
 
         private static void EnterRemoteInventoryHidden(ShipItem item, string reason)
         {
-            LogItemTransition("до hidden " + reason, item);
+            LogItemTransition("before hidden " + reason, item);
             EnsureWorldParentState(item); // vanilla OnEnterInventory exits boats; mirror that on remote copies
             SetRemoteInventoryVisual(item, hidden: true);
             SetPuppet(item, true);
-            LogItemTransition("после hidden " + reason, item);
+            LogItemTransition("after hidden " + reason, item);
         }
 
         private static void LeaveRemoteInventoryHidden(ShipItem item, string reason)
         {
-            LogItemTransition("до unhidden " + reason, item);
+            LogItemTransition("before unhidden " + reason, item);
             SetRemoteInventoryVisual(item, hidden: false);
-            LogItemTransition("после unhidden " + reason, item);
+            LogItemTransition("after unhidden " + reason, item);
         }
 
         private static void EnterRemoteHeldVisual(ShipItem item, string reason)
         {
-            LogItemTransition("до held " + reason, item);
+            LogItemTransition("before held " + reason, item);
             SetRemoteInventoryVisual(item, hidden: false);
             SetRootCollider(item, false);
             SetPuppet(item, true);
-            LogItemTransition("после held " + reason, item);
+            LogItemTransition("after held " + reason, item);
         }
 
         private static void EnterFreeDynamic(ShipItem item, CoordFrame frame, Vector3 vel, string reason)
         {
-            LogItemTransition("до free " + reason, item);
+            LogItemTransition("before free " + reason, item);
             if (frame == CoordFrame.World)
                 EnsureWorldParentState(item);
             SetRemoteInventoryVisual(item, hidden: false);
@@ -908,7 +908,7 @@ namespace SailwindCoop.Sync
             // static walk copy, so map the direction into that frame's axes.
             if (frame == CoordFrame.Boat) vel = BoatToProxyAxes(item, vel);
             MoveProxyToItem(item, kinematic: false, vel);
-            LogItemTransition("после free " + reason, item);
+            LogItemTransition("after free " + reason, item);
         }
 
         /// <summary>Boat-local axes -> the axes the item's physics proxy simulates in (the boat's static
@@ -1000,7 +1000,7 @@ namespace SailwindCoop.Sync
         /// nor slides; collisions stay on so other items can rest against it like in vanilla.</summary>
         private static void EnterAttachedStatic(ShipItem item, CoordFrame frame, string reason)
         {
-            LogItemTransition("до attach " + reason, item);
+            LogItemTransition("before attach " + reason, item);
             if (item != null)
             {
                 if (frame == CoordFrame.World)
@@ -1019,7 +1019,7 @@ namespace SailwindCoop.Sync
                 }
                 catch { }
             }
-            LogItemTransition("после attach " + reason, item);
+            LogItemTransition("after attach " + reason, item);
         }
 
         private static void SnapHangableToHook(ShipItem item, ShipItemLampHook hook)
@@ -1041,7 +1041,7 @@ namespace SailwindCoop.Sync
 
         private void ScheduleFreeDynamic(ShipItem item, CoordFrame frame, Vector3 vel, string reason)
         {
-            LogItemTransition("до pending-free " + reason, item);
+            LogItemTransition("before pending-free " + reason, item);
             if (item != null)
             {
                 if (frame == CoordFrame.World)
@@ -1059,7 +1059,7 @@ namespace SailwindCoop.Sync
                     Reason = reason,
                 });
             }
-            LogItemTransition("после pending-free " + reason, item);
+            LogItemTransition("after pending-free " + reason, item);
         }
 
         private static void SetRootCollider(ShipItem item, bool enabled)
@@ -1428,7 +1428,7 @@ namespace SailwindCoop.Sync
         private static void InvokeRodUpdateHook(ShipItemFishingRod rod)
         {
             try { RodUpdateHookMethod?.Invoke(rod, null); }
-            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] UpdateHook удочки: " + ex.Message); }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Fishing rod UpdateHook: " + ex.Message); }
         }
 
         // Anti-echo: set while we apply a remote crate change, so the Insert/Withdraw postfix patches
@@ -1631,7 +1631,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Не удалось привязать предмет к лодке: " + e.Message);
+                Plugin.Logger.LogWarning("[ItemSync] Failed to parent item to boat: " + e.Message);
             }
         }
 
@@ -1679,7 +1679,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Не удалось вывести предмет из лодки: " + e.Message);
+                Plugin.Logger.LogWarning("[ItemSync] Failed to unparent item from boat: " + e.Message);
             }
         }
 
@@ -1711,7 +1711,7 @@ namespace SailwindCoop.Sync
                 CargoPort = CargoPortOf(e.Item),
                 InventorySlot = e.InventorySlot,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх spawn id=" + e.InstanceId + " prefab=" + e.PrefabIndex);
+            Remember("out spawn id=" + e.InstanceId + " prefab=" + e.PrefabIndex);
         }
 
         private void BroadcastDespawn(ItemEntry e)
@@ -1720,7 +1720,7 @@ namespace SailwindCoop.Sync
             _net.Registry.Remove(e.NetId);
             _net.Broadcast(new DespawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = e.InstanceId },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх despawn id=" + e.InstanceId);
+            Remember("out despawn id=" + e.InstanceId);
         }
 
         public void OnSpawnObject(SpawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -1732,7 +1732,7 @@ namespace SailwindCoop.Sync
                                   msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: msg.HolderNetId == 0);
             if (e == null || e.Item == null)
             {
-                Remember("отказ spawn id=" + msg.InstanceId);
+                Remember("reject spawn id=" + msg.InstanceId);
                 return;
             }
             e.HolderNetId = msg.HolderNetId;
@@ -1746,7 +1746,7 @@ namespace SailwindCoop.Sync
                 ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
                 e.Net.Push(_net.Clock.ServerTick, msg.Pos, msg.Rot, msg.Vel);
             }
-            Remember("вх spawn id=" + msg.InstanceId);
+            Remember("in spawn id=" + msg.InstanceId);
         }
 
         public void OnDespawnObject(DespawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -1764,13 +1764,13 @@ namespace SailwindCoop.Sync
                     _net.Registry.Remove(claimed.NetId);
                     if (claimed.Item != null) _byItem.Remove(claimed.Item);
                 }
-                Remember("вх despawn id=" + msg.InstanceId + " (claimed -> оставляю в поясе)");
+                Remember("in despawn id=" + msg.InstanceId + " (claimed -> keeping in belt)");
                 return;
             }
 
             if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e))
             {
-                Remember("нет despawn id=" + msg.InstanceId);
+                Remember("missing despawn id=" + msg.InstanceId);
                 return;
             }
             var item = e.Item;
@@ -1783,7 +1783,7 @@ namespace SailwindCoop.Sync
                 _localHeld.Remove(item);
                 try { UnityEngine.Object.Destroy(item.gameObject); } catch { }
             }
-            Remember("вх despawn id=" + msg.InstanceId);
+            Remember("in despawn id=" + msg.InstanceId);
         }
 
         // -----------------------------------------------------------------
@@ -1814,7 +1814,7 @@ namespace SailwindCoop.Sync
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
             SendRequest(e, ItemAction.Consume, reliable: true);
-            Remember("исх consume #" + e.Index + " '" + item.name + "'");
+            Remember("out consume #" + e.Index + " '" + item.name + "'");
         }
 
         /// <summary>
@@ -1834,7 +1834,7 @@ namespace SailwindCoop.Sync
                 var msg = BuildRequest(e, ItemAction.Nail, tick);
                 msg.Nailed = target.nailed;
                 _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                Remember("исх nail #" + e.Index + "=" + target.nailed + " '" + target.name + "'");
+                Remember("out nail #" + e.Index + "=" + target.nailed + " '" + target.name + "'");
             }
             else
             {
@@ -1868,7 +1868,7 @@ namespace SailwindCoop.Sync
                                        LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
                 _net.Broadcast(BuildRequest(e, ItemAction.RodHook, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                Remember("исх rod-hook #" + e.Index + "=" + (attached ? 1 : 0));
+                Remember("out rod-hook #" + e.Index + "=" + (attached ? 1 : 0));
             }
             else
             {
@@ -1891,7 +1891,7 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client)
             {
                 _net.Broadcast(BuildRequest(e, ItemAction.Crate, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                Remember("исх crate #" + e.Index + "->" + CrateIdOf(item));
+                Remember("out crate #" + e.Index + "->" + CrateIdOf(item));
             }
             else
             {
@@ -1912,7 +1912,7 @@ namespace SailwindCoop.Sync
                 InstanceId = sv.instanceId,
                 PrefabIndex = sv.prefabIndex,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх unseal crate id=" + sv.instanceId);
+            Remember("out unseal crate id=" + sv.instanceId);
             return true;
         }
 
@@ -1948,7 +1948,7 @@ namespace SailwindCoop.Sync
                 _net.Broadcast(BuildRequest(e, ItemAction.Cargo, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
             else
                 _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх cargo #" + e.Index + " port=" + port);
+            Remember("out cargo #" + e.Index + " port=" + port);
         }
 
         /// <summary>
@@ -1972,7 +1972,7 @@ namespace SailwindCoop.Sync
             {
                 // Host belt items are player-local too; the RefreshItems diff broadcasts despawn (in) / spawn (out).
                 RefreshItems(force: true);
-                Remember("лок host belt slot=" + slot);
+                Remember("local host belt slot=" + slot);
                 return;
             }
 
@@ -1989,7 +1989,7 @@ namespace SailwindCoop.Sync
             PrepareLocalWithdrawPickup(item);
             _pendingHeldItem = item;
             NotifyClientAuthored(item);
-            Remember("исх belt->hand author '" + item.name + "'");
+            Remember("out belt->hand author '" + item.name + "'");
         }
 
         /// <summary>Client (or host) put a shared item into a personal belt slot: it becomes player-local.
@@ -2004,7 +2004,7 @@ namespace SailwindCoop.Sync
                 // Host's own belt: the RefreshItems diff already despawned it for clients. Nothing to send.
                 _localHeld.Remove(item);
                 RestoreLocalInventoryVisual(item, inInventory: true);
-                Remember("лок host claim->belt slot=" + slot);
+                Remember("local host claim->belt slot=" + slot);
                 return;
             }
 
@@ -2015,7 +2015,7 @@ namespace SailwindCoop.Sync
                 _localClaimed.Add(id);
                 _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = id, PrefabIndex = prefab },
                                LiteNetLib.DeliveryMethod.ReliableOrdered);
-                Remember("исх claim->belt id=" + id + " slot=" + slot);
+                Remember("out claim->belt id=" + id + " slot=" + slot);
             }
             _localHeld.Remove(item);
             RestoreLocalInventoryVisual(item, inInventory: true);
@@ -2057,7 +2057,7 @@ namespace SailwindCoop.Sync
             msg.Attached = true;
             msg.Vel = Vector3.zero;
             _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх lamp-hook #" + e.Index + " hook=" + hookId);
+            Remember("out lamp-hook #" + e.Index + " hook=" + hookId);
         }
 
         /// <summary>Client: vanilla changed scalars on the held item locally; make the host copy authoritative.</summary>
@@ -2081,7 +2081,7 @@ namespace SailwindCoop.Sync
                 SetPuppet(item, true);
             }
             SendRequest(e, ItemAction.State, reliable: true);
-            Remember("исх state #" + e.Index + " '" + item.name + "' " + reason +
+            Remember("out state #" + e.Index + " '" + item.name + "' " + reason +
                      " amount=" + item.amount.ToString("0.##") + " health=" + item.health.ToString("0.##"));
         }
 
@@ -2091,7 +2091,7 @@ namespace SailwindCoop.Sync
             if (!_byItem.TryGetValue(item, out var e)) return;
             _localHeld[item] = _net.MyNetId;
             SendRequest(e, action, reliable);
-            Remember("исх " + action + " #" + e.Index + " '" + item.name + "'");
+            Remember("out " + action + " #" + e.Index + " '" + item.name + "'");
         }
 
         private void ReplayHeldAction(ItemEntry e, ItemAction action, uint actor)
@@ -2113,7 +2113,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Ошибка воспроизведения " + method + " на '" +
+                Plugin.Logger.LogWarning("[ItemSync] Replay error " + method + " on '" +
                                          e.Item.GetType().Name + "': " + ex.Message);
             }
             finally
@@ -2137,13 +2137,13 @@ namespace SailwindCoop.Sync
                 var body = BoatBody(boat);
                 if (body == null)
                 {
-                    Remember("oar-row без Rigidbody boat=" + msg.BoatIndex);
+                    Remember("oar-row without Rigidbody boat=" + msg.BoatIndex);
                     return true;
                 }
 
                 if (!WireToWorld(msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, out Vector3 worldPos, out Quaternion worldRot))
                 {
-                    Remember("oar-row без позы boat=" + msg.BoatIndex);
+                    Remember("oar-row without pose boat=" + msg.BoatIndex);
                     return true;
                 }
 
@@ -2155,7 +2155,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Ошибка применения гребка веслом: " + ex.Message);
+                Plugin.Logger.LogWarning("[ItemSync] Failed to apply oar stroke: " + ex.Message);
                 return true;
             }
         }
@@ -2487,7 +2487,7 @@ namespace SailwindCoop.Sync
                         _localHeld[fr.Item] = _net.MyNetId;
                         SetPuppet(fr.Item, true);
                         SendRequest(fr, ItemAction.Pickup, reliable: true);
-                        Remember("исх belt->hand pickup id=" + instanceId);
+                        Remember("out belt->hand pickup id=" + instanceId);
                     }
                 }
                 return fr;
@@ -2586,7 +2586,7 @@ namespace SailwindCoop.Sync
                 if (old.Item != null) _byItem.Remove(old.Item);
                 _net.Registry.Remove(old.NetId);
             }
-            Remember("ремап id " + oldId + "→" + hostId + " '" + local.name + "'");
+            Remember("remap id " + oldId + "→" + hostId + " '" + local.name + "'");
         }
 
         /// <summary>Host: send a SpawnObject for every replicated item so a freshly-ready client can match/spawn.</summary>
@@ -2600,7 +2600,7 @@ namespace SailwindCoop.Sync
                 BroadcastSpawn(e);
                 n++;
             }
-            Plugin.Logger.LogInfo("[ItemSync] Манифест предметов отправлен: " + n + " шт");
+            Plugin.Logger.LogInfo("[ItemSync] Item manifest sent: " + n + " items");
         }
 
         /// <summary>Client: ask the host for the full item set (InstanceId == 0 sentinel) once we're loaded.</summary>
@@ -2609,7 +2609,7 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client) return;
             _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Pose, InstanceId = 0, PrefabIndex = 0 },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх ready-ping");
+            Remember("out ready-ping");
         }
 
         private static bool ShouldReplicate(ShipItem item)
@@ -2721,7 +2721,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Не удалось создать предмет клиента id=" +
+                Plugin.Logger.LogWarning("[ItemSync] Failed to create client item id=" +
                                          instanceId + ": " + e.Message);
                 return null;
             }
@@ -2750,7 +2750,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Не удалось убрать cached item id=" + instanceId + ": " + e.Message);
+                Plugin.Logger.LogWarning("[ItemSync] Failed to remove cached item id=" + instanceId + ": " + e.Message);
             }
         }
 
@@ -2809,7 +2809,7 @@ namespace SailwindCoop.Sync
                 Pos = pos,
                 Rot = rot,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
+            Remember("out client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
         }
 
         /// <summary>
@@ -2823,7 +2823,7 @@ namespace SailwindCoop.Sync
             if (instanceId <= 0 || prefabIndex <= 0) return;
             _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = instanceId, PrefabIndex = prefabIndex },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("исх sold(despawn) id=" + instanceId);
+            Remember("out sold(despawn) id=" + instanceId);
         }
 
         /// <summary>Host: author the item the client created; RefreshItems then broadcasts the SpawnObject.</summary>
@@ -2835,7 +2835,7 @@ namespace SailwindCoop.Sync
                 var dir = PrefabsDirectory.instance;
                 if (dir == null || dir.directory == null || msg.PrefabIndex <= 0 || msg.PrefabIndex >= dir.directory.Length)
                 {
-                    Remember("отказ fish prefab=" + msg.PrefabIndex);
+                    Remember("reject fish prefab=" + msg.PrefabIndex);
                     return;
                 }
                 var prefab = dir.directory[msg.PrefabIndex];
@@ -2846,7 +2846,7 @@ namespace SailwindCoop.Sync
                 if (msg.Frame == CoordFrame.Boat)
                 {
                     Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
-                    if (boat == null) { Remember("отказ fish boat=" + msg.BoatIndex); return; }
+                    if (boat == null) { Remember("reject fish boat=" + msg.BoatIndex); return; }
                     pos = boat.TransformPoint(msg.Pos);
                     rot = boat.rotation * msg.Rot;
                 }
@@ -2864,7 +2864,7 @@ namespace SailwindCoop.Sync
                 saveable.prefabIndex = msg.PrefabIndex;
                 saveable.RegisterToSave();   // assigns a fresh nonzero host id
                 RefreshItems(force: true);   // diff detects the new item and broadcasts SpawnObject
-                Remember("вх fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
+                Remember("in fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
             }
             catch (Exception e)
             {
@@ -2939,7 +2939,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogWarning("[ItemSync] Ошибка стрима удочки: " + ex.Message);
+                Plugin.Logger.LogWarning("[ItemSync] Fishing rod stream error: " + ex.Message);
             }
         }
 
@@ -2957,7 +2957,7 @@ namespace SailwindCoop.Sync
             {
                 r = new RodRemote();
                 _rodRemote[msg.InstanceId] = r;
-                Remember("вх rod-cast id=" + msg.InstanceId);
+                Remember("in rod-cast id=" + msg.InstanceId);
             }
             r.RealPos = msg.RealPos;
             r.Limit = msg.Limit;
@@ -3017,7 +3017,7 @@ namespace SailwindCoop.Sync
                 }
                 catch (Exception ex)
                 {
-                    Plugin.Logger.LogWarning("[ItemSync] Ошибка ведения боббера id=" + kv.Key + ": " + ex.Message);
+                    Plugin.Logger.LogWarning("[ItemSync] Bobber tracking error id=" + kv.Key + ": " + ex.Message);
                     _rodDone.Add(kv.Key);
                 }
             }
@@ -3114,7 +3114,7 @@ namespace SailwindCoop.Sync
                 prefixName: nameof(PreMarketSpawnGood), postfixName: nameof(PostMarketSpawnGood));
             bool marketSell = TryPatch(harmony, typeof(IslandMarketWarehouseArea), "SellGood", new[] { typeof(int) },
                 prefixName: nameof(PreWarehouseSellGood));
-            Plugin.Logger.LogInfo("[ItemPatches] Патчи предметов: pickup=" + pickup + ", drop=" + drop +
+            Plugin.Logger.LogInfo("[ItemPatches] Item patches: pickup=" + pickup + ", drop=" + drop +
                                   ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
                                   ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
                                   ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach + ", lampHook=" + lampHook +
@@ -3155,7 +3155,7 @@ namespace SailwindCoop.Sync
                 try { harmony.Patch(mi, postfix: postfix); patched++; }
                 catch (Exception e)
                 {
-                    Plugin.Logger.LogWarning("[ItemPatches] Не удалось пропатчить " + t.Name + "." + gameMethod + ": " + e.Message);
+                    Plugin.Logger.LogWarning("[ItemPatches] Failed to patch " + t.Name + "." + gameMethod + ": " + e.Message);
                 }
             }
             return patched;

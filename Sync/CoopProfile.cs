@@ -54,12 +54,12 @@ namespace SailwindCoop.Sync
                 {
                     new BinaryFormatter().Serialize(fs, c);
                 }
-                Plugin.Logger.LogInfo("[CoopProfile] Профиль персонажа сохранён: " + ProfilePath);
+                Plugin.Logger.LogInfo("[CoopProfile] Character profile saved: " + ProfilePath);
                 return true;
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogError("[CoopProfile] Не удалось сохранить профиль: " + e);
+                Plugin.Logger.LogError("[CoopProfile] Failed to save profile: " + e);
                 return false;
             }
         }
@@ -155,8 +155,8 @@ namespace SailwindCoop.Sync
 
             if (!Exists())
             {
-                Plugin.Logger.LogInfo("[CoopProfile] Профиль отсутствует — первая сессия (пояс хоста снят: " +
-                                      stripped + ", свой пояс пуст)");
+                Plugin.Logger.LogInfo("[CoopProfile] Profile missing - first session (host belt stripped: " +
+                                      stripped + ", own belt empty)");
                 return;
             }
 
@@ -169,12 +169,12 @@ namespace SailwindCoop.Sync
                 }
                 CopyCharacterFields(profile, host);
                 int injected = InjectPersonalBelt(profile, host);
-                Plugin.Logger.LogInfo("[CoopProfile] Профиль наложен (пояс хоста снят: " + stripped +
-                                      ", свой пояс добавлен: " + injected + ")");
+                Plugin.Logger.LogInfo("[CoopProfile] Profile applied (host belt stripped: " + stripped +
+                                      ", own belt injected: " + injected + ")");
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogError("[CoopProfile] Не удалось наложить профиль (беру персонажа хоста): " + e);
+                Plugin.Logger.LogError("[CoopProfile] Failed to apply profile (using host character): " + e);
             }
         }
 
@@ -243,7 +243,7 @@ namespace SailwindCoop.Sync
         private static void Try(string what, Action a)
         {
             try { a(); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[CoopProfile] поле '" + what + "' пропущено: " + e.Message); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[CoopProfile] field '" + what + "' skipped: " + e.Message); }
         }
     }
 }
