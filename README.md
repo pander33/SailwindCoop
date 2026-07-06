@@ -39,6 +39,8 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 
 ### 🎮 How to Play
 
+For gameplay details such as economy, missions, cargo, items, damage, mooring, anchor, sleep, and guest progress, read [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md).
+
 #### Hosting a Game (You will be the server)
 1. Launch Sailwind
 2. Load or start a save game
@@ -172,6 +174,8 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 4. Запустите игру
 
 ### 🎮 Как играть
+
+Подробное английское описание работы экономики, миссий, карго, предметов, повреждений, швартовки, якоря, сна и прогресса гостя: [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md).
 
 #### Создание сервера (Вы будете хостом)
 1. Запустите Sailwind

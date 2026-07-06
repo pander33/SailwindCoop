@@ -119,6 +119,7 @@ namespace SailwindCoop.Runtime
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
+                Items.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
                 Pause.Release(netId);
             };
