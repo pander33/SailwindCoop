@@ -132,7 +132,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 ### 🤝 Contributing
 
 Found a bug? Have a suggestion?  
-Visit: https://github.com/ruslan120p/_coop_src
+Visit: https://github.com/pander33/SailwindCoop
 
 ---
 
@@ -259,7 +259,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 ### 🤝 Участие в разработке
 
 Нашли баг? Есть предложения?  
-Посетите: https://github.com/ruslan120p/_coop_src
+Посетите: https://github.com/pander33/SailwindCoop
 
 ---
 
