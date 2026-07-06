@@ -37,6 +37,10 @@ namespace SailwindCoop.Avatar
 		private static readonly Dictionary<string, Material> _materials =
 			new Dictionary<string, Material>(StringComparer.OrdinalIgnoreCase);
 		private static GameObject _template;
+		private static float _nextScanAt;
+
+		/// <summary>Минимальный интервал между фоновыми сканами (FindObjectsOfType не бесплатен).</summary>
+		public const float ScanCooldownSec = 5f;
 
 		public static IReadOnlyList<Skin> Skins =>
 			_skins.Values.OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
@@ -52,8 +56,18 @@ namespace SailwindCoop.Avatar
 		/// при первой возможности захватить шаблон. Список только растёт за сессию —
 		/// уплывание от острова не «теряет» уже увиденные скины.
 		/// </summary>
-		public static void Scan()
+		public static void Scan() { Scan(force: true); }
+
+		/// <summary>
+		/// force=true (F6/каталог) — сканировать всегда; force=false (фоновые повторы из
+		/// PlayerSync) — не чаще, чем раз в <see cref="ScanCooldownSec"/>.
+		/// </summary>
+		public static void Scan(bool force)
 		{
+			float now = Time.realtimeSinceStartup;
+			if (!force && now < _nextScanAt) return;
+			_nextScanAt = now + ScanCooldownSec;
+
 			int before = _skins.Count;
 			try
 			{
@@ -61,6 +75,9 @@ namespace SailwindCoop.Avatar
 				foreach (var cc in found)
 				{
 					if (cc == null || cc.gameObject == null) continue;
+					// Some NPCs are baked static "combiner" bodies without a live skeleton
+					// (e.g. AlAnkh) — useless both as template and as a parts key.
+					if (!HasLiveSkinnedBody(cc.gameObject)) continue;
 					CacheMaterial(cc.mat);
 					EnsureTemplate(cc);
 
@@ -90,7 +107,11 @@ namespace SailwindCoop.Avatar
 		{
 			try
 			{
-				if (_template == null || !IsNpcKey(key)) return null;
+				if (!IsNpcKey(key)) return null;
+				// Принимающая сторона могла ни разу не сканировать (F6 не открывался) —
+				// пытаемся дозахватить шаблон прямо в момент, когда он понадобился.
+				if (_template == null) Scan(force: false);
+				if (_template == null) return null;
 				string body = key.Substring(KeyPrefix.Length);
 				int sep = body.IndexOf('|');
 				if (sep < 0) return null;
@@ -172,8 +193,20 @@ namespace SailwindCoop.Avatar
 					if (col != null) UnityEngine.Object.DestroyImmediate(col);
 				foreach (var rb in clone.GetComponentsInChildren<Rigidbody>(true))
 					if (rb != null) UnityEngine.Object.DestroyImmediate(rb);
+				// Animator — не MonoBehaviour и первым проходом не снимается. Контроллера у него
+				// нет (инертный), но applyRootMotion=true может двигать корень — сносим.
+				foreach (var an in clone.GetComponentsInChildren<Animator>(true))
+					if (an != null) UnityEngine.Object.DestroyImmediate(an);
+				// На корне NPC бывает мусорный прокси-MeshRenderer/MeshFilter (тело — skinned).
+				var mr = clone.GetComponent<MeshRenderer>();
+				if (mr != null) UnityEngine.Object.DestroyImmediate(mr);
+				var mf = clone.GetComponent<MeshFilter>();
+				if (mf != null) UnityEngine.Object.DestroyImmediate(mf);
 
-				clone.transform.localScale = Vector3.one;
+				// В сцене NPC стоит под масштабирующими родителями: Instantiate копирует только
+				// ЛОКАЛЬНЫЙ масштаб, и безродительный клон рендерится ~2x больше («12-футовый
+				// NPC»). Прибиваем к мировому (lossy) масштабу, каким NPC был на экране.
+				clone.transform.localScale = cc.transform.lossyScale;
 				_template = clone;
 				Plugin.Logger?.LogInfo("[NpcSkins] NPC template captured from '" + cc.gameObject.name + "'");
 			}
@@ -181,6 +214,19 @@ namespace SailwindCoop.Avatar
 			{
 				Plugin.Logger?.LogWarning("[NpcSkins] Failed to capture template: " + e.Message);
 			}
+		}
+
+		/// <summary>
+		/// Живое ли это модульное тело: есть включённый SkinnedMeshRenderer с мешем и нигде в
+		/// иерархии нет «combiner» (запечённый статичный NPC без рабочего скелета).
+		/// </summary>
+		private static bool HasLiveSkinnedBody(GameObject go)
+		{
+			foreach (var t in go.GetComponentsInChildren<Transform>(true))
+				if (t.name.ToLowerInvariant().Contains("combiner")) return false;
+			foreach (var smr in go.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+				if (smr.enabled && smr.sharedMesh != null) return true;
+			return false;
 		}
 
 		private static void CacheMaterial(Material mat)

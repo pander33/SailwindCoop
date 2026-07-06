@@ -42,6 +42,8 @@ namespace SailwindCoop.Sync
             public bool HasCrouchBoolParam;
             public bool HasIsCrouchingParam;
             public float VisualOffsetY;
+            public NpcLocomotionDriver NpcLoco;   // procedural gait for NPC-skin avatars (no Animator)
+            public bool NpcFitPending;            // one-time feet-on-deck fit awaiting valid bounds
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -69,6 +71,96 @@ namespace SailwindCoop.Sync
             }
         }
 
+        /// <summary>
+        /// Процедурная походка/дыхание для NPC-скина: у игровых NPC нет Animator-контроллера,
+        /// поэтому кости качаются синусоидой вручную (приём из DiamondMiner99/sailwind-coop):
+        /// каждый кадр кость сбрасывается в bind-позу и добавляется качание; ноги/руки —
+        /// противофазой по фазе шага, позвоночник — медленное «дыхание». Имена костей — Synty-риг.
+        /// </summary>
+        internal sealed class NpcLocomotionDriver : MonoBehaviour
+        {
+            /// <summary>Желаемая скорость походки, м/с (0 = стоим). Задаёт PlayerSync каждый кадр.</summary>
+            public float TargetSpeedMps;
+            public bool Ready { get; private set; }
+
+            private float _speed;
+            private float _phase;
+            private Transform _spine, _legL, _legR, _kneeL, _kneeR, _armL, _armR, _elbowL, _elbowR;
+            private Quaternion _qSpine, _qLegL, _qLegR, _qKneeL, _qKneeR, _qArmL, _qArmR, _qElbowL, _qElbowR;
+
+            public void Setup()
+            {
+                _spine = Find(transform, "Spine_01");
+                _legL = Find(transform, "UpperLeg_L"); _legR = Find(transform, "UpperLeg_R");
+                _kneeL = Find(transform, "LowerLeg_L"); _kneeR = Find(transform, "LowerLeg_R");
+                _armL = Find(transform, "Shoulder_L"); _armR = Find(transform, "Shoulder_R");
+                _elbowL = Find(transform, "Elbow_L"); _elbowR = Find(transform, "Elbow_R");
+
+                if (_spine != null) _qSpine = _spine.localRotation;
+                if (_legL != null) _qLegL = _legL.localRotation;
+                if (_legR != null) _qLegR = _legR.localRotation;
+                if (_kneeL != null) _qKneeL = _kneeL.localRotation;
+                if (_kneeR != null) _qKneeR = _kneeR.localRotation;
+                if (_armL != null) _qArmL = _armL.localRotation;
+                if (_armR != null) _qArmR = _armR.localRotation;
+                if (_elbowL != null) _qElbowL = _elbowL.localRotation;
+                if (_elbowR != null) _qElbowR = _elbowR.localRotation;
+
+                Ready = _legL != null && _legR != null; // минимум для походки — ноги
+            }
+
+            private void LateUpdate()
+            {
+                if (!Ready) return;
+
+                const float WalkFullSpeed = 1.4f;  // м/с полной амплитуды шага
+                const float StrideRadPerM = 4.2f;  // фаза шага на метр пути (каденс)
+                const float LegAmp = 28f;          // размах бедра, град
+                const float KneeAmp = 40f;         // сгиб колена (однонаправленный), град
+                const float KneePhase = 1.1f;      // сдвиг сгиба колена внутри шага, рад
+                const float ArmAmp = 22f;          // размах руки, град
+                const float ElbowAmp = 16f;        // сгиб локтя, град
+                const float BreatheAmp = 2.2f;     // «дыхание» позвоночника, град
+                const float BreatheHz = 0.22f;     // вдохов в секунду
+
+                float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+                _speed = Mathf.Lerp(_speed, TargetSpeedMps, 1f - Mathf.Exp(-8f * dt));
+                float blend = Mathf.Clamp01(_speed / WalkFullSpeed);
+                _phase = Mathf.Repeat(_phase + _speed * StrideRadPerM * dt, 2f * Mathf.PI);
+
+                float s = Mathf.Sin(_phase);
+                float sOpp = Mathf.Sin(_phase + Mathf.PI);
+
+                Swing(_legL, _qLegL, Vector3.up, LegAmp * blend * s);
+                Swing(_legR, _qLegR, Vector3.up, LegAmp * blend * sOpp);
+                Swing(_kneeL, _qKneeL, Vector3.back, KneeAmp * blend * Mathf.Max(0f, Mathf.Sin(_phase + KneePhase)));
+                Swing(_kneeR, _qKneeR, Vector3.back, KneeAmp * blend * Mathf.Max(0f, Mathf.Sin(_phase + Mathf.PI + KneePhase)));
+                Swing(_armL, _qArmL, Vector3.down, ArmAmp * blend * sOpp);
+                Swing(_armR, _qArmR, Vector3.down, ArmAmp * blend * s);
+                Swing(_elbowL, _qElbowL, Vector3.down, ElbowAmp * blend * (0.5f + 0.5f * sOpp));
+                Swing(_elbowR, _qElbowR, Vector3.down, ElbowAmp * blend * (0.5f + 0.5f * s));
+                Swing(_spine, _qSpine, Vector3.forward, Mathf.Sin(Time.time * BreatheHz * 2f * Mathf.PI) * BreatheAmp);
+            }
+
+            private static void Swing(Transform t, Quaternion bind, Vector3 axis, float deg)
+            {
+                if (t == null) return;
+                t.localRotation = bind; // сброс в bind-позу, затем добавка — без накопления
+                t.Rotate(axis, deg, Space.Self);
+            }
+
+            private static Transform Find(Transform root, string name)
+            {
+                if (root.name == name) return root;
+                for (int i = 0; i < root.childCount; i++)
+                {
+                    var r = Find(root.GetChild(i), name);
+                    if (r != null) return r;
+                }
+                return null;
+            }
+        }
+
         private sealed class AvatarVisualOffsetDriver : MonoBehaviour
         {
             public float OffsetY;
@@ -87,6 +179,10 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<string, GameObject> _prefabCache = new Dictionary<string, GameObject>();
         // netId -> bundle file name the remote player chose (default = avatar.bundle).
         private readonly Dictionary<uint, string> _remoteAvatarFile = new Dictionary<uint, string>();
+        // netId -> next retry time (realtime) for players whose NPC skin could not be built yet
+        // (no template captured) and who are temporarily shown with the fallback bundle avatar.
+        private readonly Dictionary<uint, float> _npcRetryAt = new Dictionary<uint, float>();
+        private const float NpcRetrySec = 5f;
 
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
@@ -173,6 +269,8 @@ namespace SailwindCoop.Sync
         {
             string key = ResolveBundleKey(bundleFile);
             _remoteAvatarFile[netId] = key;
+            _npcRetryAt.Remove(netId); // fresh selection restarts the build/fallback cycle
+
             if (_remotes.TryGetValue(netId, out var existing) && existing.Go != null)
             {
                 Plugin.Logger.LogInfo("[PlayerSync] AvatarChange NetId=" + netId + " -> '" + key +
@@ -325,6 +423,45 @@ namespace SailwindCoop.Sync
                 a.Net.Apply(a.Go.transform, now);
                 ApplyAvatarPolish(a);
             }
+            RetryPendingNpcSkins();
+        }
+
+        /// <summary>
+        /// Players whose chosen NPC skin could not be built at avatar-creation time (no template)
+        /// are shown with the fallback bundle avatar. Periodically re-scan for a template and,
+        /// once one is available, tear the fallback down so the next PlayerState rebuilds it
+        /// with the proper NPC skin.
+        /// </summary>
+        private void RetryPendingNpcSkins()
+        {
+            if (_npcRetryAt.Count == 0) return;
+            float now = Time.realtimeSinceStartup;
+
+            List<uint> ready = null;
+            foreach (var kv in _npcRetryAt)
+            {
+                if (now < kv.Value) continue;
+                if (ready == null) ready = new List<uint>();
+                ready.Add(kv.Key);
+            }
+            if (ready == null) return;
+
+            NpcSkinLibrary.Scan(force: false); // rate-limited inside
+            foreach (uint netId in ready)
+            {
+                if (!NpcSkinLibrary.CanBuild)
+                {
+                    _npcRetryAt[netId] = now + NpcRetrySec;
+                    continue;
+                }
+                _npcRetryAt.Remove(netId);
+                if (_remotes.TryGetValue(netId, out var a))
+                {
+                    Plugin.Logger.LogInfo("[PlayerSync] NPC template captured — rebuilding avatar NetId=" + netId);
+                    if (a.Go != null) Object.Destroy(a.Go);
+                    _remotes.Remove(netId);
+                }
+            }
         }
 
         public void RemoveRemote(uint netId)
@@ -335,6 +472,7 @@ namespace SailwindCoop.Sync
                 _remotes.Remove(netId);
             }
             _remoteAvatarFile.Remove(netId);
+            _npcRetryAt.Remove(netId);
         }
 
         public void Clear()
@@ -343,6 +481,7 @@ namespace SailwindCoop.Sync
                 if (a.Go != null) Object.Destroy(a.Go);
             _remotes.Clear();
             _remoteAvatarFile.Clear();
+            _npcRetryAt.Clear();
             _localPlayer = null;
             _localCrouching = null;
             _haveLast = false;
@@ -382,6 +521,10 @@ namespace SailwindCoop.Sync
             ApplyAnimatorParams(a);
             ApplyLookPitch(a);
             ApplyVisualOffset(a);
+
+            if (a.NpcFitPending) FitNpcBody(a);
+            if (a.NpcLoco != null)
+                a.NpcLoco.TargetSpeedMps = a.AnimMoving ? 1.4f : 0f;
 
             if (a.Head != null && !a.HeadDrivenByAnimator)
             {
@@ -583,9 +726,16 @@ namespace SailwindCoop.Sync
             if (NpcSkinLibrary.IsNpcKey(bundleFile))
             {
                 RemoteAvatar npc = TryCreateNpcAvatar(netId, bundleFile);
-                if (npc != null) return npc;
+                if (npc != null)
+                {
+                    _npcRetryAt.Remove(netId);
+                    return npc;
+                }
+                // Remember the debt: ApplyRemotes retries periodically and rebuilds the
+                // avatar with the NPC skin once a template gets captured.
+                _npcRetryAt[netId] = Time.realtimeSinceStartup + NpcRetrySec;
                 Plugin.Logger.LogWarning("[PlayerSync] NPC skin unavailable (template missing), fallback to " +
-                                         AvatarCatalog.DefaultBundleFile);
+                                         AvatarCatalog.DefaultBundleFile + "; retry scheduled");
                 bundleFile = AvatarCatalog.DefaultBundleFile;
             }
 
@@ -689,11 +839,12 @@ namespace SailwindCoop.Sync
             if (model == null) return null;
 
             var go = new GameObject("CoopPlayer_" + netId);
+            // worldPositionStays:false сохраняет локальный TRS модели — масштаб шаблона
+            // (lossyScale исходного NPC) НЕ сбрасываем в 1, иначе получится великан.
             model.transform.SetParent(go.transform, false);
             float verticalOffset = ResolveAvatarVerticalOffset(netId);
             model.transform.localPosition = new Vector3(0f, verticalOffset, 0f);
             model.transform.localRotation = Quaternion.identity;
-            model.transform.localScale = Vector3.one;
             var offsetDriver = model.AddComponent<AvatarVisualOffsetDriver>();
             offsetDriver.OffsetY = verticalOffset;
             SetLayerRecursive(go.transform, PickVisibleLayer());
@@ -703,10 +854,15 @@ namespace SailwindCoop.Sync
             Transform head = FindChildRecursive(model.transform, "Head");
             if (head == null) head = FindChildRecursive(model.transform, "Neck");
 
+            var loco = model.AddComponent<NpcLocomotionDriver>();
+            loco.Setup();
+
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Created NPC skin avatar NetId=" + netId +
                                   ", head=" + (head != null ? head.name : "none") +
-                                  ", offsetY=" + verticalOffset.ToString("F2"));
+                                  ", offsetY=" + verticalOffset.ToString("F2") +
+                                  ", scale=" + model.transform.localScale.x.ToString("F2") +
+                                  ", loco=" + loco.Ready);
             return new RemoteAvatar
             {
                 Go = go,
@@ -719,7 +875,44 @@ namespace SailwindCoop.Sync
                 // скелетной кости родитель — шея, и та же формула сворачивает шею.
                 HeadDrivenByAnimator = true,
                 VisualOffsetY = verticalOffset,
+                NpcLoco = loco,
+                NpcFitPending = true,
             };
+        }
+
+        /// <summary>
+        /// Разовая вертикальная подгонка NPC-аватара: ставим ноги (низ skinned-bounds) на ту же
+        /// локальную высоту, где у bundle-модели находится пивот (VisualOffsetY). Масштаб клона
+        /// зависит от захваченного NPC, поэтому фиксированный конфиг-оффсет сам по себе не
+        /// гарантирует ноги на палубе. Отложено до валидных bounds (первые кадры они пустые).
+        /// </summary>
+        private void FitNpcBody(RemoteAvatar a)
+        {
+            try
+            {
+                if (a.Body == null || a.Go == null) { a.NpcFitPending = false; return; }
+                var rends = a.Body.GetComponentsInChildren<Renderer>();
+                if (rends.Length == 0) { a.NpcFitPending = false; return; }
+
+                Bounds wb = rends[0].bounds;
+                for (int i = 1; i < rends.Length; i++) wb.Encapsulate(rends[i].bounds);
+                if (wb.size.y < 0.5f) return; // bounds ещё не готовы — повторим в следующем кадре
+
+                float feetLocalY = a.Go.transform.InverseTransformPoint(
+                    new Vector3(wb.center.x, wb.min.y, wb.center.z)).y;
+                float shift = a.VisualOffsetY - feetLocalY;
+                a.VisualOffsetY += shift;
+                var drv = a.Body.GetComponent<AvatarVisualOffsetDriver>();
+                if (drv != null) drv.OffsetY = a.VisualOffsetY;
+                a.NpcFitPending = false;
+                Plugin.Logger.LogInfo("[PlayerSync] NPC body fit: shift=" + shift.ToString("F2") +
+                                      ", offsetY=" + a.VisualOffsetY.ToString("F2"));
+            }
+            catch (System.Exception e)
+            {
+                a.NpcFitPending = false;
+                Plugin.Logger.LogWarning("[PlayerSync] FitNpcBody: " + e.Message);
+            }
         }
 
         private GameObject GetAvatarPrefab(string bundleFile)

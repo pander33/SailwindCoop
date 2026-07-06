@@ -357,6 +357,40 @@ namespace SailwindCoop.Net
 
             _log("[CoopNet] Client accepted: " + session.PlayerName + " -> NetId " + assigned);
             OnClientReady?.Invoke(session);
+            SendKnownAvatarsTo(peer);
+        }
+
+        /// <summary>
+        /// Host: right after accepting a client, tell it everyone's CURRENT avatar choice —
+        /// the host's own and every other connected client's. Without this a selection made
+        /// BEFORE the join never reaches the new client (Hello carries only the client's own
+        /// choice, and AvatarChange only fires on a change). Reuses the existing AvatarChange
+        /// message, so the wire format is unchanged.
+        /// </summary>
+        private void SendKnownAvatarsTo(NetPeer peer)
+        {
+            try
+            {
+                string mine = "";
+                try { mine = SailwindCoop.Avatar.AvatarCatalog.CurrentSelection; } catch { }
+                if (!string.IsNullOrWhiteSpace(mine))
+                    peer.Send(new AvatarChangeMsg { NetId = NetRegistry.HostPlayerNetId, BundleFile = mine.Trim() },
+                              DeliveryMethod.ReliableOrdered);
+
+                foreach (var s in _sessions.Values)
+                {
+                    if (!s.HandshakeDone || s.Peer == peer) continue;
+                    if (string.IsNullOrWhiteSpace(s.SelectedAvatar)) continue;
+                    peer.Send(new AvatarChangeMsg { NetId = s.PlayerNetId, BundleFile = s.SelectedAvatar },
+                              DeliveryMethod.ReliableOrdered);
+                }
+                _log("[CoopNet] Sent known avatar selections to peer " + peer.Id +
+                     " (host='" + mine + "')");
+            }
+            catch (Exception e)
+            {
+                _log("[CoopNet] SendKnownAvatarsTo: " + e.Message);
+            }
         }
 
         private RejectReason ValidateHello(HelloMsg h, out string detail)
@@ -458,7 +492,10 @@ namespace SailwindCoop.Net
                 // Forward to other clients.
                 RelayExcept(msg, peer, DeliveryMethod.ReliableOrdered);
             }
-            // Both sides: the Sync layer reads the new bundle file via OnGameMessage.
+            // Both sides: hand the message to the Sync layer so PlayerSync rebuilds the avatar.
+            // (The switch above intercepts AvatarChange before the default OnGameMessage branch,
+            // so without this explicit forward the change was never applied anywhere.)
+            OnGameMessage?.Invoke(MsgType.AvatarChange, msg, peer);
         }
 
         // -----------------------------------------------------------------
