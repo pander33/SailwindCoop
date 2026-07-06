@@ -60,6 +60,11 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 #### Overlay/Debug Info
 - Press **F8** to toggle the network diagnostics overlay
 
+#### Skin Selection
+- Press **F6** to open the skin selection menu
+- Use the menu to change your character's appearance
+- Skin changes are visible to other players in real-time
+
 ### ⚙️ Configuration
 
 Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
@@ -80,6 +85,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `Join` | F10 | Connect to server |
 | `Disconnect` | F11 | Disconnect from server |
 | `Overlay` | F8 | Toggle diagnostics overlay |
+| `SkinMenu` | F6 | Open skin selection menu |
 
 ### 🔍 Finding Your IP Address
 
@@ -206,6 +212,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `Join` | F10 | Подключиться к серверу |
 | `Disconnect` | F11 | Отключиться от сервера |
 | `Overlay` | F8 | Оверлей диагностики |
+| `SkinMenu` | F6 | Меню выбора скина |
 
 ### 🔍 Как узнать свой IP адрес
 
