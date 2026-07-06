@@ -2,6 +2,12 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.1.1] - 2026-07-06
+
+### Added
+
+- Added character skin switching through the F6 avatar selection menu.
+
 ## [0.2.0] - 2026-07-04
 
 ### Added
