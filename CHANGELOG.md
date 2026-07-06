@@ -8,7 +8,7 @@ All notable user-facing changes are documented in this file.
 
 - Added character skin switching through the F6 avatar selection menu.
 
-## [0.2.0] - 2026-07-04
+## [0.1.0] - 2026-07-04
 
 ### Added
 
@@ -43,7 +43,7 @@ All notable user-facing changes are documented in this file.
 - Client world loading now depends on the host's streamed save and overwrites the configured local co-op slot on the client.
 - All peers must use the same mod build because the protocol changed after `0.1.0`.
 
-## [0.1.0] - 2026-06-29
+## [0.0.1] - 2026-06-29
 
 ### Added
 
