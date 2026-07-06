@@ -713,6 +713,32 @@ namespace SailwindCoop.Sync
             Remember("in " + (msg.HolderNetId != 0 ? "held " + msg.HolderNetId : "free") + " #" + e.Index);
         }
 
+        public void ClearRemoteActor(uint actorNetId)
+        {
+            if (actorNetId == 0) return;
+
+            int released = 0;
+            foreach (var e in _items)
+            {
+                if (e == null || e.Item == null || e.HolderNetId != actorNetId) continue;
+
+                e.HolderNetId = 0;
+                e.InventorySlot = -1;
+                _localHeld.Remove(e.Item);
+                RestoreDisconnectedItem(e.Item);
+
+                if (_net.Role == Role.Host && _net.State == LinkState.Connected)
+                    _net.Broadcast(BuildState(e, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                released++;
+            }
+
+            if (released > 0)
+            {
+                Remember("released actor " + actorNetId + " items=" + released);
+                Plugin.Logger.LogInfo("[ItemSync] Released " + released + " item(s) held by player " + actorNetId);
+            }
+        }
+
         private void SendLocalHeldPose(float dt)
         {
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
@@ -1082,6 +1108,22 @@ namespace SailwindCoop.Sync
                 // белый куб после взаимодействия клиента).
                 if (item == null) return;
                 if (item.gameObject.layer == 2) item.gameObject.layer = 0;
+            }
+            catch { }
+        }
+
+        private static void RestoreDisconnectedItem(ShipItem item)
+        {
+            try
+            {
+                if (item == null) return;
+                item.held = null;
+                SetRemoteInventoryVisual(item, hidden: false);
+                RestoreLocalInventoryVisual(item, inInventory: false);
+                RestoreInteractableLayer(item);
+                SetRootCollider(item, true);
+                SetPuppet(item, false);
+                MoveProxyToItem(item, kinematic: false, Vector3.zero);
             }
             catch { }
         }
@@ -3027,6 +3069,10 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            foreach (var e in _items)
+                if (e != null && e.Item != null)
+                    RestoreDisconnectedItem(e.Item);
+
             // Вернуть физику бобберам удочек, которые мы вели удалённо (пока живы lookup-таблицы).
             foreach (var kv in _rodRemote)
             {
