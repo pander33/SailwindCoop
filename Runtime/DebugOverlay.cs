@@ -8,7 +8,7 @@ namespace SailwindCoop.Runtime
     /// <summary>
     /// Lightweight IMGUI diagnostics: role, link state, RTT, clock offset, peers,
     /// registry size, last error. On from Stage 0 so every later step is observable.
-    /// Toggle with the Overlay hotkey (default F8).
+    /// Toggle from the co-op menu.
     /// </summary>
     public sealed class DebugOverlay
     {
@@ -212,7 +212,7 @@ namespace SailwindCoop.Runtime
         {
             switch (s)
             {
-                case LinkState.Idle: return "idle (F9 host / F10 join)";
+                case LinkState.Idle: return "idle";
                 case LinkState.Connecting: return "connecting...";
                 case LinkState.Handshaking: return "handshaking...";
                 case LinkState.Connected: return "connected";
