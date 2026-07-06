@@ -10,7 +10,7 @@
 
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
-**Current Version:** 0.2.0  
+**Current Version:** 0.1.0  
 **Requirements:** BepInEx 5.x, Sailwind (Steam version)
 
 ### ✨ Features
@@ -136,7 +136,7 @@ Visit: [https://github.com/pander33/SailwindCoop](https://github.com/pander33/Sa
 
 Sailwind LAN Co-op — это мод, добавляющий мультиплеер в игру Sailwind. Позволяет играть с друзьями по локальной сети (LAN) или через VPN/туннелирование.
 
-**Текущая версия:** 0.2.0  
+**Текущая версия:** 0.1.0  
 **Требования:** BepInEx 5.x, Sailwind (Steam версия)
 
 ### ✨ Особенности
