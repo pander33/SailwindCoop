@@ -2,11 +2,24 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added the F8 Sailwind Co-op menu for hosting, joining, disconnecting, avatar selection, diagnostics, and debug tools.
+- Added a high-contrast dark menu backdrop/window background for readability in bright scenes and the main menu.
+
+### Changed
+
+- Replaced separate F6/F7/F8/F9/F10/F11 co-op hotkeys with menu-driven controls.
+- Moved the debug panel to the left side of the screen so it does not overlap the co-op menu.
+- The co-op menu captures cursor input while open and closes companion Avatar/Debug panels when closed.
+
 ## [0.1.1] - 2026-07-06
 
 ### Added
 
-- Added character skin switching through the F6 avatar selection menu.
+- Added character skin switching through the avatar selection menu.
 
 ## [0.1.0] - 2026-07-04
 
@@ -18,7 +31,7 @@ All notable user-facing changes are documented in this file.
 - Added wave state synchronization so client sea surface and host-authoritative boat position stay aligned.
 - Added fishing rod cast visual sync, including bobber position, line length, and rod bend.
 - Added client support for throwing, placing, hanging, loading/unloading, and inventory movement of synced items.
-- Added F7 debug tools for island teleport and expanded coordinate diagnostics in the overlay.
+- Added debug tools for island teleport and expanded coordinate diagnostics in the overlay.
 
 ### Changed
 
@@ -48,7 +61,7 @@ All notable user-facing changes are documented in this file.
 ### Added
 
 - Initial public LAN co-op release for Sailwind.
-- Host/join/disconnect hotkeys and diagnostic overlay.
+- Host/join/disconnect controls and diagnostic overlay.
 - LAN and VPN/tunneling play support through LiteNetLib UDP.
 - Host-authoritative boat, environment, controls, anchor, mooring, interaction, and player state synchronization.
 - Default remote player avatar bundle: `avatar.bundle`.

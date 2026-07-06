@@ -4,7 +4,7 @@ namespace SailwindCoop.Avatar
 {
 	/// <summary>
 	/// Minimal IMGUI panel for picking the local player's avatar bundle.
-	/// Opened/closed from <c>CoopBehaviour</c> via the AvatarSelect hotkey.
+	/// Opened/closed from the co-op menu.
 	/// The catalog scan itself lives in <see cref="AvatarCatalog"/>.
 	/// </summary>
 	public sealed class AvatarSelectUI
@@ -73,7 +73,7 @@ namespace SailwindCoop.Avatar
 
 			GUILayout.FlexibleSpace();
 			GUILayout.Label("Current: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _hintStyle);
-			GUILayout.Label("Close: " + Plugin.Cfg.AvatarSelectKey.Value, _hintStyle);
+			GUILayout.Label("Close this window from the co-op menu.", _hintStyle);
 
 			GUILayout.EndArea();
 		}

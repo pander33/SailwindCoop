@@ -7,7 +7,7 @@ using UnityEngine;
 namespace SailwindCoop.Runtime
 {
     /// <summary>
-    /// F7 — dev-only test harness. Creates hard-to-reach co-op scenarios on demand (gold,
+    /// Dev-only test harness. Creates hard-to-reach co-op scenarios on demand (gold,
     /// item spawn, reputation, time/storm/teleport) so the unverified features in
     /// <c>TEST_CHECKLIST.md</c> can be exercised without grinding to the right place/items.
     ///
@@ -49,8 +49,8 @@ namespace SailwindCoop.Runtime
             EnsureStyles();
 
             const float w = 380f, h = 820f;
-            var rect = new Rect(Screen.width - w - 12, 12, w, h);
-            GUI.Box(rect, "Debug Panel (F7) - Test Scenarios", _box);
+            var rect = new Rect(12, 12, w, h);
+            GUI.Box(rect, "Debug Panel - Test Scenarios", _box);
 
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 28, w - 20, h - 36));
 

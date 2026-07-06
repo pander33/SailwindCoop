@@ -59,7 +59,7 @@ namespace SailwindCoop.Avatar
 		public static void Scan() { Scan(force: true); }
 
 		/// <summary>
-		/// force=true (F6/каталог) — сканировать всегда; force=false (фоновые повторы из
+		/// force=true (меню аватара/каталог) — сканировать всегда; force=false (фоновые повторы из
 		/// PlayerSync) — не чаще, чем раз в <see cref="ScanCooldownSec"/>.
 		/// </summary>
 		public static void Scan(bool force)
@@ -108,7 +108,7 @@ namespace SailwindCoop.Avatar
 			try
 			{
 				if (!IsNpcKey(key)) return null;
-				// Принимающая сторона могла ни разу не сканировать (F6 не открывался) —
+				// Принимающая сторона могла ни разу не сканировать (меню аватара не открывалось) —
 				// пытаемся дозахватить шаблон прямо в момент, когда он понадобился.
 				if (_template == null) Scan(force: false);
 				if (_template == null) return null;

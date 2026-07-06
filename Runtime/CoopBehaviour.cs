@@ -9,9 +9,8 @@ namespace SailwindCoop.Runtime
 {
     /// <summary>
     /// F5 — the single MonoBehaviour that owns the network loop. Pumps
-    /// <see cref="CoopNet.PollEvents"/> on the Unity main thread, handles hotkeys
-    /// to start/stop, and hosts the diagnostic overlay. Stage 1+ Sync components
-    /// are driven from here too.
+    /// <see cref="CoopNet.PollEvents"/> on the Unity main thread, hosts the mouse
+    /// driven co-op menu, and drives Stage 1+ Sync components.
     /// </summary>
     public sealed class CoopBehaviour : MonoBehaviour
     {
@@ -40,8 +39,15 @@ namespace SailwindCoop.Runtime
         private bool _overlayVisible = true;
         private DebugPanel _debugPanel;
         private AvatarSelectUI _avatarUI;
+        private CoopMenuUI _menuUI;
         private Harmony _harmony;
         private bool _clientProfileSavedOnShutdown;
+
+        public bool OverlayVisible
+        {
+            get => _overlayVisible;
+            set => _overlayVisible = value;
+        }
 
         private void Awake()
         {
@@ -129,11 +135,14 @@ namespace SailwindCoop.Runtime
             // toggled in-game (e.g. via BepInEx.ConfigurationManager) without a restart.
             _debugPanel = new DebugPanel(Net);
             _avatarUI = new AvatarSelectUI(AvatarCatalog.CurrentSelection);
+            _menuUI = new CoopMenuUI(this, Net);
         }
 
         private void Update()
         {
-            HandleHotkeys();
+            if (Input.GetKeyDown(Plugin.Cfg.MenuKey.Value))
+                _menuUI.Toggle();
+
             Net.PollEvents();
             Pause.Tick();
             float dt = Time.deltaTime;
@@ -357,6 +366,7 @@ namespace SailwindCoop.Runtime
 
         private void OnGUI()
         {
+            if (_menuUI != null) _menuUI.Draw();
             if (_overlayVisible) _overlay.Draw();
             if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
             if (_avatarUI != null) _avatarUI.Draw();
@@ -408,67 +418,61 @@ namespace SailwindCoop.Runtime
             }
         }
 
-        private void HandleHotkeys()
+        public void ToggleAvatarMenu()
         {
-            var cfg = Plugin.Cfg;
-
-            if (Input.GetKeyDown(cfg.AvatarSelectKey.Value))
-            {
-                if (_avatarUI == null) _avatarUI = new AvatarSelectUI(AvatarCatalog.CurrentSelection);
-                _avatarUI.Visible = !_avatarUI.Visible;
-                if (_avatarUI.Visible) AvatarCatalog.Scan();   // refresh the list every time it opens
-            }
-
-            if (Input.GetKeyDown(cfg.OverlayKey.Value))
-                _overlayVisible = !_overlayVisible;
-
-            // Live gate: read the config each frame so it can be flipped in-game without a restart.
-            if (cfg.EnableDebugPanel.Value)
-            {
-                if (Input.GetKeyDown(cfg.DebugPanelKey.Value))
-                    _debugPanel.Visible = !_debugPanel.Visible;
-            }
-            else if (_debugPanel.Visible)
-            {
-                _debugPanel.Visible = false;   // disabled while open → hide; re-enable starts hidden
-            }
-
-            if (Input.GetKeyDown(cfg.HostKey.Value))
-            {
-                Plugin.Logger.LogInfo("[Coop] Starting host via hotkey");
-                Net.StartHost(cfg.Port.Value);
-            }
-
-            if (Input.GetKeyDown(cfg.JoinKey.Value))
-            {
-                Plugin.Logger.LogInfo("[Coop] Joining via hotkey to " + cfg.JoinIp.Value);
-                _clientProfileSavedOnShutdown = false;
-                Net.StartClient(cfg.JoinIp.Value, cfg.Port.Value);
-            }
-
-            if (Input.GetKeyDown(cfg.DisconnectKey.Value))
-            {
-                Plugin.Logger.LogInfo("[Coop] Disconnect via hotkey");
-                // Persist the guest's character before tearing the session down, so its money/reputation survive.
-                SaveClientProfileBeforeStop("disconnect");
-                SaveTransfer.Reset();
-                Pause.Clear();
-                Net.Stop();
-                Missions.Clear();
-                Sleep.Clear();
-                Shop.Clear();
-                WindTotem.Clear();
-                Interactions.Clear();
-                Items.Clear();
-                Lights.Clear();
-                Damage.Clear();
-                Mooring.Clear();
-                Anchor.Clear();
-                Controls.Clear();
-                Env.Clear();
-                Boats.Clear();
-                Players.Clear();
-            }
+            if (_avatarUI == null) _avatarUI = new AvatarSelectUI(AvatarCatalog.CurrentSelection);
+            _avatarUI.Visible = !_avatarUI.Visible;
+            if (_avatarUI.Visible) AvatarCatalog.Scan();
         }
+
+        public void ToggleDebugPanel()
+        {
+            if (!Plugin.Cfg.EnableDebugPanel.Value) return;
+            _debugPanel.Visible = !_debugPanel.Visible;
+        }
+
+        public void CloseCompanionMenus()
+        {
+            if (_avatarUI != null) _avatarUI.Visible = false;
+            if (_debugPanel != null) _debugPanel.Visible = false;
+        }
+
+        public void StartHostSession(int port)
+        {
+            Plugin.Logger.LogInfo("[Coop] Starting host via UI");
+            Net.StartHost(port);
+        }
+
+        public void StartClientSession(string ip, int port)
+        {
+            Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
+            _clientProfileSavedOnShutdown = false;
+            Net.StartClient(ip, port);
+        }
+
+        public void DisconnectSession(string reason)
+        {
+            Plugin.Logger.LogInfo("[Coop] Disconnect via UI: " + reason);
+            // Persist the guest's character before tearing the session down, so its money/reputation survive.
+            SaveClientProfileBeforeStop("disconnect:" + reason);
+            SaveTransfer.Reset();
+            Pause.Clear();
+            Net.Stop();
+            Missions.Clear();
+            Sleep.Clear();
+            Shop.Clear();
+            WindTotem.Clear();
+            Interactions.Clear();
+            Items.Clear();
+            Lights.Clear();
+            Damage.Clear();
+            Mooring.Clear();
+            Anchor.Clear();
+            Controls.Clear();
+            Env.Clear();
+            Boats.Clear();
+            Players.Clear();
+        }
+
     }
 }

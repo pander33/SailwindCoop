@@ -35,9 +35,7 @@ namespace SailwindCoop
             go.hideFlags = HideFlags.HideAndDontSave;
             go.AddComponent<Runtime.CoopBehaviour>();
 
-            Logger.LogInfo("Sailwind LAN Co-op ready. " +
-                           "Host: " + Cfg.HostKey.Value + ", Join: " + Cfg.JoinKey.Value +
-                           ", overlay: " + Cfg.OverlayKey.Value);
+            Logger.LogInfo("Sailwind LAN Co-op ready. Use the in-game Co-op menu.");
         }
     }
 
@@ -70,13 +68,7 @@ namespace SailwindCoop
 
         // Debug.
         public readonly ConfigEntry<bool> EnableDebugPanel;
-
-        public readonly ConfigEntry<KeyCode> HostKey;
-        public readonly ConfigEntry<KeyCode> JoinKey;
-        public readonly ConfigEntry<KeyCode> DisconnectKey;
-        public readonly ConfigEntry<KeyCode> OverlayKey;
-        public readonly ConfigEntry<KeyCode> DebugPanelKey;
-        public readonly ConfigEntry<KeyCode> AvatarSelectKey;
+        public readonly ConfigEntry<KeyCode> MenuKey;
 
         public CoopConfig(ConfigFile c)
         {
@@ -101,14 +93,8 @@ namespace SailwindCoop
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
             PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
 
-            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "The debug panel for test scenarios (gold/spawn/reputation/world) is available and opens with the DebugPanel hotkey (starts hidden). This value is read at runtime, so availability can be toggled in-game via BepInEx.ConfigurationManager (F1) without restarting.");
-
-            HostKey = c.Bind("Hotkeys", "Host", KeyCode.F9, "Start host.");
-            JoinKey = c.Bind("Hotkeys", "Join", KeyCode.F10, "Join JoinIp.");
-            DisconnectKey = c.Bind("Hotkeys", "Disconnect", KeyCode.F11, "Disconnect.");
-            OverlayKey = c.Bind("Hotkeys", "Overlay", KeyCode.F8, "Show/hide diagnostic overlay.");
-            DebugPanelKey = c.Bind("Hotkeys", "DebugPanel", KeyCode.F7, "Show/hide the debug test-scenarios panel (gold/spawn/reputation/world).");
-            AvatarSelectKey = c.Bind("Hotkeys", "AvatarSelect", KeyCode.F6, "Show/hide the character model selection menu.");
+            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "The debug panel for test scenarios (gold/spawn/reputation/world) is available from the co-op menu.");
+            MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
         }
     }
 }
