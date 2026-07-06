@@ -578,6 +578,17 @@ namespace SailwindCoop.Sync
 
         private RemoteAvatar TryCreateBundledAvatar(uint netId, string bundleFile)
         {
+            // NPC-скин: строится из клона игрового NPC, а не из бандла. При неудаче
+            // (шаблон ещё не захвачен — остров с NPC не подгружался) — обычный fallback.
+            if (NpcSkinLibrary.IsNpcKey(bundleFile))
+            {
+                RemoteAvatar npc = TryCreateNpcAvatar(netId, bundleFile);
+                if (npc != null) return npc;
+                Plugin.Logger.LogWarning("[PlayerSync] NPC-скин недоступен (нет шаблона), fallback на " +
+                                         AvatarCatalog.DefaultBundleFile);
+                bundleFile = AvatarCatalog.DefaultBundleFile;
+            }
+
             GameObject prefab = GetAvatarPrefab(bundleFile);
             if (prefab == null) return null;
 
@@ -661,6 +672,52 @@ namespace SailwindCoop.Sync
                 HasCrouchFloatParam = hasCrouchFloat,
                 HasCrouchBoolParam = hasCrouchBool,
                 HasIsCrouchingParam = hasIsCrouching,
+                VisualOffsetY = verticalOffset,
+            };
+        }
+
+        /// <summary>
+        /// Аватар из NPC-скина. Модель — клон игрового NPC (кости в естественной позе),
+        /// без Animator: ходьба не анимируется, но голова следит за взглядом через
+        /// обычный не-аниматорный путь (HeadDrivenByAnimator=false). AvatarPoseDriver
+        /// сюда НЕ ставим: без Animator, переписывающего кости каждый кадр, его
+        /// аддитивный поворот в LateUpdate накапливался бы бесконечно.
+        /// </summary>
+        private RemoteAvatar TryCreateNpcAvatar(uint netId, string key)
+        {
+            GameObject model = NpcSkinLibrary.BuildModel(key);
+            if (model == null) return null;
+
+            var go = new GameObject("CoopPlayer_" + netId);
+            model.transform.SetParent(go.transform, false);
+            float verticalOffset = ResolveAvatarVerticalOffset(netId);
+            model.transform.localPosition = new Vector3(0f, verticalOffset, 0f);
+            model.transform.localRotation = Quaternion.identity;
+            model.transform.localScale = Vector3.one;
+            var offsetDriver = model.AddComponent<AvatarVisualOffsetDriver>();
+            offsetDriver.OffsetY = verticalOffset;
+            SetLayerRecursive(go.transform, PickVisibleLayer());
+            StripColliders(go);
+            StripRigidbodies(go);
+
+            Transform head = FindChildRecursive(model.transform, "Head");
+            if (head == null) head = FindChildRecursive(model.transform, "Neck");
+
+            Object.DontDestroyOnLoad(go);
+            Plugin.Logger.LogInfo("[PlayerSync] Создан NPC-скин аватар NetId=" + netId +
+                                  ", head=" + (head != null ? head.name : "нет") +
+                                  ", offsetY=" + verticalOffset.ToString("F2"));
+            return new RemoteAvatar
+            {
+                Go = go,
+                Body = model.transform,
+                Head = head,
+                Animator = null,
+                PoseDriver = null,
+                // Не даём ApplyAvatarPolish крутить кость головы: формула локального
+                // поворота рассчитана на голову-примитив (прямой ребёнок корня), а у
+                // скелетной кости родитель — шея, и та же формула сворачивает шею.
+                HeadDrivenByAnimator = true,
                 VisualOffsetY = verticalOffset,
             };
         }

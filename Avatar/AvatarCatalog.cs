@@ -20,10 +20,11 @@ namespace SailwindCoop.Avatar
 
 		public sealed class Entry
 		{
-			public string FileName;        // e.g. "avatar1.bundle"
+			public string FileName;        // e.g. "avatar1.bundle", or an "npc:..." skin key
 			public string DisplayName;     // human-friendly label
-			public string FullPath;        // absolute path on disk
-			public bool Exists;            // file is present locally
+			public string FullPath;        // absolute path on disk (empty for NPC skins)
+			public bool Exists;            // file present locally / NPC template captured
+			public bool IsNpc;             // true = NPC skin key, not a bundle file
 		}
 
 		/// <summary>All known bundle slots in scan order. Slots may or may not exist on disk.</summary>
@@ -92,23 +93,56 @@ namespace SailwindCoop.Avatar
 				});
 			}
 
+			// NPC skins from the game world (list only grows during the session).
+			try
+			{
+				NpcSkinLibrary.Scan();
+				foreach (var s in NpcSkinLibrary.Skins)
+				{
+					found.Add(new Entry
+					{
+						FileName = s.Key,
+						DisplayName = s.DisplayName,
+						FullPath = "",
+						Exists = NpcSkinLibrary.CanBuild,
+						IsNpc = true,
+					});
+				}
+			}
+			catch (Exception e)
+			{
+				Plugin.Logger?.LogWarning("[AvatarCatalog] Скан NPC-скинов: " + e.Message);
+			}
+
 			_entries = found;
-			Plugin.Logger?.LogInfo("[AvatarCatalog] Найдено бандлов: " + _entries.Count +
-				(_entries.Count > 0 ? " (" + string.Join(", ", _entries.Select(e => e.FileName)) + ")" : ""));
+			Plugin.Logger?.LogInfo("[AvatarCatalog] Найдено бандлов: " + _entries.Count(e => !e.IsNpc) +
+				", NPC-скинов: " + _entries.Count(e => e.IsNpc));
+		}
+
+		/// <summary>Human-friendly label for any selection string (bundle file or NPC key).</summary>
+		public static string DisplayNameFor(string selection)
+		{
+			if (string.IsNullOrEmpty(selection)) return DefaultBundleFile;
+			var e = _entries.FirstOrDefault(x => string.Equals(x.FileName, selection, StringComparison.OrdinalIgnoreCase));
+			if (e != null) return e.IsNpc ? e.DisplayName : e.FileName;
+			return NpcSkinLibrary.IsNpcKey(selection) ? "NPC (незнакомый скин)" : selection;
 		}
 
 		/// <summary>Returns the full path for a given file name, or empty string if not on disk.</summary>
 		public static string ResolvePath(string fileName)
 		{
 			if (string.IsNullOrEmpty(_modDir) || string.IsNullOrEmpty(fileName)) return "";
+			// NPC-ключ — не файл; двоеточие в Path.Combine кидает ArgumentException на Mono.
+			if (NpcSkinLibrary.IsNpcKey(fileName)) return "";
 			string path = Path.Combine(_modDir, fileName);
 			return File.Exists(path) ? path : "";
 		}
 
-		/// <summary>True if the given file name has a corresponding bundle on disk locally.</summary>
+		/// <summary>True if the given selection can be built locally (bundle on disk / NPC template captured).</summary>
 		public static bool IsAvailable(string fileName)
 		{
 			if (string.IsNullOrEmpty(fileName)) return false;
+			if (NpcSkinLibrary.IsNpcKey(fileName)) return NpcSkinLibrary.CanBuild;
 			return !string.IsNullOrEmpty(ResolvePath(fileName));
 		}
 

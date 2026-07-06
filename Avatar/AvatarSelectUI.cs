@@ -43,7 +43,7 @@ namespace SailwindCoop.Avatar
 			GUILayout.BeginArea(new Rect(x + 10f, y + 8f, w - 20f, h - 16f));
 
 			GUILayout.Label("Выбор модели персонажа", _headerStyle);
-			GUILayout.Label("Бандлы ищутся в папке мода (avatar*.bundle).", _hintStyle);
+			GUILayout.Label("Бандлы — из папки мода (avatar*.bundle); NPC-скины — с загруженных островов (подойдите к острову и откройте окно заново).", _hintStyle);
 			GUILayout.Space(4f);
 
 			var entries = AvatarCatalog.Entries;
@@ -59,8 +59,9 @@ namespace SailwindCoop.Avatar
 				{
 					var e = entries[i];
 					bool selected = string.Equals(e.FileName, current, System.StringComparison.OrdinalIgnoreCase);
-					var label = (e.Exists ? "● " : "○ ") + e.FileName +
-								(selected ? "   ✓" : (e.Exists ? "" : "   (нет файла)"));
+					string title = e.IsNpc ? e.DisplayName : e.FileName;
+					var label = (e.Exists ? "● " : "○ ") + title +
+								(selected ? "   ✓" : (e.Exists ? "" : (e.IsNpc ? "   (нет шаблона)" : "   (нет файла)")));
 					var style = selected ? _entrySelectedStyle : _entryStyle;
 					if (GUILayout.Button(label, style, GUILayout.ExpandWidth(true)))
 					{
@@ -71,7 +72,7 @@ namespace SailwindCoop.Avatar
 			}
 
 			GUILayout.FlexibleSpace();
-			GUILayout.Label("Текущий: " + AvatarCatalog.CurrentSelection, _hintStyle);
+			GUILayout.Label("Текущий: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _hintStyle);
 			GUILayout.Label("Закрыть: " + Plugin.Cfg.AvatarSelectKey.Value, _hintStyle);
 
 			GUILayout.EndArea();
