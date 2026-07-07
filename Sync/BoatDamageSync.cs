@@ -299,6 +299,7 @@ namespace SailwindCoop.Sync
 
             Plugin.Logger.LogInfo("[BoatDamagePatches] Damage patches: HullOakum=" + hull +
                                   ", WaterBail=" + water + ", OakumAlt=" + oakumAlt);
+            SailwindCoop.Runtime.PatchHealth.Report("Damage", (hull ? 1 : 0) + (water ? 1 : 0) + (oakumAlt ? 1 : 0), 3);
         }
 
         private static bool TryPatch(Harmony harmony, System.Type type, string method, System.Type[] args, string prefixName, string postfixName)

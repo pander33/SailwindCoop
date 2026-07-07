@@ -34,6 +34,7 @@ namespace SailwindCoop.Sync
             = new System.Collections.Generic.Dictionary<PickupableBoatMooringRope, int>();
 
         private static bool _applying;   // guard: don't re-forward an action we're applying
+        private float _suppressLocalUntil;
 
         private string _lastAction = "—";
         private long _lastActionTick;
@@ -66,8 +67,13 @@ namespace SailwindCoop.Sync
             // and for the overlay; the actual sync is event-driven via the Harmony hooks.
             if (_emb == null) _emb = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            if (boat == null)
+                boat = BoatLocator.FindByIndex(0);
             if (boat == _cachedBoat && _bm != null && _ropeIndex.Count > 0) return;
+            bool boatChanged = boat != _cachedBoat;
             _cachedBoat = boat;
+            if (_net.Role == Role.Client && boatChanged)
+                _suppressLocalUntil = Time.time + 3f;
             _bm = boat != null
                 ? (boat.GetComponentInChildren<BoatMooringRopes>(true) ?? boat.GetComponentInParent<BoatMooringRopes>())
                 : null;
@@ -110,6 +116,9 @@ namespace SailwindCoop.Sync
             {
                 if (_applying) return;                                   // we triggered this applying a remote action
                 if (_net.State != LinkState.Connected) return;
+                if (_net.Role == Role.Client &&
+                    (GameState.currentlyLoading || GameState.justStarted || Time.time < _suppressLocalUntil))
+                    return;
                 int idx = IndexOf(rope);
                 if (idx < 0)
                 {
@@ -234,6 +243,8 @@ namespace SailwindCoop.Sync
         private void RefetchBoat()
         {
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            if (boat == null)
+                boat = BoatLocator.FindByIndex(0);
             if (boat != null)
             {
                 _bm = boat.GetComponentInChildren<BoatMooringRopes>(true) ?? boat.GetComponentInParent<BoatMooringRopes>();
@@ -269,6 +280,7 @@ namespace SailwindCoop.Sync
             _applying = false;
             _lastAction = "—";
             _lastActionTick = 0L;
+            _suppressLocalUntil = 0f;
         }
     }
 
@@ -285,6 +297,7 @@ namespace SailwindCoop.Sync
             bool b = TryPatch(harmony, t, "MoorTo", new[] { typeof(GPButtonDockMooring) }, nameof(PostMoorTo));
             bool c = TryPatch(harmony, t, "ChangeRopeLength", new[] { typeof(float) }, nameof(PostChangeLength));
             Plugin.Logger.LogInfo("[MooringPatches] Mooring patches: Unmoor=" + a + ", MoorTo=" + b + ", ChangeRopeLength=" + c);
+            SailwindCoop.Runtime.PatchHealth.Report("Mooring", (a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0), 3);
         }
 
         private static bool TryPatch(Harmony harmony, Type t, string method, Type[] args, string postfixName)

@@ -183,6 +183,9 @@ namespace SailwindCoop.Runtime
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
+            if (!Plugin.Cfg.EnableDebugPanel.Value)
+                GUILayout.Label("Debug tools are disabled in public mode.", _muted);
+
             GUILayout.BeginHorizontal();
             GUILayout.Label("Model: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _muted);
             GUILayout.FlexibleSpace();

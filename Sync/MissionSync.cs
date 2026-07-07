@@ -306,6 +306,9 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[MissionPatches] Mission patch: DeliverGood=" + deliver + ", Accept=" + accept +
                                   ", Abandon=" + abandon + ", BuyGood=" + buyGood + ", SellGood=" + sellGood +
                                   ", PrintReceipt=" + receipt);
+            SailwindCoop.Runtime.PatchHealth.Report("Missions",
+                (deliver ? 1 : 0) + (accept ? 1 : 0) + (abandon ? 1 : 0) +
+                (buyGood ? 1 : 0) + (sellGood ? 1 : 0) + (receipt ? 1 : 0), 6);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)

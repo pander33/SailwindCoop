@@ -36,7 +36,7 @@ namespace SailwindCoop.Runtime
         public JoinPause Pause { get; private set; }
 
         private DebugOverlay _overlay;
-        private bool _overlayVisible = true;
+        private bool _overlayVisible = false;
         private DebugPanel _debugPanel;
         private AvatarSelectUI _avatarUI;
         private CoopMenuUI _menuUI;

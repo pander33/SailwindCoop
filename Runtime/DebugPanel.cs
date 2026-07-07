@@ -8,8 +8,7 @@ namespace SailwindCoop.Runtime
 {
     /// <summary>
     /// Dev-only test harness. Creates hard-to-reach co-op scenarios on demand (gold,
-    /// item spawn, reputation, time/storm/teleport) so the unverified features in
-    /// <c>TEST_CHECKLIST.md</c> can be exercised without grinding to the right place/items.
+    /// item spawn, reputation, time/storm/teleport) without grinding to the right place/items.
     ///
     /// Pure setup tool — it changes NO wire format. A host item spawn goes through the vanilla
     /// path (<c>Instantiate(PrefabsDirectory.directory[i])</c> + <c>SaveablePrefab.RegisterToSave</c>),

@@ -150,6 +150,7 @@ namespace SailwindCoop.Sync
             bool fall = TryPatch(harmony, "FallAsleep", nameof(PostFallAsleep));
             bool wake = TryPatch(harmony, "WakeUp", nameof(PostWakeUp));
             Plugin.Logger.LogInfo("[SleepPatches] Sleep patches: FallAsleep=" + fall + ", WakeUp=" + wake);
+            SailwindCoop.Runtime.PatchHealth.Report("Sleep", (fall ? 1 : 0) + (wake ? 1 : 0), 2);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string postfixName)

@@ -410,6 +410,8 @@ namespace SailwindCoop.Sync
         {
             if (_emb == null) _emb = Object.FindObjectOfType<PlayerEmbarkerNew>();
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            if (boat == null)
+                boat = BoatLocator.FindByIndex(0);
             if (boat == _cachedBoat) return;
 
             RestoreKinematic();   // release the previous boat's bodies before rebinding

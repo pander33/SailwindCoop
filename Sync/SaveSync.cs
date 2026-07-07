@@ -19,6 +19,7 @@ namespace SailwindCoop.Sync
         {
             bool save = TryPatch(harmony, typeof(SaveLoadManager), "SaveGame", new[] { typeof(bool) }, nameof(PreSaveGame));
             Plugin.Logger.LogInfo("[SavePatches] Save patch (guest does not write host world): SaveGame=" + save);
+            SailwindCoop.Runtime.PatchHealth.Report("Save", save ? 1 : 0, 1);
         }
 
         /// <summary>True while we are a connected guest — saving the host's world locally is suppressed.</summary>

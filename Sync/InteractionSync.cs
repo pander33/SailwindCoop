@@ -523,16 +523,21 @@ namespace SailwindCoop.Sync
     {
         public static void Apply(Harmony harmony)
         {
-            PatchAll(harmony, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
-            PatchAll(harmony, "OnActivate", nameof(PostActivate));
-            PatchAll(harmony, "OnAltActivate", nameof(PostAltActivate));
-            PatchAll(harmony, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
-            PatchPushFixedUpdate(harmony, typeof(GPButtonBoatPushCol));
-            PatchPushFixedUpdate(harmony, typeof(DockPushCol));
-            PatchPushFixedUpdate(harmony, typeof(GPButtonSailPusher));
+            int onActivateNoArg = PatchAll(harmony, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
+            int onActivate = PatchAll(harmony, "OnActivate", nameof(PostActivate));
+            int onAltActivate = PatchAll(harmony, "OnAltActivate", nameof(PostAltActivate));
+            int onUnactivate = PatchAll(harmony, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
+            int push = 0;
+            if (PatchPushFixedUpdate(harmony, typeof(GPButtonBoatPushCol))) push++;
+            if (PatchPushFixedUpdate(harmony, typeof(DockPushCol))) push++;
+            if (PatchPushFixedUpdate(harmony, typeof(GPButtonSailPusher))) push++;
+            int ok = (onActivateNoArg > 0 ? 1 : 0) + (onActivate > 0 ? 1 : 0) +
+                     (onAltActivate > 0 ? 1 : 0) + (onUnactivate > 0 ? 1 : 0) + push;
+            SailwindCoop.Runtime.PatchHealth.Report("Interactions", ok, 7,
+                "activate=" + onActivate + ", alt=" + onAltActivate + ", unactivate=" + onUnactivate + ", push=" + push + "/3");
         }
 
-        private static void PatchPushFixedUpdate(Harmony harmony, Type type)
+        private static bool PatchPushFixedUpdate(Harmony harmony, Type type)
         {
             try
             {
@@ -540,21 +545,23 @@ namespace SailwindCoop.Sync
                 if (mi == null)
                 {
                     Plugin.Logger.LogWarning("[InteractionPatches] " + type.Name + " missing ExtraFixedUpdate");
-                    return;
+                    return false;
                 }
                 var prefix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
                     nameof(PrePushFixedUpdate), BindingFlags.Static | BindingFlags.NonPublic));
                 harmony.Patch(mi, prefix: prefix);
                 Plugin.Logger.LogInfo("[InteractionPatches] " + type.Name + ".ExtraFixedUpdate: push-block patched");
+                return true;
             }
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[InteractionPatches] Failed to patch " + type.Name +
                                          ".ExtraFixedUpdate: " + e.Message);
+                return false;
             }
         }
 
-        private static void PatchAll(Harmony harmony, string gameMethod, string postfixName, Type[] args = null, bool withBlockPrefix = true)
+        private static int PatchAll(Harmony harmony, string gameMethod, string postfixName, Type[] args = null, bool withBlockPrefix = true)
         {
             if (args == null) args = new[] { typeof(GoPointer) };
             var postfix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
@@ -591,6 +598,7 @@ namespace SailwindCoop.Sync
             }
             string sig = args.Length == 0 ? "()" : "(GoPointer)";
             Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + sig + ": patched " + patched + " methods");
+            return patched;
         }
 
         // The first GoPointer parameter is __0 (its name varies across overrides).
