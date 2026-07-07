@@ -2,6 +2,15 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.1.3] - 2026-07-07
+
+### feat(sync): Enhance player synchronization and item handling
+
+- Improved player synchronization on boats by stabilizing local positions and adding a fallback mechanism for boat detection.
+- Introduced a new PatchHealth reporting system to monitor the success of various synchronization patches across different game systems (Save, Shop, Shipyard, Sleep).
+- Added comprehensive item synchronization patches to ensure consistent item interactions (pickup, drop, eat, nail, etc.) across clients and hosts.
+- Implemented a protocol smoke test to validate message types and ensure proper serialization/deserialization of network messages.
+
 ## [0.1.2] - 2026-07-06
 
 ### Added
