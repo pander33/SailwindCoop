@@ -241,6 +241,7 @@ namespace SailwindCoop.Sync
             bool phase = TryPatch(harmony, "calcComplex", nameof(PreCalcComplex));
             bool table = TryPatch(harmony, "InitWaveGenerator", nameof(PreInitWaveGenerator));
             Plugin.Logger.LogInfo("[OceanPatches] Ocean patches: phase=" + phase + " table=" + table);
+            SailwindCoop.Runtime.PatchHealth.Report("Ocean", (phase ? 1 : 0) + (table ? 1 : 0), 2);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName)

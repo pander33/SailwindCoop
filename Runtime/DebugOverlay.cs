@@ -42,6 +42,7 @@ namespace SailwindCoop.Runtime
 
             Line("Objects (NetId)", CountAll().ToString());
             Line("Coordinates", CoordText());
+            Line("Patch health", PatchHealth.Summary);
 
             var coop = CoopBehaviour.Instance;
             if (coop != null && coop.Players != null && _net.State == LinkState.Connected)

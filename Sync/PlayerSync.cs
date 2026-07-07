@@ -35,6 +35,9 @@ namespace SailwindCoop.Sync
             public Quaternion LastAnimRot;
             public long LastAnimTick;
             public CoordFrame LastAnimFrame;
+            public CoordFrame LastPoseFrame;
+            public ushort LastPoseBoatIndex;
+            public bool HasPoseFrame;
             public bool HasAnimSnapshot;
             public bool HasSpeedParam;
             public bool HasTurnParam;
@@ -186,6 +189,10 @@ namespace SailwindCoop.Sync
 
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
+        private Transform _lastLocalBoat;
+        private ushort _lastLocalBoatIndex = BoatLocator.NoBoat;
+        private float _lastLocalBoatSeenAt;
+        private float _boatSurfaceValidUntil;
         private bool _dumped;
         private float _sendTimer;
         private Vector3 _lastRealPos;
@@ -311,12 +318,19 @@ namespace SailwindCoop.Sync
 
             long tick = _net.Clock.ServerTick;
             Transform pl = _localPlayer;
-            Transform boat = CurrentBoat;
+            Transform boat = CurrentBoat();
+            ushort boatIndex = BoatLocator.NoBoat;
+            if (boat != null)
+            {
+                boatIndex = ResolveBoatIndex(boat);
+                if (boatIndex == BoatLocator.NoBoat)
+                    boat = null;
+            }
+            _lastLocalCrouch = IsLocalCrouching();
 
             // On a boat: send pose in BOAT-LOCAL space — identical on both machines and
             // immune to floating origin. Otherwise fall back to origin-stable real space.
             CoordFrame frame;
-            ushort boatIndex = BoatLocator.NoBoat;
             Vector3 pos;
             Quaternion rot;
             Quaternion headRot;
@@ -325,7 +339,6 @@ namespace SailwindCoop.Sync
             if (boat != null)
             {
                 frame = CoordFrame.Boat;
-                boatIndex = BoatLocator.IndexOf(boat);
                 pos = boat.InverseTransformPoint(pl.position);
                 rot = Quaternion.Inverse(boat.rotation) * pl.rotation;
                 headRot = Quaternion.Inverse(boat.rotation) * head.rotation;
@@ -349,7 +362,6 @@ namespace SailwindCoop.Sync
             _lastRealTick = tick;
             _lastFrame = frame;
             _haveLast = true;
-            _lastLocalCrouch = IsLocalCrouching();
 
             _net.Broadcast(new PlayerStateMsg
             {
@@ -384,6 +396,11 @@ namespace SailwindCoop.Sync
                 _remotes[msg.NetId] = a;
             }
             a.Net.InterpDelayMs = InterpDelayMs;
+            if (a.HasPoseFrame && a.LastPoseFrame != msg.Frame)
+                a.Net.Clear();
+            a.LastPoseFrame = msg.Frame;
+            a.LastPoseBoatIndex = msg.BoatIndex;
+            a.HasPoseFrame = true;
 
             // Pick how this remote's buffered pose converts to local world space.
             if (msg.Frame == CoordFrame.Boat)
@@ -483,6 +500,10 @@ namespace SailwindCoop.Sync
             _remoteAvatarFile.Clear();
             _npcRetryAt.Clear();
             _localPlayer = null;
+            _lastLocalBoat = null;
+            _lastLocalBoatIndex = BoatLocator.NoBoat;
+            _lastLocalBoatSeenAt = 0f;
+            _boatSurfaceValidUntil = 0f;
             _localCrouching = null;
             _haveLast = false;
             foreach (var b in _bundleCache.Values)
@@ -512,7 +533,115 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>The boat the local player is currently standing on, or null.</summary>
-        private Transform CurrentBoat => _emb != null ? _emb.debugOutCurrentBoat : null;
+        private Transform CurrentBoat()
+        {
+            Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            if (boat != null)
+            {
+                int surface = ProbeStandingSurface(boat);
+                if (surface > 0)
+                {
+                    _lastLocalBoat = boat;
+                    _lastLocalBoatSeenAt = Time.time;
+                    _boatSurfaceValidUntil = Time.time + 1.0f;
+                    return boat;
+                }
+
+                // If the game still reports the same boat and the probe is inconclusive, keep the
+                // confirmed boat frame. Drop it only when the probe clearly sees non-boat ground.
+                if (_lastLocalBoat == boat && surface == 0)
+                    return boat;
+
+                if (_lastLocalBoat == boat && Time.time < _boatSurfaceValidUntil)
+                    return boat;
+            }
+
+            // Inventory/map transitions can briefly clear debugOutCurrentBoat even though the render
+            // player is still on deck. Keep sending boat-local poses only for a tiny grace window after
+            // an actual boat was reported. Do not pick a nearby boat by distance: on a dock/pier that
+            // would make the remote avatar ride the boat's bobbing while the player is standing ashore.
+            if (_lastLocalBoat != null && _localPlayer != null &&
+                Time.time - _lastLocalBoatSeenAt < 0.2f && Time.time < _boatSurfaceValidUntil)
+            {
+                float distSq = (_localPlayer.position - _lastLocalBoat.position).sqrMagnitude;
+                if (distSq < 80f * 80f)
+                    return _lastLocalBoat;
+            }
+
+            _boatSurfaceValidUntil = 0f;
+
+            return null;
+        }
+
+        private ushort ResolveBoatIndex(Transform boat)
+        {
+            if (boat == null) return BoatLocator.NoBoat;
+
+            ushort index = BoatLocator.IndexOf(boat);
+            if (index != BoatLocator.NoBoat)
+            {
+                _lastLocalBoat = boat;
+                _lastLocalBoatIndex = index;
+                return index;
+            }
+
+            // Avoid occasional NoBoat samples resetting the receiver's interpolation buffer while
+            // the same confirmed deck is still active.
+            if (boat == _lastLocalBoat && _lastLocalBoatIndex != BoatLocator.NoBoat)
+                return _lastLocalBoatIndex;
+
+            return BoatLocator.NoBoat;
+        }
+
+        private int ProbeStandingSurface(Transform boat)
+        {
+            if (boat == null || _localPlayer == null) return 0;
+            try
+            {
+                Vector3 origin = _localPlayer.position + Vector3.up * 0.25f;
+                var hits = Physics.RaycastAll(origin, Vector3.down, 3.0f, ~0, QueryTriggerInteraction.Ignore);
+                if (hits == null || hits.Length == 0) return 0;
+
+                for (int i = 0; i < hits.Length - 1; i++)
+                {
+                    for (int j = i + 1; j < hits.Length; j++)
+                    {
+                        if (hits[j].distance < hits[i].distance)
+                        {
+                            var tmp = hits[i];
+                            hits[i] = hits[j];
+                            hits[j] = tmp;
+                        }
+                    }
+                }
+
+                for (int i = 0; i < hits.Length; i++)
+                {
+                    var col = hits[i].collider;
+                    if (col == null || col.isTrigger) continue;
+                    if (col.transform == _localPlayer || col.transform.IsChildOf(_localPlayer)) continue;
+                    if (col.GetComponentInParent<PickupableItem>() != null) continue;
+                    return IsBoatSurface(col.transform, boat) ? 1 : -1;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogWarning("[PlayerSync] standing surface probe: " + e.Message);
+            }
+            return 0;
+        }
+
+        private static bool IsBoatSurface(Transform t, Transform boat)
+        {
+            for (Transform cur = t; cur != null; cur = cur.parent)
+            {
+                if (cur == boat) return true;
+                if (cur.CompareTag("Boat")) return true;
+                if (cur.CompareTag("WalkColBoat")) return true;
+                if (cur.gameObject.layer == 8 && cur.CompareTag("WalkColBoat")) return true;
+            }
+            return false;
+        }
 
         private void ApplyAvatarPolish(RemoteAvatar a)
         {
@@ -980,7 +1109,7 @@ namespace SailwindCoop.Sync
 
         private float ResolveAvatarVerticalOffset(uint netId)
         {
-            const float defaultOffset = -0.65f;
+            const float defaultOffset = -0.6f;
             if (Plugin.Cfg == null) return defaultOffset;
 
             if (netId == NetRegistry.HostPlayerNetId)

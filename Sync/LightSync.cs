@@ -189,6 +189,7 @@ namespace SailwindCoop.Sync
             bool alt = TryPatch(harmony, "OnAltActivate", Type.EmptyTypes, nameof(PostLightChanged));
             bool item = TryPatch(harmony, "OnItemClick", new[] { typeof(PickupableItem) }, nameof(PostLightChanged));
             Plugin.Logger.LogInfo("[LightPatches] Light patches: Alt=" + alt + ", ItemClick=" + item);
+            SailwindCoop.Runtime.PatchHealth.Report("Lights", (alt ? 1 : 0) + (item ? 1 : 0), 2);
         }
 
         private static bool TryPatch(Harmony harmony, string method, Type[] args, string postfixName)

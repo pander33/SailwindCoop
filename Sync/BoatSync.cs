@@ -33,6 +33,7 @@ namespace SailwindCoop.Sync
             public RigidbodyInterpolation PrevInterp;
             public Component PhysSwitcher;
             public bool PrevPaused;
+            public bool PrevSwitcherEnabled;
         }
 
         private readonly CoopNet _net;
@@ -124,6 +125,14 @@ namespace SailwindCoop.Sync
             foreach (var cb in _clientBoats.Values)
             {
                 if (cb.Boat == null || !cb.Net.HasData) continue;
+                // Keep render interpolation OFF while we drive the transform directly: with
+                // RigidbodyInterpolation.Interpolate the rendered pose is blended between FIXED-step
+                // physics poses, not the one written this Update, so it oscillates against our writes
+                // with an error proportional to boat velocity — seen as the player/camera bobbing
+                // vertically in time with the swell. BoatPhysicsSwitcher re-enables Interpolate every
+                // LateUpdate (we disable that component while slaved), this is the belt-and-braces.
+                if (cb.Rb != null && cb.Rb.interpolation != RigidbodyInterpolation.None)
+                    cb.Rb.interpolation = RigidbodyInterpolation.None;
                 cb.Net.Apply(cb.Boat, _net.Clock.ServerTick);
             }
         }
@@ -213,6 +222,7 @@ namespace SailwindCoop.Sync
             }
 
             TrySetPhysicsPaused(cb, true);
+            TrySetSwitcherEnabled(cb, slave: true);
             _clientBoats[index] = cb;
             _net.Registry.Register(netId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
             if (_firstBoatNetId == 0) _firstBoatNetId = netId;
@@ -233,11 +243,49 @@ namespace SailwindCoop.Sync
                 cb.Rb.interpolation = cb.PrevInterp;
             }
 
+            TrySetSwitcherEnabled(cb, slave: false);
             TrySetPhysicsPaused(cb, false, restore: true);
             cb.Net.Clear();
             cb.Rb = null;
             cb.PhysSwitcher = null;
             cb.Boat = null;
+        }
+
+        /// <summary>
+        /// BoatPhysicsSwitcher.LateUpdate unconditionally re-enables Rigidbody interpolation every
+        /// frame (our one-time interpolation=None in EnsureClientBoat never sticks). While the boat
+        /// is slaved we disable the whole component — with isKinematic=true its pause/restore logic
+        /// is a no-op anyway — and restore its enabled state on release.
+        /// </summary>
+        private void TrySetSwitcherEnabled(ClientBoat cb, bool slave)
+        {
+            try
+            {
+                if (cb == null || cb.Boat == null) return;
+                if (cb.PhysSwitcher == null)
+                {
+                    if (_physSwitcherType == null)
+                        _physSwitcherType = Type.GetType("BoatPhysicsSwitcher, Assembly-CSharp");
+                    if (_physSwitcherType == null) return;
+                    cb.PhysSwitcher = cb.Boat.GetComponentInChildren(_physSwitcherType);
+                }
+                var beh = cb.PhysSwitcher as Behaviour;
+                if (beh == null) return;
+
+                if (slave)
+                {
+                    cb.PrevSwitcherEnabled = beh.enabled;
+                    beh.enabled = false;
+                }
+                else
+                {
+                    beh.enabled = cb.PrevSwitcherEnabled;
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[BoatSync] BoatPhysicsSwitcher enable-toggle failed: " + e.Message);
+            }
         }
 
         private void TrySetPhysicsPaused(ClientBoat cb, bool paused, bool restore = false)

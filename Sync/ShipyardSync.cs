@@ -79,6 +79,7 @@ namespace SailwindCoop.Sync
         {
             bool buy = TryPatch(harmony);
             Plugin.Logger.LogInfo("[ShipyardPatches] Boat purchase patch: PurchaseBoat=" + buy);
+            SailwindCoop.Runtime.PatchHealth.Report("Shipyard", buy ? 1 : 0, 1);
         }
 
         private static bool TryPatch(Harmony harmony)

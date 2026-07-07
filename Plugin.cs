@@ -78,8 +78,8 @@ namespace SailwindCoop
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Displayed player name.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "State snapshot send rate (Hz), Stage 1+.");
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Interpolation buffer delay (ms), Stage 1+.");
-            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.65f, "Vertical offset of the visual bundle model relative to the networked player position. Negative values move the model down.");
-            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.65f, "Vertical offset of the host visual bundle model. Separate because the host root pose in Sailwind is usually higher than the client pose.");
+            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.6f, "Vertical offset of the visual bundle model relative to the networked player position. Negative values move the model down.");
+            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.6f, "Vertical offset of the host visual bundle model. Separate because the host root pose in Sailwind is usually higher than the client pose.");
 
             MaxClients = c.Bind("Server", "MaxClients", 4, "Maximum number of clients connected to the host at once (1 = single guest only). Applied on incoming connections.");
             DisconnectTimeoutMs = c.Bind("Server", "DisconnectTimeoutMs", 5000, "Timeout (ms) without packets from a peer before it is considered disconnected.");
@@ -93,7 +93,7 @@ namespace SailwindCoop
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
             PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
 
-            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", true, "The debug panel for test scenarios (gold/spawn/reputation/world) is available from the co-op menu.");
+            EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
         }
     }

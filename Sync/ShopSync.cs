@@ -70,6 +70,7 @@ namespace SailwindCoop.Sync
             bool buy = TryPatch(harmony, "TryToSellItem", nameof(PreBuy), nameof(PostBuy));
             bool sell = TryPatch(harmony, "TryToBuyItem", nameof(PreSell), null);
             Plugin.Logger.LogInfo("[ShopPatches] Shop patches (local money): buy(TryToSellItem)=" + buy + ", sell(TryToBuyItem)=" + sell);
+            SailwindCoop.Runtime.PatchHealth.Report("Shop", (buy ? 1 : 0) + (sell ? 1 : 0), 2);
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)
