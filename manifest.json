@@ -4,6 +4,6 @@
     "website_url": "https://github.com/pander33/SailwindCoop",
     "description": "Sailwind LAN Co-op Mod - Play with friends over LAN or VPN.",
     "dependencies": [
-        "bbepis-BepInExPack-5.4.2100"
+        "BepInEx-BepInExPack-5.4.2100"
     ]
 }
