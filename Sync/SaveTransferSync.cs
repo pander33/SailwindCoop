@@ -26,6 +26,12 @@ namespace SailwindCoop.Sync
     {
         private const int ChunkSize = 16 * 1024;
 
+        /// <summary>Sanity ceilings on a Begin header. Both numbers come straight off the wire and are
+        /// used to size arrays, so a corrupt (or hostile) header would otherwise be an instant
+        /// out-of-memory on the client. A Sailwind save is a few MB; these are generous.</summary>
+        private const int MaxSaveBytes = 256 * 1024 * 1024;
+        private const int MaxChunkCount = MaxSaveBytes / ChunkSize + 16;
+
         private readonly CoopNet _net;
 
         /// <summary>Which save slot (0..5) the client writes the merged host world into and loads.
@@ -139,8 +145,24 @@ namespace SailwindCoop.Sync
         public void OnBegin(SaveSnapshotBeginMsg msg)
         {
             if (_net.Role != Role.Client) return;
-            _expectedChunks = Mathf.Max(0, msg.ChunkCount);
-            _totalBytes = Mathf.Max(0, msg.TotalBytes);
+
+            // Validate BEFORE allocating: these two numbers size arrays and arrive from the network.
+            if (msg.TotalBytes <= 0 || msg.TotalBytes > MaxSaveBytes ||
+                msg.ChunkCount <= 0 || msg.ChunkCount > MaxChunkCount ||
+                // The sender always slices at ChunkSize, so the counts must agree.
+                msg.ChunkCount != (msg.TotalBytes + ChunkSize - 1) / ChunkSize)
+            {
+                Plugin.Logger.LogError("[SaveTransfer] Rejected save header: " + msg.TotalBytes +
+                                       " bytes / " + msg.ChunkCount + " chunks is out of range or " +
+                                       "inconsistent - transfer aborted");
+                CoopBehaviour.Notice("Join failed: the host sent an invalid world snapshot.");
+                Reset();
+                NotifyHostLoaded(false);
+                return;
+            }
+
+            _expectedChunks = msg.ChunkCount;
+            _totalBytes = msg.TotalBytes;
             _hostGameVersion = msg.GameVersion;
             _chunks = new byte[_expectedChunks][];
             _receivedChunks = 0;
@@ -153,6 +175,20 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client || !_receiving) return;
             if (_chunks == null || msg.Index < 0 || msg.Index >= _chunks.Length) return;
+            // Check against the length this exact index MUST have, not just an upper bound. Capping at
+            // ChunkSize alone still let a sender advertise a small TotalBytes and then push full-size
+            // chunks, so the sum overran the assembly buffer in Assemble().
+            int expected = msg.Index == _expectedChunks - 1
+                ? _totalBytes - msg.Index * ChunkSize
+                : ChunkSize;
+            if (msg.Data == null || msg.Data.Length != expected)
+            {
+                Plugin.Logger.LogError("[SaveTransfer] Rejected chunk " + msg.Index + ": length " +
+                                       (msg.Data?.Length ?? -1) + ", expected " + expected + " - transfer aborted");
+                Reset();
+                NotifyHostLoaded(false);
+                return;
+            }
             if (_chunks[msg.Index] == null) _receivedChunks++;
             _chunks[msg.Index] = msg.Data;
         }
@@ -262,6 +298,7 @@ namespace SailwindCoop.Sync
                 // Loading a save over an already-loaded world duplicates every saved prefab — refuse.
                 Plugin.Logger.LogError("[SaveTransfer] Client is already in-game - host world was not loaded. " +
                                        "Return to the main menu and reconnect.");
+                CoopBehaviour.Notice("Join failed: you were already in a world. Return to the main menu, then join.");
                 NotifyHostLoaded(false);
                 yield break;
             }
@@ -278,6 +315,8 @@ namespace SailwindCoop.Sync
                 {
                     Plugin.Logger.LogError("[SaveTransfer] Failed to start host world load within 10 s " +
                                            "(StartMenu busy or unavailable)");
+                    CoopBehaviour.Notice("Join failed: could not start loading the host's world. " +
+                                         "Make sure you are on the main menu, then join again.");
                     NotifyHostLoaded(false);
                     yield break;
                 }

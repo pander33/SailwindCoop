@@ -412,6 +412,10 @@ namespace SailwindCoop.Sync
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
             if (boat == null)
                 boat = BoatLocator.FindByIndex(0);
+            // Same as MooringSync.Tick: a null from the fallback while BoatLocator withholds indices means
+            // "not yet known", not "no boat". Rebinding on it would release every kinematic body and drop
+            // the rope/winch targets for a blip, then rebuild them a fifth of a second later.
+            if (boat == null && !BoatLocator.IndicesAuthoritative) return;
             if (boat == _cachedBoat) return;
 
             RestoreKinematic();   // release the previous boat's bodies before rebinding

@@ -34,7 +34,15 @@ namespace SailwindCoop.Sync
             public Component PhysSwitcher;
             public bool PrevPaused;
             public bool PrevSwitcherEnabled;
+            /// <summary>False while we are only buffering: physics is still vanilla and we apply nothing.</summary>
+            public bool Engaged;
         }
+
+        /// <summary>Snapshots to buffer before engaging slave mode. One sample can be arbitrarily stale
+        /// (it is whatever arrived first), and acting on it means teleporting the deck to a pose the host
+        /// has already left.</summary>
+        private const int SamplesBeforeEngage = 2;
+
 
         private readonly CoopNet _net;
         private readonly Dictionary<ushort, HostBoat> _hostBoats = new Dictionary<ushort, HostBoat>();
@@ -48,7 +56,29 @@ namespace SailwindCoop.Sync
         public float InterpDelayMs = 100f;
         public int SnapshotHz = 20;
 
-        public bool IsSlaving => _clientBoats.Count > 0;
+        /// <summary>Supplies the player transform that may be REPOSITIONED so the first (potentially
+        /// large) boat correction carries them instead of leaving them where the deck used to be. Must
+        /// be the real player body — never the camera fallback. Set by the runtime layer.</summary>
+        public Func<Transform> LocalPlayerProvider;
+
+        /// <summary>Supplies the deck the local player is standing on right now (null = ashore/unknown).
+        /// A null here means "don't touch the player" — never a licence to guess.</summary>
+        public Func<Transform> LocalBoatProvider;
+
+        /// <summary>Like <see cref="LocalBoatProvider"/> but forces a fresh resolve instead of reading a
+        /// latch that a later step in the frame pipeline maintains. Preferred when it is set.</summary>
+        public Func<Transform> ResolveLocalBoatProvider;
+
+        /// <summary>True once at least one boat is actually driven by us (buffering alone doesn't count).</summary>
+        public bool IsSlaving
+        {
+            get
+            {
+                foreach (var cb in _clientBoats.Values)
+                    if (cb.Engaged) return true;
+                return false;
+            }
+        }
         public uint BoatNetId => _firstBoatNetId;
         public int BoatCount => _net.Role == Role.Host ? _hostBoats.Count : _clientBoats.Count;
 
@@ -125,6 +155,16 @@ namespace SailwindCoop.Sync
             foreach (var cb in _clientBoats.Values)
             {
                 if (cb.Boat == null || !cb.Net.HasData) continue;
+
+                // Not slaved yet: keep buffering under vanilla physics until the stream is trustworthy,
+                // then take over in one controlled step (see EngageSlave).
+                if (!cb.Engaged)
+                {
+                    if (cb.Net.SampleCount < SamplesBeforeEngage) continue;
+                    EngageSlave(cb);
+                    continue;   // EngageSlave already applied this frame's pose
+                }
+
                 // Keep render interpolation OFF while we drive the transform directly: with
                 // RigidbodyInterpolation.Interpolate the rendered pose is blended between FIXED-step
                 // physics poses, not the one written this Update, so it oscillates against our writes
@@ -157,6 +197,12 @@ namespace SailwindCoop.Sync
             _refreshTimer = 0f;
 
             var boats = BoatLocator.FindBoats();
+            // The host publishes these positions as wire indices and allocates a NetId per position, so
+            // registering a partial set is worse here than on the client: every guest would inherit the
+            // wrong numbering. Wait for the same stability the lookups wait for. FindBoats() above still
+            // runs — it is what advances the stability run.
+            if (!BoatLocator.IndicesAuthoritative) return;
+
             var seen = new HashSet<ushort>();
             for (int i = 0; i < boats.Count && i <= ushort.MaxValue - 1; i++)
             {
@@ -211,7 +257,62 @@ namespace SailwindCoop.Sync
                 _clientBoats.Remove(index);
             }
 
+            // Physics is deliberately left vanilla here — we only start buffering. Taking authority is
+            // deferred to EngageSlave once the stream is worth acting on.
             cb = new ClientBoat { Index = index, Boat = boat };
+            _clientBoats[index] = cb;
+            _net.Registry.Register(netId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
+            if (_firstBoatNetId == 0) _firstBoatNetId = netId;
+
+            Plugin.Logger.LogInfo("[BoatSync] Client boat #" + index + " tracked: NetId=" + netId +
+                                  " ('" + BoatLocator.PathOf(boat) + "'), buffering before slave mode");
+            return cb;
+        }
+
+        /// <summary>
+        /// Take authority over a client boat and perform the FIRST correction as one controlled step.
+        ///
+        /// This is the frame that used to drop guests through the deck on join. The client's freshly
+        /// loaded boat sits wherever its save put it, the host's is somewhere else entirely, and the
+        /// first <see cref="NetTransform.Apply"/> closes that gap in a single frame. Two things go
+        /// wrong with a naive teleport: anything standing on the deck but not parented to it is left
+        /// behind, and a direct transform write on a kinematic rigidbody does not refresh the collider's
+        /// pose in PhysX until the next physics step — so for one frame the deck's collision geometry is
+        /// still at the old place and a character controller falls straight through it.
+        ///
+        /// So: capture the player's deck-local pose, engage, apply, put the player back on the same spot
+        /// of the (now moved) deck, and force a physics sync before anything can query colliders.
+        /// </summary>
+        private void EngageSlave(ClientBoat cb)
+        {
+            Transform boat = cb.Boat;
+
+            // Only ever move the player when PlayerSync has POSITIVELY confirmed they are standing on
+            // this very deck — never by proximity, which dragged guests off piers and out of the water.
+            //
+            // The confirmation is requested on demand rather than read from the latch, because the latch
+            // is refreshed in Players.Tick (step 19 of the frame) while this runs from Boats.ApplyRemote
+            // (step 3): on a fresh join the boat engages before Tick has ever latched anything, so
+            // reading the latch alone would leave carry permanently false on the one frame it exists for.
+            // Resolve the deck FIRST: that call is what forces PlayerSync to find the embarker this
+            // frame, and the player transform hangs off the same embarker. Read in the other order and
+            // the player comes back null on the first engage frame — precisely the frame this exists
+            // for. (The provider is resolving too, so this ordering is belt-and-braces, not the fix.)
+            Transform playerBoat = ResolveLocalBoatProvider != null
+                ? ResolveLocalBoatProvider()
+                : (LocalBoatProvider != null ? LocalBoatProvider() : null);
+            Transform player = LocalPlayerProvider != null ? LocalPlayerProvider() : null;
+            bool carry = player != null && playerBoat != null && playerBoat == boat;
+            Vector3 playerLocalPos = Vector3.zero;
+            Quaternion playerLocalRot = Quaternion.identity;
+            if (carry)
+            {
+                playerLocalPos = boat.InverseTransformPoint(player.position);
+                playerLocalRot = Quaternion.Inverse(boat.rotation) * player.rotation;
+            }
+
+            Vector3 posBefore = boat.position;
+
             cb.Rb = boat.GetComponent<Rigidbody>();
             if (cb.Rb != null)
             {
@@ -223,28 +324,48 @@ namespace SailwindCoop.Sync
 
             TrySetPhysicsPaused(cb, true);
             TrySetSwitcherEnabled(cb, slave: true);
-            _clientBoats[index] = cb;
-            _net.Registry.Register(netId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
-            if (_firstBoatNetId == 0) _firstBoatNetId = netId;
+            cb.Engaged = true;
 
-            Plugin.Logger.LogInfo("[BoatSync] Client boat #" + index + " in slave mode: NetId=" + netId +
-                                  " ('" + BoatLocator.PathOf(boat) + "'), rb=" + (cb.Rb != null) +
-                                  ", physSwitcher=" + (cb.PhysSwitcher != null));
-            return cb;
+            cb.Net.Apply(boat, _net.Clock.ServerTick);
+
+            if (carry)
+            {
+                player.position = boat.TransformPoint(playerLocalPos);
+                player.rotation = boat.rotation * playerLocalRot;
+            }
+
+            // Push the new transforms into PhysX now: without this the deck's colliders stay at the old
+            // pose until the next FixedUpdate, which is exactly the window a player falls through.
+            Physics.SyncTransforms();
+
+            float correction = Vector3.Distance(posBefore, boat.position);
+            Plugin.Logger.LogInfo("[BoatSync] Client boat #" + cb.Index + " in slave mode: correction=" +
+                                  correction.ToString("F1") + " m, carriedPlayer=" + carry +
+                                  ", rb=" + (cb.Rb != null) + ", physSwitcher=" + (cb.PhysSwitcher != null));
+            if (correction > 2000f)
+                Plugin.Logger.LogWarning("[BoatSync] Boat #" + cb.Index + " correction is " +
+                                         correction.ToString("F0") + " m - the client very likely loaded a " +
+                                         "different world than the host's.");
         }
 
         private void RestoreClientBoat(ClientBoat cb)
         {
             if (cb == null) return;
 
-            if (cb.Rb != null)
+            // Nothing was taken over if we never engaged — restoring would clobber vanilla state.
+            if (cb.Engaged)
             {
-                cb.Rb.isKinematic = cb.PrevKinematic;
-                cb.Rb.interpolation = cb.PrevInterp;
+                if (cb.Rb != null)
+                {
+                    cb.Rb.isKinematic = cb.PrevKinematic;
+                    cb.Rb.interpolation = cb.PrevInterp;
+                }
+
+                TrySetSwitcherEnabled(cb, slave: false);
+                TrySetPhysicsPaused(cb, false, restore: true);
+                cb.Engaged = false;
             }
 
-            TrySetSwitcherEnabled(cb, slave: false);
-            TrySetPhysicsPaused(cb, false, restore: true);
             cb.Net.Clear();
             cb.Rb = null;
             cb.PhysSwitcher = null;
@@ -329,6 +450,8 @@ namespace SailwindCoop.Sync
             _firstBoatNetId = 0;
             _sendTimer = 0f;
             _refreshTimer = 0f;
+            // The session (and possibly the loaded world) is going away — never serve a stale enumeration.
+            BoatLocator.Invalidate();
         }
     }
 }

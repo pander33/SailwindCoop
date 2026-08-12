@@ -30,6 +30,9 @@ namespace SailwindCoop.Sync
         /// <summary>Local player just bought a boat (vanilla already paid + flipped extraSetting). Tell the peer.</summary>
         public void NotifyPurchase(int sceneIndex)
         {
+            // extraSetting just flipped, so this boat now belongs to the network set — drop the
+            // cached enumeration before anything addresses a boat by index.
+            BoatLocator.Invalidate();
             if (_net.State != LinkState.Connected || sceneIndex < 0) return;
             _net.Broadcast(new BoatPurchaseMsg { SceneIndex = sceneIndex }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[ShipyardSync] out boat purchase sceneIndex=" + sceneIndex);
@@ -59,6 +62,9 @@ namespace SailwindCoop.Sync
                     if (so != null) so.extraSetting = true;
                     Plugin.Logger.LogInfo("[ShipyardSync] in purchase sceneIndex=" + msg.SceneIndex + " (extraSetting directly)");
                 }
+
+                // The boat set just grew — force a fresh enumeration before it is addressed by index.
+                BoatLocator.Invalidate();
 
                 // Host relays a client's purchase to any other clients (2-player needs nothing more).
                 if (_net.Role == Role.Host)

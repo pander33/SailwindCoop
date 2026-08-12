@@ -69,6 +69,12 @@ namespace SailwindCoop.Sync
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
             if (boat == null)
                 boat = BoatLocator.FindByIndex(0);
+            // "Indices are not resolvable right now" is not "there is no boat". Since BoatLocator gained
+            // its stability gate the fallback above returns null for ~0.2 s after any change to the boat
+            // set, and treating that as a boat change would drop _cachedBoat, rebuild the rope index, and
+            // — on a client — arm the 3 s local-input suppression, twice, for a 0.2 s blip. Keep what we
+            // have and re-read once the numbering is trustworthy again.
+            if (boat == null && !BoatLocator.IndicesAuthoritative) return;
             if (boat == _cachedBoat && _bm != null && _ropeIndex.Count > 0) return;
             bool boatChanged = boat != _cachedBoat;
             _cachedBoat = boat;

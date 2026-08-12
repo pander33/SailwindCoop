@@ -38,6 +38,11 @@ namespace SailwindCoop.Sync
             public CoordFrame LastPoseFrame;
             public ushort LastPoseBoatIndex;
             public bool HasPoseFrame;
+            // Boat-frame converters are rebuilt only when the deck changes: they used to be allocated
+            // fresh for every inbound PlayerState (two closures per packet, per remote, at SnapshotHz).
+            public Transform PoseBoat;
+            public System.Func<Vector3, Vector3> BoatToWorldPos;
+            public System.Func<Quaternion, Quaternion> BoatToWorldRot;
             public bool HasAnimSnapshot;
             public bool HasSpeedParam;
             public bool HasTurnParam;
@@ -187,10 +192,36 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<uint, float> _npcRetryAt = new Dictionary<uint, float>();
         private const float NpcRetrySec = 5f;
 
+        // World-frame converters are frame-independent, so one shared instance each is enough. Assigning
+        // a method group / lambda per packet would allocate a delegate every time.
+        private static readonly System.Func<Vector3, Vector3> RealToLocalPos = CoordSpace.RealToLocal;
+        private static readonly System.Func<Quaternion, Quaternion> IdentityRot = q => q;
+
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
+        private float _embRetryAt;
+        private const float EmbRetrySec = 0.5f;
+
+        /// <summary>Frame of the last <c>FindObjectOfType&lt;PlayerEmbarkerNew&gt;</c> scan — the search is
+        /// reached several times per frame and must not repeat within one.</summary>
+        private int _embScanFrame = -1;
+
+        /// <summary>When <c>GameState.playing</c> last became true, or -1 outside a world.</summary>
+        private float _inWorldSince = -1f;
+
+        /// <summary>How long after a world comes up the embarker search runs every frame before it
+        /// falls back to <see cref="EmbRetrySec"/> polling.</summary>
+        private const float EmbEagerSec = 5f;
+
+        /// <summary>How long the deck latch survives once the game stops reporting a boat and no
+        /// positive standing probe lands (see <see cref="CurrentBoat"/>).</summary>
+        private const float LatchStaleSec = 5f;
         private Transform _lastLocalBoat;
         private ushort _lastLocalBoatIndex = BoatLocator.NoBoat;
+
+        /// <summary><see cref="BoatLocator.SetEpoch"/> as of when <see cref="_lastLocalBoatIndex"/> was
+        /// resolved. The cached index is only reusable while the boat set has not moved under it.</summary>
+        private int _lastLocalBoatEpoch = -1;
         private float _lastLocalBoatSeenAt;
         private float _boatSurfaceValidUntil;
         private bool _dumped;
@@ -210,6 +241,45 @@ namespace SailwindCoop.Sync
 
         public int RemoteCount => _remotes.Count;
         public bool LocalPlayerFound => _localPlayer != null;
+
+        /// <summary>Whatever we currently track as the local player — normally
+        /// <c>PlayerEmbarkerNew.playerObserver</c>, but possibly the main camera fallback (see
+        /// <see cref="EnsureLocalPlayer"/>). Fine for distance/diagnostic reads; do NOT write to it.</summary>
+        public Transform LocalPlayer => _localPlayer;
+
+        /// <summary>
+        /// The real player body (<c>PlayerEmbarkerNew.playerObserver</c>), or null while it does not
+        /// exist yet. Unlike <see cref="LocalPlayer"/> this never degrades to the camera transform, so
+        /// it is the only thing safe to REPOSITION — <see cref="BoatSync"/> uses it to keep us on the
+        /// deck across a boat correction, and writing to the camera there would detach the view from
+        /// the body. Resolved live rather than cached because the camera fallback, once taken, sticks
+        /// for the rest of the session.
+        /// </summary>
+        public Transform LocalPlayerBody => _emb != null ? _emb.playerObserver : null;
+
+        /// <summary>
+        /// <see cref="LocalPlayerBody"/>, resolving the embarker right now if it has not been found yet.
+        ///
+        /// The plain property is a pure read of <c>_emb</c>, which <see cref="Tick"/> populates — and Tick
+        /// is step 19 of the frame pipeline while <c>BoatSync.ApplyRemote</c> is step 3. On a fresh join
+        /// the boat engages before Tick has ever run, so a caller there sees a null body on exactly the
+        /// frame that matters and its carry silently no-ops. Same reason and same shape as
+        /// <see cref="ResolveLocalBoatNow"/>; <see cref="EnsureLocalPlayer"/> scans at most once per frame,
+        /// so calling both costs one scan, not two.
+        /// </summary>
+        public Transform ResolveLocalPlayerBodyNow()
+        {
+            EnsureLocalPlayer();
+            return LocalPlayerBody;
+        }
+
+        /// <summary>
+        /// The deck the local player is believed to be on, or null when ashore/unknown. Set on a
+        /// positive standing-surface probe and cleared only on a positive NON-boat one, so it survives
+        /// inconclusive frames (rigging, mid-jump, an open map) while still going null the moment the
+        /// player is seen standing on something that isn't the ship.
+        /// </summary>
+        public Transform LocalBoat => _lastLocalBoat;
         public string LocalCrouchText => "local " + (_lastLocalCrouch ? "YES" : "—") +
                                          ", h " + _lastLocalCrouchHeight.ToString("0.00");
         public string NearestRemoteAnim
@@ -408,8 +478,15 @@ namespace SailwindCoop.Sync
                 Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
                 if (boat != null)
                 {
-                    a.Net.ToWorldPos = p => boat.TransformPoint(p);
-                    a.Net.ToWorldRot = q => boat.rotation * q;
+                    if (a.PoseBoat != boat || a.BoatToWorldPos == null)
+                    {
+                        Transform b = boat;   // captured once per deck change, not once per packet
+                        a.PoseBoat = b;
+                        a.BoatToWorldPos = p => b.TransformPoint(p);
+                        a.BoatToWorldRot = q => b.rotation * q;
+                    }
+                    a.Net.ToWorldPos = a.BoatToWorldPos;
+                    a.Net.ToWorldRot = a.BoatToWorldRot;
                     a.HeadWorldRot = boat.rotation * msg.HeadRot;
                 }
                 // If we have no boat yet, leave the previous converter; the avatar will
@@ -417,8 +494,8 @@ namespace SailwindCoop.Sync
             }
             else
             {
-                a.Net.ToWorldPos = CoordSpace.RealToLocal;
-                a.Net.ToWorldRot = q => q;
+                a.Net.ToWorldPos = RealToLocalPos;
+                a.Net.ToWorldRot = IdentityRot;
                 a.HeadWorldRot = msg.HeadRot;
             }
 
@@ -500,8 +577,17 @@ namespace SailwindCoop.Sync
             _remoteAvatarFile.Clear();
             _npcRetryAt.Clear();
             _localPlayer = null;
+            // The next session may run in a different world — drop the embarker too and let the very
+            // next EnsureLocalPlayer re-resolve it immediately rather than after the retry interval.
+            _emb = null;
+            _embRetryAt = 0f;
+            _embScanFrame = -1;
+            // Re-arm the eager window: the next session starts by loading a world, which is exactly
+            // when the embarker has to be found within a frame or two.
+            _inWorldSince = -1f;
             _lastLocalBoat = null;
             _lastLocalBoatIndex = BoatLocator.NoBoat;
+            _lastLocalBoatEpoch = -1;
             _lastLocalBoatSeenAt = 0f;
             _boatSurfaceValidUntil = 0f;
             _localCrouching = null;
@@ -516,29 +602,106 @@ namespace SailwindCoop.Sync
         // Helpers
         // -----------------------------------------------------------------
 
+        /// <summary>
+        /// Resolves the local player, upgrading from the camera fallback as soon as the real one exists.
+        ///
+        /// This used to return immediately whenever <c>_localPlayer</c> was set, which meant a camera
+        /// fallback taken once (the player object appears only after a world finishes loading) stuck for
+        /// the entire session — and, worse, left <c>_emb</c> null forever. With <c>_emb</c> null,
+        /// <see cref="CurrentBoat"/> and <see cref="LocalPlayerBody"/> are permanently null too, so every
+        /// pose went out in world frame with <c>BoatIndex = NoBoat</c> and the boat-correction carry
+        /// could never fire. Now we keep looking until the embarker is found.
+        /// </summary>
         private void EnsureLocalPlayer()
         {
-            if (_localPlayer != null) return;
+            // Sampled BEFORE the resolved-check on purpose. This method short-circuits for the entire
+            // time a player is resolved, so tracking the transition below it would never see the world
+            // go away: on the second world of a session (the host reloads a save, a shipyard scene) the
+            // eager window would still be marked spent from the first one, and the re-resolve would fall
+            // back to 0.5 s polling across exactly the frames BoatSync needs the body.
+            bool inWorld = false;
+            try { inWorld = GameState.playing; } catch { }
+            if (!inWorld) _inWorldSince = -1f;
+            else if (_inWorldSince < 0f) _inWorldSince = Time.unscaledTime;
+
+            if (_localPlayer != null && _emb != null) return;
+
+            // At most one scene scan per frame. This is now reached from three places in the same frame
+            // (Tick, ResolveLocalBoatNow, ResolveLocalPlayerBodyNow) and FindObjectOfType walks every
+            // loaded object — the same hot-path cost BoatLocator was rewritten to remove.
+            if (_embScanFrame == Time.frameCount) return;
+            _embScanFrame = Time.frameCount;
+
+            // Inside a freshly loaded world, retry EVERY frame for a short while: the window between the
+            // world coming up and the player object existing is a frame or two, and it is exactly when
+            // BoatSync engages the boat — a 0.5 s backoff there meant up to half a second of broadcasting
+            // the camera's pose as the player, with no deck latched.
+            //
+            // But only for a while. If the embarker still isn't there after EmbEagerSec of a loaded
+            // world it isn't coming (a mod conflict, a scene we don't understand), and scanning forever
+            // at frame rate is a permanent, invisible frame cost — worse than the problem it solved.
+            // Fall back to polling then, and at the menu, where the object legitimately does not exist.
+            bool eager = inWorld && Time.unscaledTime - _inWorldSince <= EmbEagerSec;
+            if (!eager)
+            {
+                if (Time.unscaledTime < _embRetryAt) return;
+                _embRetryAt = Time.unscaledTime + EmbRetrySec;
+            }
+
             var emb = Object.FindObjectOfType<PlayerEmbarkerNew>();
             if (emb != null && emb.playerObserver != null)
             {
                 _emb = emb;
                 // playerObserver lives in the render frame (same space as the camera);
                 // playerController is in a different frame and must NOT be used here.
-                _localPlayer = emb.playerObserver;
-                DumpHierarchy();
+                if (_localPlayer != emb.playerObserver)
+                {
+                    _localPlayer = emb.playerObserver;
+                    // The pose source just moved to a different transform — drop the velocity baseline
+                    // so the first snapshot after the swap doesn't report a bogus jump.
+                    _haveLast = false;
+                    DumpHierarchy();
+                }
+                return;
             }
-            else if (Camera.main != null)
+
+            if (_localPlayer == null && Camera.main != null)
                 _localPlayer = Camera.main.transform;   // fallback before the player exists
+        }
+
+        /// <summary>
+        /// Resolve the local player's deck RIGHT NOW and return it (see <see cref="LocalBoat"/>).
+        ///
+        /// Exists because the deck latch is refreshed from <c>Tick</c>, which is step 19 of the frame
+        /// pipeline, while <c>BoatSync.ApplyRemote</c> — the thing that most needs to know whether we
+        /// are standing on a deck it is about to teleport — is step 3. On a fresh join the boat can
+        /// engage before <c>Tick</c> has ever latched anything, so BoatSync asks for an on-demand
+        /// resolve instead of depending on step order (or guessing by proximity, which was worse).
+        /// </summary>
+        public Transform ResolveLocalBoatNow()
+        {
+            EnsureLocalPlayer();
+            if (_localPlayer == null) return null;
+            CurrentBoat();
+            return _lastLocalBoat;
         }
 
         /// <summary>The boat the local player is currently standing on, or null.</summary>
         private Transform CurrentBoat()
         {
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            int surface = 0;
+            bool probed = false;
             if (boat != null)
             {
-                int surface = ProbeStandingSurface(boat);
+                surface = ProbeStandingSurface(boat);
+                probed = true;
+                // Being parented to the boat is stronger evidence than any raycast: aboard, the player
+                // is a child of the boat transform. This confirms the deck in the cases the 3 m downward
+                // ray cannot (up in the rigging, mid-jump, on a mast platform), which is what lets the
+                // latch re-arm there instead of being stuck inconclusive.
+                if (surface == 0 && _localPlayer != null && _localPlayer.IsChildOf(boat))
+                    surface = 1;
                 if (surface > 0)
                 {
                     _lastLocalBoat = boat;
@@ -568,6 +731,41 @@ namespace SailwindCoop.Sync
                     return _lastLocalBoat;
             }
 
+            // Forget the deck ONLY on positive evidence of standing on non-boat ground (surface < 0).
+            //
+            // The latch must survive an INCONCLUSIVE probe (surface == 0 — up in the rigging, on a mast
+            // platform, mid-jump, anywhere the 3 m downward ray hits nothing). Clearing it there was a
+            // one-way door: the "same boat, inconclusive probe" branch above requires _lastLocalBoat to
+            // still name that boat, so once cleared it could not re-arm until the player happened to
+            // stand somewhere the ray finds deck — and until then their pose went out in world frame
+            // while they rode a moving ship, which remote viewers see as drift and jitter.
+            //
+            // Leaving it set while genuinely aboard is also the correct answer for LocalBoat: during a
+            // map/inventory transition the game clears debugOutCurrentBoat, but the player really is
+            // still on that deck.
+            if (_lastLocalBoat != null)
+            {
+                if (!probed) surface = ProbeStandingSurface(_lastLocalBoat);
+
+                // Positive evidence of non-boat ground.
+                bool ashore = surface < 0;
+
+                // ...or the game itself stopped reporting a boat and we have not confirmed a deck for a
+                // while. Needed because "no hit at all" also reads as inconclusive: Sailwind's ocean has
+                // no walkable collider, so a player who fell overboard and is swimming probes 0 forever
+                // and would otherwise keep the latch — and with it BoatSync's licence to teleport them
+                // onto the deck. Bounded by debugOutCurrentBoat being null, so it never fires while the
+                // game still says we are aboard (rigging, mast platform).
+                bool staleWhileNoBoatReported =
+                    boat == null && Time.time - _lastLocalBoatSeenAt > LatchStaleSec;
+
+                if (ashore || staleWhileNoBoatReported)
+                {
+                    _lastLocalBoat = null;
+                    _lastLocalBoatIndex = BoatLocator.NoBoat;
+                    _lastLocalBoatEpoch = -1;
+                }
+            }
             _boatSurfaceValidUntil = 0f;
 
             return null;
@@ -582,12 +780,22 @@ namespace SailwindCoop.Sync
             {
                 _lastLocalBoat = boat;
                 _lastLocalBoatIndex = index;
+                _lastLocalBoatEpoch = BoatLocator.SetEpoch;
                 return index;
             }
 
             // Avoid occasional NoBoat samples resetting the receiver's interpolation buffer while
             // the same confirmed deck is still active.
-            if (boat == _lastLocalBoat && _lastLocalBoatIndex != BoatLocator.NoBoat)
+            //
+            // Only while the boat SET has not changed since we resolved it. Same transform is not
+            // evidence enough: an index is a position in the list, so a boat appearing or disappearing
+            // ahead of this deck renumbers it without touching it, and re-sending the old number puts
+            // the avatar on somebody else's hull — the exact corruption BoatLocator's stability gate
+            // exists to prevent. Since that gate, NoBoat is returned precisely WHILE the set is moving,
+            // i.e. exactly when this cache is least trustworthy, so the epoch check is what keeps the
+            // fallback honest rather than an optimisation.
+            if (boat == _lastLocalBoat && _lastLocalBoatIndex != BoatLocator.NoBoat &&
+                _lastLocalBoatEpoch == BoatLocator.SetEpoch)
                 return _lastLocalBoatIndex;
 
             return BoatLocator.NoBoat;

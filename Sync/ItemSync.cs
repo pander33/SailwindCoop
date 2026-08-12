@@ -1353,17 +1353,18 @@ namespace SailwindCoop.Sync
             Transform boat = ParentBoat(source);
             if (boat == null)
                 boat = LocalPlayerBoat();
-            if (boat != null)
+            // A boat we cannot NUMBER is not usable as a frame, however real the transform is — see
+            // the note in BuildPose.
+            boatIndex = boat != null ? BoatLocator.IndexOf(boat) : BoatLocator.NoBoat;
+            if (boatIndex != BoatLocator.NoBoat)
             {
                 frame = CoordFrame.Boat;
-                boatIndex = BoatLocator.IndexOf(boat);
                 pos = boat.InverseTransformPoint(source.position);
                 rot = Quaternion.Inverse(boat.rotation) * source.rotation;
             }
             else
             {
                 frame = CoordFrame.World;
-                boatIndex = BoatLocator.NoBoat;
                 pos = CoordSpace.Ready ? CoordSpace.LocalToReal(source.position) : source.position;
                 rot = source.rotation;
             }
@@ -1407,17 +1408,25 @@ namespace SailwindCoop.Sync
                 : (item.held != null
                     ? LocalPlayerBoat()
                     : (item.currentActualBoat != null ? item.currentActualBoat : ParentBoat(item.transform)));
-            if (boat != null)
+            // The frame follows the INDEX, not the transform. A boat whose index is not currently
+            // resolvable (BoatLocator withholds them while the boat set is still moving) cannot be used
+            // as a frame at all: the receiver addresses the frame by index, so a Boat-frame pose carrying
+            // NoBoat is a boat-LOCAL coordinate with nothing to map it through. ConfigureNetFrame's
+            // fallback then passed it straight into world space, and a deck-local (2, 1, -5) resolves to
+            // the floating origin — i.e. every item on the boat jumps to the local player's feet.
+            // Falling back to world frame instead only costs the item its rigid attachment to the deck
+            // for the ~0.2 s of the settling window (it drifts by the boat's travel, then snaps back),
+            // matching what PlayerSync already does with the local avatar.
+            boatIndex = boat != null ? BoatLocator.IndexOf(boat) : BoatLocator.NoBoat;
+            if (boatIndex != BoatLocator.NoBoat)
             {
                 frame = CoordFrame.Boat;
-                boatIndex = BoatLocator.IndexOf(boat);
                 pos = boat.InverseTransformPoint(item.transform.position);
                 rot = Quaternion.Inverse(boat.rotation) * item.transform.rotation;
             }
             else
             {
                 frame = CoordFrame.World;
-                boatIndex = BoatLocator.NoBoat;
                 pos = CoordSpace.Ready ? CoordSpace.LocalToReal(item.transform.position) : item.transform.position;
                 rot = item.transform.rotation;
             }
@@ -1580,15 +1589,21 @@ namespace SailwindCoop.Sync
         {
             if (frame == CoordFrame.Boat)
             {
+                // When the index will not resolve, HOLD the item instead of passing the value through.
+                // p is boat-local; returning it unchanged reinterprets it as a world coordinate and
+                // teleports the item to the floating origin (right at the local player). Standing still
+                // for the frames the index is unavailable is the harmless failure.
                 e.Net.ToWorldPos = p =>
                 {
                     Transform boat = BoatLocator.FindByIndex(boatIndex);
-                    return boat != null ? boat.TransformPoint(p) : p;
+                    if (boat != null) return boat.TransformPoint(p);
+                    return e.Item != null ? e.Item.transform.position : p;
                 };
                 e.Net.ToWorldRot = q =>
                 {
                     Transform boat = BoatLocator.FindByIndex(boatIndex);
-                    return boat != null ? boat.rotation * q : q;
+                    if (boat != null) return boat.rotation * q;
+                    return e.Item != null ? e.Item.transform.rotation : q;
                 };
             }
             else

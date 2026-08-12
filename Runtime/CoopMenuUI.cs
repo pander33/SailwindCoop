@@ -75,7 +75,7 @@ namespace SailwindCoop.Runtime
         private void DrawWindow()
         {
             float w = 430f;
-            float h = 382f;
+            float h = 476f;   // Tools second row (Logging) + its two-line hint + both status labels
             float x = Mathf.Clamp(Screen.width - w - 18f, 10f, Screen.width - w - 10f);
             float y = 60f;
             var rect = new Rect(x, y, w, h);
@@ -103,10 +103,14 @@ namespace SailwindCoop.Runtime
             DrawTools();
             GUILayout.FlexibleSpace();
 
-            if (!string.IsNullOrEmpty(_net.LastError))
-                GUILayout.Label(_net.LastError, _muted);
-            if (!string.IsNullOrEmpty(_status))
-                GUILayout.Label(_status, _muted);
+            // Emitted unconditionally (empty string when unset). A Label that appears only when its text
+            // is non-empty changes the control count between the Layout pass and the event pass that set
+            // it — Unity's "Getting control N's position in a group with only M controls", thrown here
+            // between BeginArea and EndArea, which leaves the GUI clip stack unbalanced for that frame.
+            GUILayout.Label(_net.LastError ?? "", _muted);
+            GUILayout.Label(_status ?? "", _muted);
+            // Shown even with logging switched off — this is the only surface for an actionable failure.
+            GUILayout.Label(CoopBehaviour.LastNotice ?? "", _muted);
 
             GUILayout.EndArea();
         }
@@ -167,6 +171,13 @@ namespace SailwindCoop.Runtime
 
         private void DrawTools()
         {
+            // Snapshot both flags ONCE, before any control is emitted, and render the whole section from
+            // them. Either can change between the Layout and Repaint passes (the Logging button below
+            // flips one; ConfigurationManager can flip the other), and a control count that differs
+            // between the two passes is Unity's "Getting control N's position in a group with only M
+            // controls" — thrown between BeginArea and EndArea, leaving the GUI clip stack unbalanced.
+            bool debugTools = Plugin.Cfg.EnableDebugPanel.Value;
+
             GUILayout.Label("Tools", _label);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Avatar", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
@@ -177,14 +188,42 @@ namespace SailwindCoop.Runtime
             if (GUILayout.Button(_coop.OverlayVisible ? "Hide Status" : "Show Status", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
                 _coop.OverlayVisible = !_coop.OverlayVisible;
 
-            GUI.enabled = Plugin.Cfg.EnableDebugPanel.Value;
+            GUI.enabled = debugTools;
             if (GUILayout.Button("Debug", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
                 _coop.ToggleDebugPanel();
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
-            if (!Plugin.Cfg.EnableDebugPanel.Value)
-                GUILayout.Label("Debug tools are disabled in public mode.", _muted);
+            // Same rule as debugTools above: a button only returns true on the event pass, never on the
+            // Layout pass, so flipping this mid-draw and branching on it would emit different control
+            // counts in the two passes. The new value is picked up on the next pass, which sees a
+            // consistent Layout/Repaint pair.
+            bool logging = Plugin.Logger.Enabled;
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(logging ? "Logging: ON" : "Logging: off", _button,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+            {
+                bool next = !logging;
+                Plugin.Logger.Enabled = next;
+                Plugin.Cfg.EnableLogging.Value = next;   // persists to the config file
+                _status = next
+                    ? "Logging ON - reproduce the problem, then send BepInEx/LogOutput.log"
+                    : "Logging off";
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            // Always emitted (constant control count); only the text depends on the state.
+            GUILayout.Label(debugTools
+                ? "Debug tools are enabled."
+                : "Debug tools are disabled in public mode.", _muted);
+
+            // Always emitted (constant control count); only the text depends on the state.
+            GUILayout.Label(logging
+                ? "Logging is ON. Reproduce the problem, then send BepInEx/LogOutput.log."
+                : "Logging is off. Turn it on BEFORE reproducing a problem - nothing is written to the log until you do.",
+                _muted);
 
             GUILayout.BeginHorizontal();
             GUILayout.Label("Model: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _muted);

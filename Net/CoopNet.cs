@@ -161,7 +161,12 @@ namespace SailwindCoop.Net
                 _net = null;
             }
             _sessions.Clear();
+            // Names and our own id belong to the session that just ended: leaving them behind made the
+            // next session start with stale labels and, on a client, a NetId from the previous host.
+            _playerNames.Clear();
             _hostPeer = null;
+            MyNetId = NetRegistry.HostPlayerNetId;
+            _lastTimeSyncTick = 0;
             Registry.Clear();
             Clock.Reset();
             Role = Role.None;
@@ -292,11 +297,40 @@ namespace SailwindCoop.Net
 
         private void OnNetworkReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
         {
+            // This runs inside NetManager.PollEvents, i.e. inside CoopBehaviour.Update. An escaping
+            // exception (malformed packet, a handler touching a destroyed object) would abort the whole
+            // frame's tick, not just this packet — so nothing is allowed out of here.
+            try
+            {
+                DispatchReceive(peer, reader);
+            }
+            catch (Exception e)
+            {
+                // A handler that throws usually throws for EVERY packet (a destroyed avatar, a boat that
+                // went away). Unthrottled that is ~SnapshotHz x peers full stack traces per second, and
+                // the disk I/O alone is the frame hitch this containment exists to avoid.
+                //
+                // Not routed through _log: that is the gated info sink, so with logging off (the default)
+                // a receive path broken for the whole session left no trace at all. ReportError throttles
+                // the same way and still writes a bounded number of lines while logging is off.
+                Plugin.Logger.ReportError("[CoopNet] Receive handler failed", e, ref _receiveFailures);
+            }
+        }
+
+        private Runtime.CoopLog.Repeat _receiveFailures;
+        private int _unknownTypeCount;
+
+        private void DispatchReceive(NetPeer peer, NetPacketReader reader)
+        {
             MsgType type = Protocol.PeekType(reader);
             INetMessage msg = Protocol.ReadBody(type, reader);
             if (msg == null)
             {
-                _log("[CoopNet] Unknown msgType " + (byte)type + " - skipped");
+                // ReadBody already reported a malformed payload; only unknown types are news here, and a
+                // spoofed/corrupt stream on the port can produce one per datagram.
+                if (Plugin.Logger.ShouldReport(ref _unknownTypeCount))
+                    _log("[CoopNet] Unknown or unreadable msgType " + (byte)type +
+                         " - skipped (occurrence #" + _unknownTypeCount + ")");
                 return;
             }
 

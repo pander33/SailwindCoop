@@ -34,6 +34,10 @@ namespace SailwindCoop.Sync
 
         public bool HasData => _buf.Count > 0;
 
+        /// <summary>Buffered snapshot count. A consumer that must not act on a single (possibly
+        /// stale/first) sample can wait for two before trusting the stream.</summary>
+        public int SampleCount => _buf.Count;
+
         /// <summary>
         /// Converts a buffered position/rotation into world space at apply time. Swappable
         /// so a remote can be expressed in real (origin-stable) space OR boat-local space —

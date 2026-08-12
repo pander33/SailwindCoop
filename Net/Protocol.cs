@@ -34,15 +34,31 @@ namespace SailwindCoop.Net
         /// <summary>
         /// Reads a message of the given type from a reader whose msgType byte has
         /// already been consumed (see <see cref="PeekType"/>). Returns null for
-        /// unknown types so the caller can log and drop rather than crash.
+        /// unknown types — and for truncated/corrupt payloads, which would otherwise
+        /// throw out of the receive callback and take down the whole frame's tick —
+        /// so the caller can log and drop rather than crash.
         /// </summary>
         public static INetMessage ReadBody(MsgType type, NetDataReader r)
         {
             INetMessage msg = Create(type);
             if (msg == null) return null;
-            msg.Deserialize(r);
+            try
+            {
+                msg.Deserialize(r);
+            }
+            catch (Exception e)
+            {
+                // Throttled: a corrupt or spoofed UDP stream on the port would otherwise write a line
+                // per datagram. ShouldReport increments first, so nothing is built when suppressed.
+                if (Plugin.Logger.ShouldReport(ref _malformedCount))
+                    Plugin.Logger.LogWarning("[Protocol] Malformed " + type + " payload dropped " +
+                                             "(occurrence #" + _malformedCount + "): " + e.Message);
+                return null;
+            }
             return msg;
         }
+
+        private static int _malformedCount;
 
         private static INetMessage Create(MsgType type)
         {

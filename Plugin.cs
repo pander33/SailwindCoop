@@ -17,15 +17,25 @@ namespace SailwindCoop
         public const string Version = "0.1.3";
 
         internal static Plugin Instance { get; private set; }
-        internal new static ManualLogSource Logger { get; private set; }
+
+        /// <summary>Gated log sink — silent unless the user switches logging on (F8 → Logging).
+        /// Same method names as <see cref="ManualLogSource"/>, so call sites are unchanged.</summary>
+        internal new static Runtime.CoopLog Logger { get; private set; }
+
         internal static CoopConfig Cfg { get; private set; }
         internal static string AvatarBundlePath => Path.Combine(Path.GetDirectoryName(Instance.Info.Location), "avatar.bundle");
 
         private void Awake()
         {
             Instance = this;
-            Logger = base.Logger;
             Cfg = new CoopConfig(Config);
+            // Off unless the user opted in: a normal session writes nothing to LogOutput.log.
+            // BepInEx still records that this plugin loaded, so its presence stays visible.
+            Logger = new Runtime.CoopLog(base.Logger, Cfg.EnableLogging.Value);
+            // Honour the setting when it is changed outside the menu — editing the .cfg while the game
+            // runs (BepInEx re-reads it) or via ConfigurationManager. Without this a user could follow
+            // the config description, flip it, reproduce the bug, and still get an empty log.
+            Cfg.EnableLogging.SettingChanged += (_, __) => Logger.Enabled = Cfg.EnableLogging.Value;
             Avatar.AvatarCatalog.Initialize();
 
             Logger.LogInfo("Sailwind LAN Co-op " + Version + " loading...");
@@ -67,6 +77,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> PauseHostOnJoin;
 
         // Debug.
+        public readonly ConfigEntry<bool> EnableLogging;
         public readonly ConfigEntry<bool> EnableDebugPanel;
         public readonly ConfigEntry<KeyCode> MenuKey;
 
@@ -93,6 +104,7 @@ namespace SailwindCoop
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
             PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
 
+            EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
         }
