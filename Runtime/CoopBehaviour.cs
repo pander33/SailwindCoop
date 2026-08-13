@@ -18,6 +18,9 @@ namespace SailwindCoop.Runtime
         public CoopNet Net { get; private set; }
         public PlayerSync Players { get; private set; }
         public BoatSync Boats { get; private set; }
+
+        /// <summary>AI-корабли: у хоста считаются, у клиента ведутся снапшотами.</summary>
+        public NpcBoatSync NpcBoats { get; private set; }
         public EnvironmentSync Env { get; private set; }
         public CrestWaterSync CrestWater { get; private set; }
         public ControlsSync Controls { get; private set; }
@@ -123,6 +126,7 @@ namespace SailwindCoop.Runtime
                 ResolveLocalBoatProvider = () => Players.ResolveLocalBoatNow(),
             };
 
+            NpcBoats = new NpcBoatSync(Net);
             Env = new EnvironmentSync(Net);
             CrestWater = new CrestWaterSync();
             Env.Crest = CrestWater;
@@ -145,7 +149,7 @@ namespace SailwindCoop.Runtime
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
 
             Net.OnAccepted += ack =>
@@ -221,6 +225,10 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Pause.Tick", () => Pause.Tick()),
                 new SyncStep("Boats.Tick", () => Boats.Tick(_dt)),
                 new SyncStep("Boats.ApplyRemote", () => Boats.ApplyRemote()),
+                // Сразу за лодкой игрока: AI-корабли ни к кому не приаттачены, но должны встать до
+                // применения поз игроков — иначе столкновение с ними читается по вчерашней позе.
+                new SyncStep("NpcBoats.TickHost", () => NpcBoats.TickHost()),
+                new SyncStep("NpcBoats.ApplyRemote", () => NpcBoats.ApplyRemote()),
                 new SyncStep("Env.Tick", () => Env.Tick(_dt)),
                 // Сразу за Env: именно он держит последний известный timeScale хоста.
                 new SyncStep("HostPause.Tick", () => HostPause.Tick(Env)),
@@ -372,6 +380,9 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.WavePhases:
                     CrestWater.OnWavePhases((WavePhasesMsg)msg);
+                    break;
+                case MsgType.NpcBoatState:
+                    NpcBoats.OnNpcBoatState((NpcBoatStateMsg)msg, fromPeer);
                     break;
                 case MsgType.StormState:
                     Storms.OnStormState((StormStateMsg)msg, fromPeer);
@@ -668,6 +679,7 @@ namespace SailwindCoop.Runtime
             Controls?.Clear();
             Env?.Clear();
             CrestWater?.Clear();
+            NpcBoats?.Clear();
             Boats?.Clear();
             Players?.Clear();
             Pause?.Clear();
@@ -762,6 +774,7 @@ namespace SailwindCoop.Runtime
             Env.Clear();
             HostPause.Clear();
             CrestWater.Clear();
+            NpcBoats.Clear();
             Boats.Clear();
             Players.Clear();
         }

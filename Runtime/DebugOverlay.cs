@@ -64,6 +64,11 @@ namespace SailwindCoop.Runtime
                 //        Line("Boats", coop.Boats.IsSlaving ? "slaved " + coop.Boats.BoatCount : "waiting for boat");
                 //}
 
+                // Число обязано совпасть на обеих машинах: набор AI-кораблей фиксирован сценой, и
+                // расхождение здесь означает, что нумерация разъехалась — дальше сверять позы
+                // бессмысленно, корабли просто окажутся не теми.
+                Line("AI boats", NpcBoatText(coop));
+
                 Line("Environment", EnvText());
 
 
@@ -184,6 +189,29 @@ namespace SailwindCoop.Runtime
                 string ns = g.z < 0f ? "S" : "N";
                 string ew = g.x < 0f ? "W" : "E";
                 return Mathf.Abs(g.z).ToString("0.00") + "° " + ns + ", " + Mathf.Abs(g.x).ToString("0.00") + "° " + ew;
+            }
+            catch (System.Exception e)
+            {
+                return "err " + e.Message;
+            }
+        }
+
+        /// <summary>
+        /// Сколько AI-кораблей нашлось и сколько из них ведётся по сети. Число найденных сравнивают
+        /// между окнами хоста и клиента — оно обязано совпасть. Пометка <c>by-path</c> означает, что
+        /// нумерация взята не из сейва, а по иерархии (запасной путь <see cref="Sync.NpcBoatLocator"/>);
+        /// сама по себе она рабочая, но если пометка стоит только на одной машине — номера разные.
+        /// </summary>
+        private static string NpcBoatText(CoopBehaviour coop)
+        {
+            try
+            {
+                int found = Sync.NpcBoatLocator.FindBoats().Count;
+                string s = found.ToString();
+                if (Sync.NpcBoatLocator.UsingFallback) s += " by-path";
+                if (coop.NpcBoats != null && coop.Net.Role == Role.Client)
+                    s += ", slaved " + coop.NpcBoats.SlavedCount;
+                return s;
             }
             catch (System.Exception e)
             {

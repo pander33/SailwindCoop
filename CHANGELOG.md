@@ -2,6 +2,24 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **AI ships are now the same ships for everyone.** Until now every machine sailed its own private
+  fleet: a trader the host was passing simply was not there for the guest, and a wreck the host had
+  rammed was still afloat on the other screen. AI ships now run on the host and are mirrored to
+  everyone, sails and all.
+- AI ships stay alive around *any* crewmate, not just the host. The game normally freezes a ship once
+  it is far from the player, which meant a guest who sailed ahead met motionless hulls; the range is
+  now measured to whichever player is nearest.
+
+### Notes
+
+- The wire protocol moved from `53` to `54`, so every machine must be updated together again.
+- Trading vessels that carry goods between ports are not covered yet — they are part of the economy
+  rather than the sea traffic, and their prices are already settled by the host.
+
 ## [0.1.5] - 2026-08-13
 
 A stability release: joins that finish cleanly, boats and items that stay where they belong, a sea that

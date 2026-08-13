@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 53;
+        public const int Version = 54;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -109,6 +109,7 @@ namespace SailwindCoop.Net
                 case MsgType.ClientWorldLoaded: return new ClientWorldLoadedMsg();
                 case MsgType.RodState: return new RodStateMsg();
                 case MsgType.WavePhases: return new WavePhasesMsg();
+                case MsgType.NpcBoatState: return new NpcBoatStateMsg();
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

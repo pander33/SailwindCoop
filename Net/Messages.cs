@@ -70,6 +70,7 @@ namespace SailwindCoop.Net
 
         RodState = 80,          // both : fishing-rod cast visual — bobber real-pos + line length + rod bend from the holder
         WavePhases = 81,        // host -> client : Crest Gerstner _phases arrays (see WavePhasesMsg)
+        NpcBoatState = 82,      // host -> client : AI ship poses + AI inputs, batched (see NpcBoatStateMsg)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1641,6 +1642,88 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w) { w.Put(Ok); }
         public void Deserialize(NetDataReader r) { Ok = r.GetBool(); }
+    }
+
+    // ---------------------------------------------------------------------
+    // NPC (AI) boats — Unreliable, host -> client only
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Позы AI-кораблей и входы их ИИ, пачкой.
+    ///
+    /// Появления не передаются намеренно: NPC-лодки — не рантайм-спавн, а фиксированные объекты
+    /// сцены. <c>SaveLoadManager</c> держит их editor-assigned массивом и сохраняет ПО ИНДЕКСУ
+    /// массива, поэтому у хоста и клиента заведомо один и тот же набор в одном порядке, и
+    /// <see cref="Entry.Index"/> — та же нумерация, которой пользуется сам файл сохранения.
+    ///
+    /// Паруса тоже не передаются. Их анимацию крутит <c>NPCBoatController.Update</c> из трёх полей
+    /// ИИ (<c>currentTargetIndex</c>, <c>currentDockIndex</c>, <c>parkedTimer</c>) — синхронизируем
+    /// эти ВХОДЫ, а расчёт оставляем локальной симуляции клиента. Приём тот же, что в
+    /// <see cref="Sync.CrestWaterSync"/>: писать готовые выходы 5 раз в секунду означало бы
+    /// ступеньки вместо плавного набора парусов.
+    ///
+    /// Пачка ограничена по числу записей (<see cref="MaxPerPacket"/>), чтобы ненадёжный пакет не
+    /// перерос MTU и не начал фрагментироваться: потеря одного фрагмента убивает весь пакет.
+    /// </summary>
+    public sealed class NpcBoatStateMsg : INetMessage
+    {
+        /// <summary>Сколько записей влезает в один датаграм: 16 × 50 Б + заголовок ≈ 810 Б.</summary>
+        public const int MaxPerPacket = 16;
+
+        public struct Entry
+        {
+            public ushort Index;      // позиция в массиве SaveLoadManager.npcBoats
+            public Vector3 RealPos;   // CoordSpace.LocalToReal(boat.position)
+            public Quaternion Rot;
+            public Vector3 RealVel;   // для экстраполяции; скорость от сдвига начала координат не зависит
+            public short TargetIndex; // NPCBoatController.currentTargetIndex, -1 = нет цели
+            public short DockIndex;   // NPCBoatController.currentDockIndex, -1 = не пришвартован
+            public float ParkedTimer;
+        }
+
+        public long Tick;
+        public Entry[] Boats = new Entry[0];
+
+        public MsgType Type => MsgType.NpcBoatState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Tick);
+            int count = Boats != null ? Boats.Length : 0;
+            if (count > byte.MaxValue) count = byte.MaxValue;
+            w.Put((byte)count);
+            for (int i = 0; i < count; i++)
+            {
+                var e = Boats[i];
+                w.Put(e.Index);
+                w.PutVector3(e.RealPos);
+                w.PutQuaternion(e.Rot);
+                w.PutVector3(e.RealVel);
+                w.Put(e.TargetIndex);
+                w.Put(e.DockIndex);
+                w.Put(e.ParkedTimer);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Tick = r.GetLong();
+            int count = r.GetByte();
+            Boats = new Entry[count];
+            for (int i = 0; i < count; i++)
+            {
+                Boats[i] = new Entry
+                {
+                    Index = r.GetUShort(),
+                    RealPos = r.GetVector3(),
+                    Rot = r.GetQuaternion(),
+                    RealVel = r.GetVector3(),
+                    TargetIndex = r.GetShort(),
+                    DockIndex = r.GetShort(),
+                    ParkedTimer = r.GetFloat(),
+                };
+            }
+        }
     }
 
     // ---------------------------------------------------------------------

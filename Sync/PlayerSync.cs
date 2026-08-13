@@ -326,6 +326,24 @@ namespace SailwindCoop.Sync
             }
         }
 
+        /// <summary>
+        /// Мировые позиции отрисованных сейчас удалённых игроков, дописываются в переданный список.
+        ///
+        /// Список принимается извне, а не возвращается: единственный потребитель —
+        /// <see cref="NpcBoatPatches"/>, который зовёт это из <c>BoatHorizon.DistanceCheck</c>, то есть
+        /// потенциально по разу на каждый корабль каждый кадр. Возвращать новый список означало бы
+        /// мусор в куче на горячем пути.
+        /// </summary>
+        public void CollectRemotePositions(List<Vector3> into)
+        {
+            if (into == null) return;
+            foreach (var a in _remotes.Values)
+            {
+                if (a.Go == null) continue;
+                into.Add(a.Go.transform.position);
+            }
+        }
+
         public PlayerSync(CoopNet net) { _net = net; }
 
         // -----------------------------------------------------------------
