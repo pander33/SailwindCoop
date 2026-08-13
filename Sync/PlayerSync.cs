@@ -433,6 +433,11 @@ namespace SailwindCoop.Sync
             _lastFrame = frame;
             _haveLast = true;
 
+            // Походка/поворот меряются отдельно от позы — см. комментарий у PlayerStateMsg.
+            bool hasLocalAnim;
+            float moveSpeed = LocalDeckSpeed(out hasLocalAnim);
+            float turnRate = LocalTurnRate(tick, hasLocalAnim);
+
             _net.Broadcast(new PlayerStateMsg
             {
                 NetId = _net.MyNetId,
@@ -444,8 +449,67 @@ namespace SailwindCoop.Sync
                 HeadRot = headRot,
                 Vel = vel,
                 Crouch = _lastLocalCrouch,
+                HasLocalAnim = hasLocalAnim,
+                MoveSpeed = moveSpeed,
+                TurnRate = turnRate,
             }, LiteNetLib.DeliveryMethod.Unreliable);
         }
+
+        /// <summary>
+        /// Скорость собственного хода игрока в плоскости, м/с, ОТНОСИТЕЛЬНО опоры.
+        ///
+        /// <c>Refs.charController</c> — это <see cref="CharacterController"/> на playerController,
+        /// который на борту parent-ится к <c>walkCol</c> (неподвижной копии лодки, по которой игрок
+        /// ходит на самом деле), а на берегу — к <c>_shifting world</c>. Обе опоры неподвижны, поэтому
+        /// скорость контроллера — это шаг человека, а не ход судна. Unity считает её из последнего
+        /// <c>Move()</c>, так что ни смена родителя при посадке, ни сдвиг плавающего начала координат
+        /// (он телепортирует трансформы, а не двигает их) в неё не попадают.
+        /// </summary>
+        private float LocalDeckSpeed(out bool available)
+        {
+            available = false;
+            CharacterController cc;
+            try { cc = Refs.charController; }
+            catch { return 0f; }
+            if (cc == null) return 0f;   // мир ещё не загружен — получатель откатится на вывод из Vel
+            available = true;
+            // Управление могло быть отобрано (ведомый сон, пауза хоста): двигаться нечем, а
+            // velocity у выключенного контроллера читать незачем.
+            if (!cc.enabled) return 0f;
+            Vector3 v = cc.velocity;
+            v.y = 0f;
+            return v.magnitude;
+        }
+
+        /// <summary>
+        /// Скорость рыскания игрока, град/с, тоже относительно опоры: <c>localRotation</c> контроллера
+        /// задаётся мышью и меряется в кадре той же неподвижной опоры, поэтому поворот лодки в него не
+        /// протекает. Начало координат только переносится, но не вращается, так что углу оно не вредит.
+        /// </summary>
+        private float LocalTurnRate(long tick, bool available)
+        {
+            if (!available) { _haveYaw = false; return 0f; }
+            Transform ctrl;
+            try { ctrl = Refs.charController != null ? Refs.charController.transform : null; }
+            catch { ctrl = null; }
+            if (ctrl == null) { _haveYaw = false; return 0f; }
+
+            float yaw = ctrl.localEulerAngles.y;
+            float rate = 0f;
+            if (_haveYaw)
+            {
+                float secs = (tick - _lastYawTick) / 1000f;
+                if (secs > 0.0001f) rate = Mathf.DeltaAngle(_lastYaw, yaw) / secs;
+            }
+            _lastYaw = yaw;
+            _lastYawTick = tick;
+            _haveYaw = true;
+            return rate;
+        }
+
+        private float _lastYaw;
+        private long _lastYawTick;
+        private bool _haveYaw;
 
         // -----------------------------------------------------------------
         // Inbound: a player pose arrived
@@ -904,9 +968,20 @@ namespace SailwindCoop.Sync
 
         private void UpdateAnimatorTargets(RemoteAvatar a, PlayerStateMsg msg)
         {
-            Vector3 planarVel = msg.Vel;
-            planarVel.y = 0f; // ignore camera/head bob and small deck height corrections
-            float speed = planarVel.magnitude;
+            // Предпочитаем скорость, снятую у отправителя относительно опоры. Вывод из Vel остаётся
+            // запасным путём (мир у отправителя ещё не поднялся) и врёт на ходу под парусом: в кадре
+            // движущегося корпуса ход лодки неотличим от шага человека — см. PlayerStateMsg.
+            float speed;
+            if (msg.HasLocalAnim)
+            {
+                speed = msg.MoveSpeed;
+            }
+            else
+            {
+                Vector3 planarVel = msg.Vel;
+                planarVel.y = 0f; // ignore camera/head bob and small deck height corrections
+                speed = planarVel.magnitude;
+            }
 
             // Feed the animator an intent value, not raw metres/sec. This matches simple
             // controllers where Speed=0 is idle and Speed around 3 is run, and avoids
@@ -921,6 +996,20 @@ namespace SailwindCoop.Sync
             }
             a.AnimTargetSpeed = a.AnimMoving ? 3f : 0f;
             a.AnimTargetCrouch = msg.Crouch ? 1f : 0f;
+
+            // Поворот — та же история, что и скорость: разность передаваемых Rot в кадре корпуса
+            // считает рыскание судна поворотом человека. Есть замер у источника — берём его.
+            if (msg.HasLocalAnim)
+            {
+                a.AnimTargetTurn = Mathf.Abs(msg.TurnRate) < 15f
+                    ? 0f
+                    : Mathf.Clamp(msg.TurnRate / 180f, -1f, 1f);
+                a.LastAnimRot = msg.Rot;
+                a.LastAnimTick = msg.Tick;
+                a.LastAnimFrame = msg.Frame;
+                a.HasAnimSnapshot = true;
+                return;
+            }
 
             if (!a.HasAnimSnapshot || a.LastAnimFrame != msg.Frame)
             {

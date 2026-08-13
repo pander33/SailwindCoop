@@ -66,10 +66,7 @@ namespace SailwindCoop.Runtime
 
                 Line("Environment", EnvText());
 
-                if (_net.Role == Role.Client && coop.Env != null && coop.Env.WaveClockValid)
-                    Line("Wave clock", Sync.EnvironmentSync.WaveClock.ToString("0.0") + " s, Δ " +
-                         (coop.Env.WaveClockError * 1000f).ToString("0") + " ms, host ts " +
-                         coop.Env.HostTimeScale.ToString("0.00"));
+
 
                 if (coop.Controls != null)
                 {

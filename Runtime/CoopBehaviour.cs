@@ -19,6 +19,7 @@ namespace SailwindCoop.Runtime
         public PlayerSync Players { get; private set; }
         public BoatSync Boats { get; private set; }
         public EnvironmentSync Env { get; private set; }
+        public CrestWaterSync CrestWater { get; private set; }
         public ControlsSync Controls { get; private set; }
         public AnchorSync Anchor { get; private set; }
         public MooringSync Mooring { get; private set; }
@@ -34,6 +35,9 @@ namespace SailwindCoop.Runtime
         public ShipyardSync Shipyard { get; private set; }
         public SaveTransferSync SaveTransfer { get; private set; }
         public JoinPause Pause { get; private set; }
+
+        /// <summary>Клиентская сторона паузы хоста: пока хост стоит, наш игрок не ходит.</summary>
+        public HostPauseSync HostPause { get; private set; }
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = false;
@@ -120,6 +124,8 @@ namespace SailwindCoop.Runtime
             };
 
             Env = new EnvironmentSync(Net);
+            CrestWater = new CrestWaterSync();
+            Env.Crest = CrestWater;
             Controls = new ControlsSync(Net);
             Anchor = new AnchorSync(Net);
             Mooring = new MooringSync(Net);
@@ -135,10 +141,11 @@ namespace SailwindCoop.Runtime
             Shipyard = new ShipyardSync(Net);
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
             Pause = new JoinPause();
+            HostPause = new HostPauseSync(Net);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); OceanPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
 
             Net.OnAccepted += ack =>
@@ -215,6 +222,17 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Boats.Tick", () => Boats.Tick(_dt)),
                 new SyncStep("Boats.ApplyRemote", () => Boats.ApplyRemote()),
                 new SyncStep("Env.Tick", () => Env.Tick(_dt)),
+                // Сразу за Env: именно он держит последний известный timeScale хоста.
+                new SyncStep("HostPause.Tick", () => HostPause.Tick(Env)),
+                new SyncStep("CrestWater.TickHost", () => { if (Net.Role == Role.Host) CrestWater.TickHost(Net); }),
+                // Замер воды крутится на обеих ролях: он нужен для дампа, а дамп снимают одновременно.
+                new SyncStep("CrestWater.TickProbe", () =>
+                {
+                    var t = Players.LocalBoat ?? Players.ResolveLocalPlayerBodyNow();
+                    if (t != null) CrestWater.TickProbe(t.position);
+                }),
+                // Straight after Env.Tick: that is what advances WaveClock, and Crest reads the
+                // provider in LateUpdate, so the value it sees is always this frame's.
                 new SyncStep("Storms.Tick", () => Storms.Tick(_dt)),
                 new SyncStep("Sleep.Tick", () => Sleep.Tick(_dt)),
                 new SyncStep("Missions.Tick", () => Missions.Tick(_dt)),
@@ -351,6 +369,9 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.RodState:
                     Items.OnRodState((RodStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.WavePhases:
+                    CrestWater.OnWavePhases((WavePhasesMsg)msg);
                     break;
                 case MsgType.StormState:
                     Storms.OnStormState((StormStateMsg)msg, fromPeer);
@@ -597,6 +618,7 @@ namespace SailwindCoop.Runtime
             // stack unbalanced and cascades into unrelated "GUI Error" spam, so contain it here too.
             try
             {
+                if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
                 if (_overlayVisible) _overlay.Draw();
                 if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
@@ -606,6 +628,27 @@ namespace SailwindCoop.Runtime
             {
                 Plugin.Logger.ReportError("[Coop] OnGUI failed", e, ref _guiFailures);
             }
+        }
+
+        private static GUIStyle _pausedBanner;
+
+        /// <summary>
+        /// Пока хост на паузе, клиент не может ходить (<see cref="HostPauseSync"/>). Без надписи это
+        /// неотличимо от зависшей игры, поэтому баннер рисуется всегда — не в оверлее и не в меню,
+        /// которые по умолчанию закрыты.
+        /// </summary>
+        private void DrawHostPausedBanner()
+        {
+            if (_pausedBanner == null)
+                _pausedBanner = new GUIStyle(GUI.skin.box)
+                {
+                    fontSize = 16,
+                    alignment = TextAnchor.MiddleCenter,
+                    wordWrap = false,
+                };
+            const float w = 360f, h = 34f;
+            GUI.Label(new Rect((Screen.width - w) * 0.5f, 24f, w, h),
+                      "Host paused the game", _pausedBanner);
         }
 
         private void OnDestroy()
@@ -624,9 +667,11 @@ namespace SailwindCoop.Runtime
             Anchor?.Clear();
             Controls?.Clear();
             Env?.Clear();
+            CrestWater?.Clear();
             Boats?.Clear();
             Players?.Clear();
             Pause?.Clear();
+            HostPause?.Clear();
             Net?.Stop();
             _harmony?.UnpatchSelf();
         }
@@ -715,6 +760,8 @@ namespace SailwindCoop.Runtime
             Anchor.Clear();
             Controls.Clear();
             Env.Clear();
+            HostPause.Clear();
+            CrestWater.Clear();
             Boats.Clear();
             Players.Clear();
         }

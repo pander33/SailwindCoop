@@ -25,6 +25,10 @@ namespace SailwindCoop.Sync
         private bool _clientAsleep;
         private float _safetyTimer;
 
+        /// <summary>Спит ли клиент по команде хоста. Управление персонажем в это время отобрано, и
+        /// <see cref="HostPauseSync"/> не должен возвращать его, снимая свою заморозку.</summary>
+        public bool ClientAsleep => _clientAsleep;
+
         /// <summary>Safety cap: if a wake message is lost, restore the client after this long.</summary>
         public const float MaxBlackoutSeconds = 45f;
         public const float FadeSeconds = 2.5f;
@@ -91,7 +95,7 @@ namespace SailwindCoop.Sync
 
                 float hostTs = 1f;
                 var env = CoopBehaviour.Instance != null ? CoopBehaviour.Instance.Env : null;
-                if (env != null && env.WaveClockValid) hostTs = Mathf.Max(1f, env.HostTimeScale);
+                if (env != null && env.HasHostState) hostTs = Mathf.Max(1f, env.HostTimeScale);
 
                 // Та же формула, что ванильная ветка GameState.sleeping в PlayerNeeds.LateUpdate:
                 // сначала гасится sleepDebt, на сон идёт лишь 20 % — пока долг не закрыт.
@@ -120,7 +124,9 @@ namespace SailwindCoop.Sync
                 if (beh != null) beh.StartCoroutine(Blackout.FadeTo(sleeping ? 1f : 0f, FadeSeconds));
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[SleepSync] fade: " + e.Message); }
-            try { Refs.SetPlayerControl(!sleeping); }
+            // Просыпаясь, возвращаем управление только если его не держит кто-то ещё: пауза хоста
+            // отбирает его по своей причине и пережила бы наш сон (см. HostPauseSync).
+            try { if (sleeping) Refs.SetPlayerControl(false); else if (!HostPauseHolds()) Refs.SetPlayerControl(true); }
             catch (Exception e) { Plugin.Logger.LogWarning("[SleepSync] control: " + e.Message); }
         }
 
@@ -129,10 +135,17 @@ namespace SailwindCoop.Sync
             if (_clientAsleep)
             {
                 try { var beh = CoopBehaviour.Instance; if (beh != null) beh.StartCoroutine(Blackout.FadeTo(0f, 0.5f)); } catch { }
-                try { Refs.SetPlayerControl(true); } catch { }
+                try { if (!HostPauseHolds()) Refs.SetPlayerControl(true); } catch { }
             }
             _clientAsleep = false;
             _safetyTimer = 0f;
+        }
+
+        /// <summary>Держит ли управление пауза хоста — тогда возвращать его после сна нельзя.</summary>
+        private static bool HostPauseHolds()
+        {
+            var beh = CoopBehaviour.Instance;
+            return beh != null && beh.HostPause != null && beh.HostPause.Frozen;
         }
     }
 

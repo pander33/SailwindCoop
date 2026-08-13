@@ -194,6 +194,16 @@ namespace SailwindCoop.Runtime
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
+            // Water dump: press on BOTH machines within a second or two, then diff the two files.
+            // Deliberately not gated behind debug tools - it only reads state and writes one text
+            // file, and it is the thing we ask a player to do when a boat looks wrong in the water.
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Dump water state", _button,
+                                 GUILayout.Width(ButtonWidth * 2f + 6f), GUILayout.Height(ButtonHeight)))
+                _status = WaterDump.Write(_coop);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
             // Same rule as debugTools above: a button only returns true on the event pass, never on the
             // Layout pass, so flipping this mid-draw and branching on it would emit different control
             // counts in the two passes. The new value is picked up on the next pass, which sees a

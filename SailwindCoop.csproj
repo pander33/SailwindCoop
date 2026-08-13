@@ -65,6 +65,12 @@
       <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Crest is the ocean the game actually renders and floats on (the legacy `Ocean` class in
+         Assembly-CSharp is dead code — Ocean.Singleton is null at runtime). -->
+    <Reference Include="Crest">
+      <HintPath>$(ManagedDir)\Crest.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
       <Private>false</Private>

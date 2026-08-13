@@ -69,6 +69,7 @@ namespace SailwindCoop.Net
         ClientWorldLoaded = 79, // client -> host : "I finished (or failed) loading your world" — host lifts the join-pause
 
         RodState = 80,          // both : fishing-rod cast visual — bobber real-pos + line length + rod bend from the holder
+        WavePhases = 81,        // host -> client : Crest Gerstner _phases arrays (see WavePhasesMsg)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -253,6 +254,22 @@ namespace SailwindCoop.Net
         public Vector3 Vel;       // velocity in the same frame, for extrapolation (may be zero)
         public bool Crouch;       // local player crouch intent for remote avatar animation
 
+        // --- сигналы анимации, снятые у отправителя ------------------------------------
+        // Почему их нельзя вывести из Vel: Vel — это производная ПЕРЕДАВАЕМОЙ позы в
+        // ПЕРЕДАВАЕМОМ кадре. Для экстраполяции это ровно то, что нужно, но как признак
+        // «человек идёт» оно неверно: когда кадр — движущийся корпус, в Vel попадает
+        // собственный ход лодки, и стоящий на палубе игрок выглядит для соседа шагающим со
+        // скоростью судна. Отсюда и баг «аватары ходят на месте, пока лодка плывёт».
+        //
+        // Поэтому походка и поворот меряются у источника, относительно опоры: CharacterController
+        // игрока живёт под walkCol — статической копией лодки, по которой игрок реально ходит, —
+        // так что его скорость и его же локальный рыскающий угол это движение ОТНОСИТЕЛЬНО палубы
+        // и на суше, и на борту. HasLocalAnim = false означает «источник ещё не поднялся»
+        // (мир не загружен), и получатель откатывается на старый вывод из Vel/Rot.
+        public bool HasLocalAnim;
+        public float MoveSpeed;   // м/с в плоскости, относительно опоры
+        public float TurnRate;    // град/с рыскания, относительно опоры
+
         public MsgType Type => MsgType.PlayerState;
 
         public void Serialize(NetDataWriter w)
@@ -266,6 +283,9 @@ namespace SailwindCoop.Net
             w.PutQuaternion(HeadRot);
             w.PutVector3(Vel);
             w.Put(Crouch);
+            w.Put(HasLocalAnim);
+            w.Put(MoveSpeed);
+            w.Put(TurnRate);
         }
 
         public void Deserialize(NetDataReader r)
@@ -279,6 +299,9 @@ namespace SailwindCoop.Net
             HeadRot = r.GetQuaternion();
             Vel = r.GetVector3();
             Crouch = r.GetBool();
+            HasLocalAnim = r.GetBool();
+            MoveSpeed = r.GetFloat();
+            TurnRate = r.GetFloat();
         }
     }
 
@@ -354,11 +377,25 @@ namespace SailwindCoop.Net
         public Quaternion WavesRot;
         public float WavesInertia;
         public float WavesMagnitude;
-        // wave clock (Ocean FFT phase = sqrt(g·k)·Time.time·speed) — the client re-drives
-        // Ocean.calcComplex with the HOST's Time.time so crests line up on both machines.
-        // HostTimeScale = host Time.timeScale: 0 during JoinPause, so the client's water
-        // freezes in the host's phase and unfreezes together with it.
-        public float WaveTime;
+        // --- вода (Crest) --------------------------------------------------------------
+        // OceanTime — это ровно OceanRenderer.CurrentTime хоста, то есть тот самый аргумент, из
+        // которого Crest строит фазу Гершнера. Клиент не подставляет его напрямую: он ведёт
+        // собственные часы и лишь подтягивается к этому значению (см. CrestWaterSync).
+        //
+        // Дальше — ВХОДЫ свободно бегущего цикла OceanUpdaterCrest, а не его выходы. Цикл
+        // (`currentMult` растёт по локальному deltaTime, на переполнении меняет местами
+        // wavesUp/wavesDown и задаёт направление) стартует с загрузки сцены, поэтому у хоста и
+        // гостя он идёт вразнобой: у одного набор волн растёт, у другого тот же набор затухает.
+        // Синхронизируем состояние цикла и даём апдейтеру гостя пересчитать веса самому — так
+        // спектр продолжает жить и отвечать на погоду, а поверхность не дёргается ступеньками
+        // от записи готовых весов 4 раза в секунду.
+        public bool HasCrest;
+        public float CrestOceanTime;
+        public float CrestCurrentMult;
+        public byte CrestWavesUp;
+        public float CrestTargetInertiaAngle;
+        public float CrestWindWavesWeight;
+        // Time.timeScale хоста: 0 на JoinPause и в его меню, тогда часы воды у клиента стоят.
         public float HostTimeScale;
 
         public MsgType Type => MsgType.EnvState;
@@ -378,7 +415,12 @@ namespace SailwindCoop.Net
             w.PutQuaternion(WavesRot);
             w.Put(WavesInertia);
             w.Put(WavesMagnitude);
-            w.Put(WaveTime);
+            w.Put(HasCrest);
+            w.Put(CrestOceanTime);
+            w.Put(CrestCurrentMult);
+            w.Put(CrestWavesUp);
+            w.Put(CrestTargetInertiaAngle);
+            w.Put(CrestWindWavesWeight);
             w.Put(HostTimeScale);
         }
 
@@ -397,7 +439,12 @@ namespace SailwindCoop.Net
             WavesRot = r.GetQuaternion();
             WavesInertia = r.GetFloat();
             WavesMagnitude = r.GetFloat();
-            WaveTime = r.GetFloat();
+            HasCrest = r.GetBool();
+            CrestOceanTime = r.GetFloat();
+            CrestCurrentMult = r.GetFloat();
+            CrestWavesUp = r.GetByte();
+            CrestTargetInertiaAngle = r.GetFloat();
+            CrestWindWavesWeight = r.GetFloat();
             HostTimeScale = r.GetFloat();
         }
     }
@@ -1617,5 +1664,64 @@ namespace SailwindCoop.Net
 
         public static Quaternion GetQuaternion(this NetDataReader r)
             => new Quaternion(r.GetFloat(), r.GetFloat(), r.GetFloat(), r.GetFloat());
+    }
+}
+
+namespace SailwindCoop.Net
+{
+    /// <summary>
+    /// The host's Crest wave phase arrays, one per <c>ShapeGerstnerBatched</c> set.
+    ///
+    /// Gerstner height is <c>sin(k·x + _phases[i] + w_i·CurrentTime)</c>, so <c>_phases</c> is where
+    /// the wave sits in space. Crest keeps waves stationary against the floating origin by folding
+    /// each shift straight into that array:
+    ///
+    ///   <c>_phases[i] += dot(newOrigin, dir(_windDirectionAngle + _angleDegs[i])) * 2π/_wavelengths[i]</c>
+    ///
+    /// — using the wave direction **as it was at the instant of that shift**. The host accumulates its
+    /// offset gradually over a voyage while that direction keeps turning; a joining client loads the
+    /// same save and covers the identical distance in a single <c>instantShifting</c> burst at one
+    /// direction. Both end on the same <c>outCurrentOffset</c> and on unrelated <c>_phases</c>.
+    ///
+    /// This is measured, not assumed. A dump from both machines (2026-08-13) shows the two inertia
+    /// sets differing in all 112 phases by up to 5.8 rad out of 2π, while <c>_wavelengths</c> and
+    /// <c>_angleDegs</c> match exactly — and the third set, the wind waves, whose
+    /// <c>_windDirectionAngle</c> is permanently 0 and whose compensation is therefore
+    /// history-independent, matches to the last bit. That contrast is the proof.
+    ///
+    /// Nothing derived repairs it: the divergence lives in the history, not in any current value. So
+    /// the client adopts the host's array wholesale. Reliable and occasional — a few hundred floats
+    /// every few seconds, not part of the 4 Hz environment snapshot.
+    /// </summary>
+    public sealed class WavePhasesMsg : INetMessage
+    {
+        /// <summary>One array per Gerstner set, in the order the sender enumerated them.</summary>
+        public float[][] Sets = new float[0][];
+
+        public MsgType Type => MsgType.WavePhases;
+
+        public void Serialize(LiteNetLib.Utils.NetDataWriter w)
+        {
+            w.Put((byte)Sets.Length);
+            for (int s = 0; s < Sets.Length; s++)
+            {
+                float[] a = Sets[s] ?? new float[0];
+                w.Put((ushort)a.Length);
+                for (int i = 0; i < a.Length; i++) w.Put(a[i]);
+            }
+        }
+
+        public void Deserialize(LiteNetLib.Utils.NetDataReader r)
+        {
+            int n = r.GetByte();
+            Sets = new float[n][];
+            for (int s = 0; s < n; s++)
+            {
+                int len = r.GetUShort();
+                var a = new float[len];
+                for (int i = 0; i < len; i++) a[i] = r.GetFloat();
+                Sets[s] = a;
+            }
+        }
     }
 }
