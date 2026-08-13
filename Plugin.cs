@@ -14,7 +14,7 @@ namespace SailwindCoop
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.1.3";
+        public const string Version = "0.1.5";
 
         internal static Plugin Instance { get; private set; }
 

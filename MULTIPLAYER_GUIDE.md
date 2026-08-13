@@ -14,6 +14,14 @@ The short rule is: the host owns the world, while each player keeps their own ch
 
 Do not treat the guest's normal single-player save as the active co-op world. In co-op, the host world is authoritative.
 
+The client writes the received world into the co-op save slot (`CoopSaveSlot`, slot 5 by default) and
+**overwrites whatever was in it**. Point that setting at a slot you do not use, and back up saves you care
+about before a long session.
+
+Joining a host means loading a save file that host sends you, so **only join people you trust** — the same
+caution you would apply to any save file someone hands you. Every machine must also run the same mod
+version: the network protocol changes between releases and mismatched builds refuse to connect.
+
 ## Economy
 
 Economy uses a separate-money model.
@@ -130,7 +138,7 @@ Boat damage is host-authoritative.
 
 For testing, keep the status overlay open and watch the damage line while using the pump or repairing.
 
-## Sleep And Time
+## Sleep, Time, And Pausing
 
 Sleep and time advance are shared-world actions.
 
@@ -139,6 +147,24 @@ Sleep and time advance are shared-world actions.
 - Client stamina recovery during host sleep is handled separately.
 
 Clients should not expect independent time skipping.
+
+Pausing works the same way. When the host opens the game menu, the host's world stops — and so does every
+guest: character control is taken away for the duration and the screen says `Host paused the game`. Guests
+can still look around. Control comes back the moment the host resumes, and also if the connection drops, so
+a lost host can never leave anyone frozen. The same freeze applies while the host is streaming its world to
+someone who is joining.
+
+## Sea, Waves, And Weather
+
+The sea is host-authoritative and identical on every machine.
+
+- Wave shape, size and direction, wind, time of day and the weather cycle all run on the host's clock.
+- The water is drawn at the same instant as the boat, so hull and wave stay in step even on a slow link.
+- The sea stops while the host is paused, and resumes with it.
+
+If the water ever looks different on one machine, press **Dump water state** in the F8 menu on both machines
+at the same moment and compare the two `debug/water-*.txt` files — they are plain `key = value` text meant to
+be diffed.
 
 ## Shipyard And Boat Purchases
 
@@ -186,6 +212,12 @@ Before a long session, make a normal backup of important Sailwind saves.
 4. Wait for the client to finish loading the host world.
 5. Use the status overlay if something looks wrong.
 6. Disconnect through F8 when finished.
+
+## Reporting A Problem
+
+Logging is off by default, so a normal session writes nothing. Press F8 → **Logging** to switch it on,
+reproduce the problem, then attach `BepInEx/LogOutput.log` and say which mod version each machine was
+running. Turning logging on afterwards does not help — the log will not contain the moment it broke.
 
 ## Known Limitations
 
