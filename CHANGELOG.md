@@ -2,7 +2,7 @@
 
 All notable user-facing changes are documented in this file.
 
-## [0.1.5] - 2026-08-12
+## [0.1.5] - 2026-08-13
 
 A stability release: joins that finish cleanly, boats and items that stay where they belong, a sea that
 is the same sea on every machine, and a mod that is quiet unless you ask it not to be.
@@ -76,9 +76,11 @@ is the same sea on every machine, and a mod that is quiet unless you ask it not 
   `0.1.5` cannot connect to each other.
 - The co-op menu gained a **Dump water state** button. Press it on both machines at the same moment and
   compare the two `debug/water-*.txt` files if the sea ever looks different on one of them.
-- The water fixes are verified on two machines: the client's ocean clock now matches the host's to a
-  few milliseconds, and the wave field matches exactly. The rest of this release is verified by code
-  review only — please report anything that behaves differently from `0.1.3` with logging switched on.
+- The water fixes and the two player fixes are verified on two machines: the client's ocean clock now
+  matches the host's to a few milliseconds, the wave field matches exactly, crewmates stand still on a
+  sailing deck, and a guest is held in place while the host has the game paused. The rest of this release
+  is verified by code review only — please report anything that behaves differently from `0.1.3` with
+  logging switched on.
 
 ## [0.1.3] - 2026-07-07
 
