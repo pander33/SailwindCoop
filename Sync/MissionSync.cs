@@ -12,9 +12,8 @@ namespace SailwindCoop.Sync
     /// host-authoritative: the host broadcasts <c>PlayerMissions.missions</c> as a read-only mirror so
     /// the client's mission UI shows the same active missions. Accepting/abandoning stays on the host
     /// (the client's mission buttons remain HostOnly; the mission goods spawn host-side and replicate via
-    /// ItemSync). Delivery is collision-triggered at the destination port and only fires on the host (the
-    /// client's goods are collider-less puppets), so the host pays its own wallet via vanilla and forwards
-    /// the same amount to the client's wallet — the reward is duplicated to both players. Slots: 0..4.
+    /// ItemSync). Delivery (<c>PortDude.OnTriggerEnter</c>) always runs on the host; a client forwards
+    /// the trigger for goods it carries (<see cref="RequestDeliver"/>). Slots: 0..4.
     /// </summary>
     public sealed class MissionSync
     {
@@ -206,6 +205,80 @@ namespace SailwindCoop.Sync
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionAbandon: " + ex.Message); }
         }
 
+        // -----------------------------------------------------------------
+        // Delivery by a client. The host copy of a carried good has no collider, so the trigger
+        // can't fire there; the client forwards it instead.
+        // -----------------------------------------------------------------
+
+        private int _lastDeliverId;
+        private float _lastDeliverAt;
+
+        public bool IsConnectedClient => _net.Role == Role.Client && _net.State == LinkState.Connected;
+
+        /// <summary>Client: forward a delivery trigger, only for goods we carry.</summary>
+        public void RequestDeliver(ShipItem item, int portIndex)
+        {
+            if (!IsConnectedClient || item == null) return;
+            var items = ItemSync.Instance;
+            if (items == null || !items.TryGetLocallyHeldKey(item, out int id, out int prefab)) return;
+            // The trigger fires repeatedly for the same crate.
+            if (id == _lastDeliverId && Time.realtimeSinceStartup - _lastDeliverAt < 1f) return;
+            _lastDeliverId = id;
+            _lastDeliverAt = Time.realtimeSinceStartup;
+            _net.Broadcast(new MissionDeliverMsg { InstanceId = id, PrefabIndex = prefab, PortIndex = portIndex },
+                           LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Plugin.Logger.LogInfo("[MissionSync] out deliver item=" + id + " port=" + portIndex);
+        }
+
+        public void OnMissionDeliver(MissionDeliverMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Host) return;
+            try
+            {
+                var ports = Port.ports;
+                Port port = ports != null && msg.PortIndex >= 0 && msg.PortIndex < ports.Length ? ports[msg.PortIndex] : null;
+                ShipItem item = ItemSync.Instance?.HostFindItem(msg.InstanceId, msg.PrefabIndex);
+                Good good = item != null ? item.GetComponent<Good>() : null;
+                Mission mission = good != null ? good.GetAssignedMission() : null;
+                if (port == null || mission == null)
+                {
+                    // Duplicate request or not a mission good.
+                    Plugin.Logger.LogInfo("[MissionSync] in deliver ignored item=" + msg.InstanceId + " port=" + msg.PortIndex);
+                    return;
+                }
+
+                // Same checks as vanilla PortDude.OnTriggerEnter.
+                if (mission.destinationPort == port)
+                {
+                    string text = "Delivered " + mission.goodPrefab.GetComponent<ShipItem>().name +
+                                  "\n( " + (mission.GetDeliveredCount() + 1) + " / " + mission.goodCount + " )";
+                    good.Deliver();                          // reward reaches clients via PostDeliver
+                    ItemSync.Instance?.HostRefreshNextTick(); // despawn on clients
+                    _heartbeat = HeartbeatSeconds;           // resend the journal next Tick
+                    fromPeer?.Send(new MissionDeliverResultMsg { Delivered = true, Text = text },
+                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Plugin.Logger.LogInfo("[MissionSync] in deliver ok item=" + msg.InstanceId + " port=" + msg.PortIndex);
+                }
+                else if (mission.originPort != port)
+                {
+                    fromPeer?.Send(new MissionDeliverResultMsg { Delivered = false, Text = "You are at the wrong port!" },
+                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionDeliver: " + ex.Message); }
+        }
+
+        public void OnMissionDeliverResult(MissionDeliverResultMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (_net.Role != Role.Client) return;
+            try
+            {
+                if (!string.IsNullOrEmpty(msg.Text)) NotificationUi.instance?.ShowNotification(msg.Text);
+                if (msg.Delivered) UISoundPlayer.instance?.PlayGoldSound();
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionDeliverResult: " + ex.Message); }
+        }
+
         /// <summary>Host: a delivery just paid out — forward the same amount to the client's own wallet.</summary>
         public void ForwardReward(MissionRewardMsg reward)
         {
@@ -269,6 +342,7 @@ namespace SailwindCoop.Sync
             _lastSig = null;
             _lastApplied = null;
             _heartbeat = 0f;
+            _lastDeliverId = 0;
             MissionText = "—";
         }
     }
@@ -303,12 +377,48 @@ namespace SailwindCoop.Sync
             bool buyGood = TryPatchEconomy(harmony, "BuyGood", nameof(PostEconomyChanged));
             bool sellGood = TryPatchEconomy(harmony, "SellGood", nameof(PostEconomyChanged));
             bool receipt = TryPatchEconomy(harmony, "PrintReceipt", nameof(PostEconomyChanged));
+            bool portDude = TryPatchPortDude(harmony);
             Plugin.Logger.LogInfo("[MissionPatches] Mission patch: DeliverGood=" + deliver + ", Accept=" + accept +
                                   ", Abandon=" + abandon + ", BuyGood=" + buyGood + ", SellGood=" + sellGood +
-                                  ", PrintReceipt=" + receipt);
+                                  ", PrintReceipt=" + receipt + ", PortDudeTrigger=" + portDude);
             SailwindCoop.Runtime.PatchHealth.Report("Missions",
                 (deliver ? 1 : 0) + (accept ? 1 : 0) + (abandon ? 1 : 0) +
-                (buyGood ? 1 : 0) + (sellGood ? 1 : 0) + (receipt ? 1 : 0), 6);
+                (buyGood ? 1 : 0) + (sellGood ? 1 : 0) + (receipt ? 1 : 0) + (portDude ? 1 : 0), 7);
+        }
+
+        private static FieldInfo _fPortDudePort;
+
+        private static bool TryPatchPortDude(Harmony harmony)
+        {
+            try
+            {
+                var mi = typeof(PortDude).GetMethod("OnTriggerEnter", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                                                    null, new[] { typeof(Collider) }, null);
+                _fPortDudePort = typeof(PortDude).GetField("port", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (mi == null || _fPortDudePort == null) return false;
+                var prefix = new HarmonyMethod(typeof(MissionPatches).GetMethod(nameof(PrePortDudeTrigger), BindingFlags.Static | BindingFlags.NonPublic));
+                harmony.Patch(mi, prefix: prefix);
+                return true;
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PortDude.OnTriggerEnter: " + e.Message); return false; }
+        }
+
+        // A connected client never runs vanilla delivery; its journal is a read-only mirror.
+        private static bool PrePortDudeTrigger(PortDude __instance, Collider other)
+        {
+            var s = MissionSync.Instance;
+            if (s == null || !s.IsConnectedClient) return true;
+            try
+            {
+                if (other != null && !other.CompareTag("Player") && other.CompareTag("Good"))
+                {
+                    var port = _fPortDudePort != null ? _fPortDudePort.GetValue(__instance) as Port : null;
+                    var item = other.GetComponent<ShipItem>();
+                    if (port != null && item != null) s.RequestDeliver(item, port.portIndex);
+                }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PrePortDudeTrigger: " + e.Message); }
+            return false;
         }
 
         private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)

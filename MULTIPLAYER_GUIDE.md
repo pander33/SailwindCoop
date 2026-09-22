@@ -213,6 +213,15 @@ Before a long session, make a normal backup of important Sailwind saves.
 5. Use the status overlay if something looks wrong.
 6. Disconnect through F8 when finished.
 
+## Crew Status And Session Access
+
+- The F8 **Crew** list shows whether each player is waiting, receiving/loading the world, ready, or failed.
+- Ping and the last known boat are shown beside each player.
+- The host may close the session to new joins without removing anyone already connected.
+- Removing a guest uses a two-step confirmation and sends that guest a readable reason.
+- Reconnect is a full fresh join and is only allowed from the main menu.
+- **Export report** creates a single diagnostic text file that can be attached to a bug report.
+
 ## Reporting A Problem
 
 Logging is off by default, so a normal session writes nothing. Press F8 → **Logging** to switch it on,

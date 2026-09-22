@@ -71,6 +71,10 @@ namespace SailwindCoop.Net
         RodState = 80,          // both : fishing-rod cast visual — bobber real-pos + line length + rod bend from the holder
         WavePhases = 81,        // host -> client : Crest Gerstner _phases arrays (see WavePhasesMsg)
         NpcBoatState = 82,      // host -> client : AI ship poses + AI inputs, batched (see NpcBoatStateMsg)
+        SessionRoster = 83,     // host -> client : crew list, join state, ping and boat
+        GameplayNotice = 84,    // host -> client : short co-op notification
+        MissionDeliver = 85,    // client -> host : mission good carried by the client reached a port
+        MissionDeliverResult = 86, // host -> client : delivery result for the UI
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -98,6 +102,33 @@ namespace SailwindCoop.Net
         WorldMismatch = 3,
         ServerFull = 4,
         AlreadyConnected = 5,
+        SessionLocked = 6,
+    }
+
+    public enum MemberJoinState : byte
+    {
+        Handshaking = 0,
+        Queued = 1,
+        ReceivingWorld = 2,
+        LoadingWorld = 3,
+        Ready = 4,
+        Failed = 5,
+    }
+
+    public enum GameplayNoticeKind : byte
+    {
+        PlayerJoined = 0,
+        PlayerReady = 1,
+        PlayerLeft = 2,
+        PlayerKicked = 3,
+        SessionOpened = 4,
+        SessionLocked = 5,
+        AnchorDropped = 6,
+        AnchorRaised = 7,
+        SleepStarted = 8,
+        SleepEnded = 9,
+        ItemBought = 10,
+        ItemSold = 11,
     }
 
     /// <summary>
@@ -1524,6 +1555,31 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r) { MissionIndex = r.GetByte(); }
     }
 
+    /// <summary>Client -> host: a mission good the client carries entered a <c>PortDude</c> trigger.</summary>
+    public sealed class MissionDeliverMsg : INetMessage
+    {
+        public int InstanceId;
+        public int PrefabIndex;
+        public int PortIndex;
+
+        public MsgType Type => MsgType.MissionDeliver;
+
+        public void Serialize(NetDataWriter w) { w.Put(InstanceId); w.Put(PrefabIndex); w.Put(PortIndex); }
+        public void Deserialize(NetDataReader r) { InstanceId = r.GetInt(); PrefabIndex = r.GetInt(); PortIndex = r.GetInt(); }
+    }
+
+    /// <summary>Host -> client: notification text for that delivery.</summary>
+    public sealed class MissionDeliverResultMsg : INetMessage
+    {
+        public bool Delivered;
+        public string Text = "";
+
+        public MsgType Type => MsgType.MissionDeliverResult;
+
+        public void Serialize(NetDataWriter w) { w.Put(Delivered); w.Put(Text ?? ""); }
+        public void Deserialize(NetDataReader r) { Delivered = r.GetBool(); Text = r.GetString(); }
+    }
+
     /// <summary>Both directions: a purchasable boat was bought (its <c>SaveableObject.extraSetting</c> flipped
     /// to true). The buyer paid from their own wallet; the other peer just marks the same boat purchased (by
     /// stable <c>sceneIndex</c>) so both enumerate and sync it as a network boat. P4.5.</summary>
@@ -1642,6 +1698,93 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w) { w.Put(Ok); }
         public void Deserialize(NetDataReader r) { Ok = r.GetBool(); }
+    }
+
+    // ---------------------------------------------------------------------
+    // Session roster and notifications
+    // ---------------------------------------------------------------------
+
+    public sealed class SessionRosterMsg : INetMessage
+    {
+        public const int MaxMembers = 16;
+
+        public struct Member
+        {
+            public uint NetId;
+            public string Name;
+            public bool IsHost;
+            public MemberJoinState State;
+            public int PingMs;
+            public int BoatIndex;
+        }
+
+        public int Revision;
+        public bool AcceptingClients;
+        public Member[] Members = new Member[0];
+
+        public MsgType Type => MsgType.SessionRoster;
+
+        public void Serialize(NetDataWriter w)
+        {
+            int count = Members == null ? 0 : System.Math.Min(Members.Length, MaxMembers);
+            w.Put(Revision);
+            w.Put(AcceptingClients);
+            w.Put((byte)count);
+            for (int i = 0; i < count; i++)
+            {
+                Member m = Members[i];
+                w.Put(m.NetId);
+                w.Put(m.Name ?? "");
+                w.Put(m.IsHost);
+                w.Put((byte)m.State);
+                w.Put(m.PingMs);
+                w.Put(m.BoatIndex);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Revision = r.GetInt();
+            AcceptingClients = r.GetBool();
+            int count = r.GetByte();
+            if (count > MaxMembers) throw new System.InvalidOperationException("Roster member count exceeds limit");
+            Members = new Member[count];
+            for (int i = 0; i < count; i++)
+            {
+                Members[i] = new Member
+                {
+                    NetId = r.GetUInt(),
+                    Name = r.GetString(),
+                    IsHost = r.GetBool(),
+                    State = (MemberJoinState)r.GetByte(),
+                    PingMs = r.GetInt(),
+                    BoatIndex = r.GetInt(),
+                };
+            }
+        }
+    }
+
+    public sealed class GameplayNoticeMsg : INetMessage
+    {
+        public GameplayNoticeKind Kind;
+        public uint ActorNetId;
+        public string Detail = "";
+
+        public MsgType Type => MsgType.GameplayNotice;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(ActorNetId);
+            w.Put(Detail ?? "");
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (GameplayNoticeKind)r.GetByte();
+            ActorNetId = r.GetUInt();
+            Detail = r.GetString();
+        }
     }
 
     // ---------------------------------------------------------------------

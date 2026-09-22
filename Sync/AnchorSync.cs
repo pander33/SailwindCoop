@@ -44,6 +44,9 @@ namespace SailwindCoop.Sync
         private bool _slaved;
         private CoordFrame _curFrame = CoordFrame.World;
         private bool _haveFrame;
+        private bool _haveNoticeState;
+        private bool _lastNoticeSet;
+        private object _noticeAnchor;   // switching boats is not an anchor event
 
         public float SnapshotHz = 12f;
         /// <summary>Rope length (m) past which the anchor counts as deployed (world frame), not stowed.</summary>
@@ -121,6 +124,17 @@ namespace SailwindCoop.Sync
                 Vel = vel,
                 Set = _anchor.IsSet(),
             }, LiteNetLib.DeliveryMethod.Unreliable);
+
+            bool isSet = _anchor.IsSet();
+            if (!ReferenceEquals(_noticeAnchor, _anchor)) { _noticeAnchor = _anchor; _haveNoticeState = false; }
+            if (!_haveNoticeState || isSet != _lastNoticeSet)
+            {
+                // Actor 0: the host can't tell who worked the anchor.
+                if (_haveNoticeState)
+                    _net.BroadcastNotice(isSet ? GameplayNoticeKind.AnchorDropped : GameplayNoticeKind.AnchorRaised, 0);
+                _haveNoticeState = true;
+                _lastNoticeSet = isSet;
+            }
         }
 
         // -----------------------------------------------------------------
@@ -259,6 +273,8 @@ namespace SailwindCoop.Sync
             _haveLast = false;
             _sendTimer = 0f;
             ClientSet = false;
+            _haveNoticeState = false;
+            _noticeAnchor = null;
         }
     }
 }

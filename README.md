@@ -10,7 +10,7 @@
 
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
-**Current Version:** 0.1.5  
+**Current Version:** 0.1.6
 **Requirements:** BepInEx 5.x, Sailwind
 
 ### ✨ Features
@@ -24,6 +24,7 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 - **Up to 4 Players:** Host a game with up to 4 clients simultaneously
 - **Shared Sea:** Waves, weather and time of day run on the host's clock, so every player sees the same water under the same hull
 - **Quiet by Default:** The mod writes nothing to the log unless you switch logging on from the menu
+- **Crew Status and Host Controls:** See who is loading or ready, their ping and boat; hosts can lock the session or remove a guest
 
 ### 📥 Installation
 
@@ -62,11 +63,18 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 
 #### Disconnecting
 - Press **F8** and click **Disconnect**
+- After a connection has succeeded once, **Reconnect** repeats the join from the main menu. It is intentionally unavailable inside an already loaded world.
+
+#### Crew And Host Controls
+- The **Crew** section shows each player's loading state, ping, and current boat.
+- The host can use **Lock session** / **Open session** without disconnecting existing players.
+- The host can remove a guest with the two-step **Kick** / **Confirm** action.
 
 #### Overlay/Debug Info
 - Press **F8** and use **Show Status** / **Hide Status**
 - **Logging** switches the log file on and off without restarting the game. It is off by default; turn it on *before* reproducing a problem, otherwise the log will hold nothing useful
 - **Dump water state** writes `debug/water-*.txt`. Press it on both machines at the same moment if the sea ever looks different on one of them
+- **Export report** writes `debug/coop-report-*.txt` with session and recent error diagnostics, including when logging was off
 - The **Debug** button opens the developer panel, and only works if `EnableDebugPanel` is set in the config
 
 #### Skin Selection
@@ -143,7 +151,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 
 ### 📝 Notes
 
-- This mod is in early development (v0.1.5). Expect bugs!
+- This mod is in early development (v0.1.6). Expect bugs!
 - Only works with players who have the mod installed, and **every machine must run the same version** — the network protocol changes between releases, so mismatched builds refuse to connect
 - The client loads the host's streamed world save into a dedicated co-op slot, while guest character progress is kept in a local co-op profile
 - The host's game state is authoritative
@@ -295,7 +303,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 ### 📝 Примечания
 
-- Мод в ранней разработке (v0.1.5). Возможны баги!
+- Мод в ранней разработке (v0.1.6). Возможны баги!
 - Работает только с игроками, у которых установлен мод, и **у всех должна быть одна и та же версия** — сетевой протокол меняется между релизами, разные сборки не соединятся
 - Клиент загружает полученный от хоста сейв мира в отдельный co-op слот, а прогресс персонажа гостя хранится в локальном co-op профиле
 - Состояние игры хоста является авторитетным

@@ -241,6 +241,24 @@ namespace SailwindCoop.Sync
 
         public int RemoteCount => _remotes.Count;
         public bool LocalPlayerFound => _localPlayer != null;
+        public int LocalBoatIndex
+        {
+            get
+            {
+                Transform boat = CurrentBoat();
+                return boat == null ? BoatLocator.NoBoat : ResolveBoatIndex(boat);
+            }
+        }
+
+        public int GetLastBoatIndex(uint netId)
+        {
+            if (netId == _net.MyNetId) return LocalBoatIndex;
+            if (!_remotes.TryGetValue(netId, out RemoteAvatar avatar) || !avatar.HasPoseFrame)
+                return BoatLocator.NoBoat;
+            return avatar.LastPoseFrame == CoordFrame.Boat
+                ? avatar.LastPoseBoatIndex
+                : BoatLocator.NoBoat;
+        }
 
         /// <summary>Whatever we currently track as the local player — normally
         /// <c>PlayerEmbarkerNew.playerObserver</c>, but possibly the main camera fallback (see
@@ -537,7 +555,10 @@ namespace SailwindCoop.Sync
         {
             // Host relays a client's pose to the other clients (skip the sender).
             if (_net.Role == Role.Host)
+            {
+                _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
                 _net.RelayExcept(msg, fromPeer, LiteNetLib.DeliveryMethod.Unreliable);
+            }
 
             // Never render ourselves.
             if (msg.NetId == _net.MyNetId) return;
@@ -869,13 +890,7 @@ namespace SailwindCoop.Sync
             // Avoid occasional NoBoat samples resetting the receiver's interpolation buffer while
             // the same confirmed deck is still active.
             //
-            // Only while the boat SET has not changed since we resolved it. Same transform is not
-            // evidence enough: an index is a position in the list, so a boat appearing or disappearing
-            // ahead of this deck renumbers it without touching it, and re-sending the old number puts
-            // the avatar on somebody else's hull — the exact corruption BoatLocator's stability gate
-            // exists to prevent. Since that gate, NoBoat is returned precisely WHILE the set is moving,
-            // i.e. exactly when this cache is least trustworthy, so the epoch check is what keeps the
-            // fallback honest rather than an optimisation.
+            // Only while the boat set is unchanged (a change may mean a new scene).
             if (boat == _lastLocalBoat && _lastLocalBoatIndex != BoatLocator.NoBoat &&
                 _lastLocalBoatEpoch == BoatLocator.SetEpoch)
                 return _lastLocalBoatIndex;

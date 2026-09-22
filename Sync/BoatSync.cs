@@ -48,6 +48,7 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ushort, HostBoat> _hostBoats = new Dictionary<ushort, HostBoat>();
         private readonly Dictionary<ushort, ClientBoat> _clientBoats = new Dictionary<ushort, ClientBoat>();
 
+        private readonly HashSet<ushort> _warnedUnknown = new HashSet<ushort>();
         private float _sendTimer;
         private float _refreshTimer;
         private uint _firstBoatNetId;
@@ -137,9 +138,21 @@ namespace SailwindCoop.Sync
         public void OnBoatState(BoatStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
+            // The main menu shares the world scene; don't slave boats before the host's save is loaded.
+            if (!InWorld()) return;
 
             Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
-            if (boat == null) return;
+            if (boat == null)
+            {
+                if (!_warnedUnknown.Contains(msg.BoatIndex) && BoatLocator.IndicesAuthoritative)
+                {
+                    _warnedUnknown.Add(msg.BoatIndex);
+                    Plugin.Logger.LogWarning("[BoatSync] Host streams boat #" + msg.BoatIndex +
+                                             " (sceneIndex " + BoatLocator.SceneIndexOf(msg.BoatIndex) +
+                                             ") but this world has no such boat - worlds differ?");
+                }
+                return;
+            }
 
             var cb = EnsureClientBoat(msg.BoatIndex, msg.NetId, boat);
             cb.Net.InterpDelayMs = InterpDelayMs;
@@ -177,6 +190,12 @@ namespace SailwindCoop.Sync
             }
         }
 
+        private static bool InWorld()
+        {
+            try { return GameState.playing && !GameState.currentlyLoading; }
+            catch { return false; }
+        }
+
         public Transform GetBoatByIndex(ushort index)
         {
             if (_net.Role == Role.Client && _clientBoats.TryGetValue(index, out var cb) && cb.Boat != null)
@@ -196,19 +215,17 @@ namespace SailwindCoop.Sync
             if (_refreshTimer < 1f && _hostBoats.Count > 0) return;
             _refreshTimer = 0f;
 
+            // Includes boats hidden for distance: their pose is still valid.
             var boats = BoatLocator.FindBoats();
-            // The host publishes these positions as wire indices and allocates a NetId per position, so
-            // registering a partial set is worse here than on the client: every guest would inherit the
-            // wrong numbering. Wait for the same stability the lookups wait for. FindBoats() above still
-            // runs — it is what advances the stability run.
             if (!BoatLocator.IndicesAuthoritative) return;
 
             var seen = new HashSet<ushort>();
-            for (int i = 0; i < boats.Count && i <= ushort.MaxValue - 1; i++)
+            for (int i = 0; i < boats.Count; i++)
             {
                 var boat = boats[i];
                 if (boat == null) continue;
-                ushort idx = (ushort)i;
+                ushort idx = BoatLocator.IndexOf(boat);
+                if (idx == BoatLocator.NoBoat) continue;
                 seen.Add(idx);
 
                 if (!_hostBoats.TryGetValue(idx, out var hb))
@@ -447,6 +464,7 @@ namespace SailwindCoop.Sync
                 RestoreClientBoat(cb);
             _clientBoats.Clear();
             _hostBoats.Clear();
+            _warnedUnknown.Clear();
             _firstBoatNetId = 0;
             _sendTimer = 0f;
             _refreshTimer = 0f;

@@ -4,6 +4,8 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-22
+
 ### Added
 
 - **AI ships are now the same ships for everyone.** Until now every machine sailed its own private
@@ -13,10 +15,35 @@ All notable user-facing changes are documented in this file.
 - AI ships stay alive around *any* crewmate, not just the host. The game normally freezes a ship once
   it is far from the player, which meant a guest who sailed ahead met motionless hulls; the range is
   now measured to whichever player is nearest.
+- The F8 menu now shows the whole crew with loading/ready state, individual ping and current boat.
+- Hosts can close the session to new players and remove a connected guest. Rejected or removed players
+  receive a readable reason instead of a generic timeout.
+- Short co-op notifications report joins, readiness, departures, session access, anchor and sleep events.
+- A previously connected guest can reconnect from the main menu with one button; reconnect still performs
+  a full safe world join rather than trying to merge into an already loaded client world.
+- **Export report** writes one bounded diagnostic text file with protocol/session/crew/join state and recent
+  warnings, even when normal logging was off.
+
+### Fixed
+
+- A mission cargo delivered by a guest now counts for the whole crew: the host's mission journal advances,
+  and the payout reaches the host and every guest. Before, only the delivering guest's own screen counted it.
+- A guest standing near the host while the host delivered cargo is no longer paid twice for it.
+- A guest joining a host who owns several boats no longer sees two boats stacked in one place. When the
+  host had sailed far away from one of their boats, the guest's copy of that boat was dragged onto the
+  host's current ship (and players or items could end up on the wrong hull). Boats are now matched by
+  their save identity instead of their order in a scan, and a guest's boats stay untouched until the
+  host's world has finished loading.
+- A guest's money and reputation are now kept when the connection drops (host quits, network timeout).
+  Before, they were saved only on an F8 disconnect or when quitting the game while still connected.
+- Hosting or joining again without disconnecting first now closes the previous session cleanly, saving
+  the guest's progress and freeing any join that was still queued.
+- Cargo carried by a guest should no longer stay behind on the host's screen at the spot where it was
+  picked up. If it still happens, the log (with logging on) now records why.
 
 ### Notes
 
-- The wire protocol moved from `53` to `54`, so every machine must be updated together again.
+- The wire protocol moved from `53` to `57`, so every machine must be updated together again.
 - Trading vessels that carry goods between ports are not covered yet — they are part of the economy
   rather than the sea traffic, and their prices are already settled by the host.
 

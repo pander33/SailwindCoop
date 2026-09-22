@@ -1,0 +1,74 @@
+# EditorConfig is awesome: http://EditorConfig.org
+
+# top-most EditorConfig file
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# csharp
+[*.cs]
+indent_style = tab
+indent_size = 4
+csharp_space_after_cast = true
+
+# Naming conventions
+dotnet_naming_rule.types_and_public_members_pascal_case.severity = warning
+dotnet_naming_rule.types_and_public_members_pascal_case.symbols = types_and_public_members
+dotnet_naming_rule.types_and_public_members_pascal_case.style = pascal_case
+
+dotnet_naming_rule.private_members_pascal_case.severity = warning
+dotnet_naming_rule.private_members_pascal_case.symbols = private_members
+dotnet_naming_rule.private_members_pascal_case.style = pascal_case
+
+dotnet_naming_rule.private_fields_camel_case.severity = warning
+dotnet_naming_rule.private_fields_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_camel_case.style = camel_case
+
+dotnet_naming_rule.parameters_camel_case.severity = warning
+dotnet_naming_rule.parameters_camel_case.symbols = parameters
+dotnet_naming_rule.parameters_camel_case.style = camel_case
+
+dotnet_naming_symbols.types_and_public_members.applicable_kinds = class, struct, interface, enum, delegate, property, method, event
+dotnet_naming_symbols.types_and_public_members.applicable_accessibilities = public, internal, protected, protected_internal
+
+dotnet_naming_symbols.private_members.applicable_kinds = property, method, event
+dotnet_naming_symbols.private_members.applicable_accessibilities = private
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+
+dotnet_naming_symbols.parameters.applicable_kinds = parameter
+
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_style.camel_case.capitalization = camel_case
+
+# These Sonar rules do not have equivalent configurable .editorconfig naming
+# conventions or complexity thresholds. The project permits descriptive
+# implementation parameter names and reviews complexity with domain context.
+dotnet_diagnostic.S927.severity = none
+dotnet_diagnostic.S3776.severity = none
+
+# javascript
+[*.{js,jsx,ts,tsx}]
+indent_style = tab
+indent_size = 4
+quote_type = single
+
+# json
+[*.json]
+indent_style = space
+indent_size = 2
+quote_type = double
+
+# less
+[*.less]
+indent_style = tab
+indent_size = 4
+
+[*.sh]
+end_of_line = lf

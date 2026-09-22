@@ -49,6 +49,7 @@ namespace SailwindCoop.Runtime
         private CoopMenuUI _menuUI;
         private Harmony _harmony;
         private bool _clientProfileSavedOnShutdown;
+        private bool _clientCoopWorldLoaded;
 
         /// <summary>Is OUR co-op menu the thing holding the cursor? Lets <see cref="JoinPause"/> tell a
         /// game menu (which stops the clock) from this one (which does not).</summary>
@@ -144,6 +145,7 @@ namespace SailwindCoop.Runtime
             Missions = new MissionSync(Net);
             Shipyard = new ShipyardSync(Net);
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
+            SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = true;
             Pause = new JoinPause();
             HostPause = new HostPauseSync(Net);
 
@@ -166,6 +168,8 @@ namespace SailwindCoop.Runtime
                 StartCoroutine(StreamSaveToClient(s.Peer, s.PlayerNetId));
             };
             Net.OnGameMessage += OnGameMessage;
+            _notifications = new CoopNotifications();
+            Net.OnGameplayNotice += msg => _notifications.Add(msg, Net);
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
@@ -204,6 +208,8 @@ namespace SailwindCoop.Runtime
 
         private SyncStep[] _steps;
         private float _dt;
+        private float _rosterTimer;
+        private CoopNotifications _notifications;
         private CoopLog.Repeat _menuFailures;
         private CoopLog.Repeat _pollFailures;
 
@@ -281,6 +287,23 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Net.PollEvents failed", e, ref _pollFailures);
             }
 
+            // Connection lost in the host's world: save the guest profile while that world is loaded.
+            if (_clientCoopWorldLoaded && Net.State != LinkState.Connected)
+            {
+                SaveClientProfileBeforeStop("connection lost");
+                _clientCoopWorldLoaded = false;
+            }
+
+            if (Net.Role == Role.Host && Net.State == LinkState.Connected)
+            {
+                _rosterTimer += Time.unscaledDeltaTime;
+                if (_rosterTimer >= 2f)
+                {
+                    _rosterTimer = 0f;
+                    Net.BroadcastRoster(Players.LocalBoatIndex);
+                }
+            }
+
             // BuildSteps runs at the end of Awake; if anything before it threw, the pipeline was never
             // built. Bail instead of throwing an uncaught NullReferenceException every single frame —
             // that would be the exact failure mode this per-step containment exists to remove.
@@ -308,6 +331,9 @@ namespace SailwindCoop.Runtime
             {
                 case MsgType.PlayerState:
                     Players.OnPlayerState((PlayerStateMsg)msg, fromPeer);
+                    break;
+                case MsgType.SessionRoster:
+                    // Handled in CoopNet.
                     break;
                 case MsgType.BoatState:
                     Boats.OnBoatState((BoatStateMsg)msg, fromPeer);
@@ -402,6 +428,12 @@ namespace SailwindCoop.Runtime
                 case MsgType.MissionAbandon:
                     Missions.OnMissionAbandon((MissionAbandonMsg)msg, fromPeer);
                     break;
+                case MsgType.MissionDeliver:
+                    Missions.OnMissionDeliver((MissionDeliverMsg)msg, fromPeer);
+                    break;
+                case MsgType.MissionDeliverResult:
+                    Missions.OnMissionDeliverResult((MissionDeliverResultMsg)msg, fromPeer);
+                    break;
                 case MsgType.BoatPurchase:
                     Shipyard.OnBoatPurchase((BoatPurchaseMsg)msg, fromPeer);
                     break;
@@ -423,6 +455,11 @@ namespace SailwindCoop.Runtime
                         uint netId = Net.PlayerNetIdForPeer(fromPeer);
                         Plugin.Logger.LogInfo("[Coop] Client NetId=" + netId + " loaded world: " +
                                               (((ClientWorldLoadedMsg)msg).Ok ? "ok" : "with error"));
+                        Net.SetMemberState(netId, ((ClientWorldLoadedMsg)msg).Ok
+                            ? MemberJoinState.Ready
+                            : MemberJoinState.Failed);
+                        if (((ClientWorldLoadedMsg)msg).Ok)
+                            Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         Pause.Release(netId);
                     }
                     break;
@@ -495,6 +532,7 @@ namespace SailwindCoop.Runtime
         {
             if (JoinInFlight())
                 Plugin.Logger.LogInfo("[Coop] NetId=" + netId + " is queued behind another join");
+            Net.SetMemberState(netId, MemberJoinState.Queued);
             while (JoinInFlight())
             {
                 // A peer that gives up while queued must not keep the next one waiting.
@@ -508,6 +546,7 @@ namespace SailwindCoop.Runtime
             }
 
             _streamingSave = true;
+            Net.SetMemberState(netId, MemberJoinState.ReceivingWorld);
             _streamingSaveDeadline = Time.realtimeSinceStartup + StreamSaveTimeoutSec;
             int epoch = ++_streamingSaveEpoch;
             try { yield return StreamSaveToClientInner(peer, netId, epoch); }
@@ -537,6 +576,7 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.LogError("[Coop] Host is not in-game (save not loaded) - world was not sent to client. " +
                                        "Load a save before accepting clients.");
                 Notice("Client rejected: this host has no world loaded. Load a save, then host again.");
+                Net.SetMemberState(netId, MemberJoinState.Failed);
                 Pause.Release(netId);
                 yield break;
             }
@@ -586,6 +626,7 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.LogError("[Coop] No host save available to send to client (" +
                                        (bytes == null ? "unreadable" : "empty file") + ")");
                 Notice("Could not read this host's save file - the world was not sent to the client.");
+                Net.SetMemberState(netId, MemberJoinState.Failed);
                 Pause.Release(netId);
                 yield break;
             }
@@ -613,6 +654,7 @@ namespace SailwindCoop.Runtime
                 Pause.Hold(netId);
 
             SaveTransfer.SendSaveTo(peer, bytes);
+            Net.SetMemberState(netId, MemberJoinState.LoadingWorld);
         }
 
         private void HandleAvatarChange(AvatarChangeMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -631,6 +673,7 @@ namespace SailwindCoop.Runtime
             {
                 if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
+                if (_notifications != null) _notifications.Draw();
                 if (_overlayVisible) _overlay.Draw();
                 if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
                 if (_avatarUI != null) _avatarUI.Draw();
@@ -685,6 +728,7 @@ namespace SailwindCoop.Runtime
             Pause?.Clear();
             HostPause?.Clear();
             Net?.Stop();
+            _notifications?.Clear();
             _harmony?.UnpatchSelf();
         }
 
@@ -699,7 +743,7 @@ namespace SailwindCoop.Runtime
             if (_clientProfileSavedOnShutdown) return;
             try
             {
-                if (Net == null || Net.Role != Role.Client || Net.State != LinkState.Connected) return;
+                if (!_clientCoopWorldLoaded) return;
                 if (CoopProfile.SaveFromGame())
                 {
                     _clientProfileSavedOnShutdown = true;
@@ -734,32 +778,50 @@ namespace SailwindCoop.Runtime
         public void StartHostSession(int port)
         {
             Plugin.Logger.LogInfo("[Coop] Starting host via UI");
+            TeardownSession("start-host", saveClientProfile: true);
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
-            ResetJoinStreaming();
             Net.StartHost(port);
         }
 
         public void StartClientSession(string ip, int port)
         {
             Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
+            TeardownSession("start-client", saveClientProfile: true);
             ClearNotice();
             _clientProfileSavedOnShutdown = false;
+            _clientCoopWorldLoaded = false;
             Net.StartClient(ip, port);
+        }
+
+        public void ReconnectSession(string ip, int port)
+        {
+            if (GameState.playing)
+            {
+                Notice("Return to the main menu before reconnecting to a co-op world.");
+                return;
+            }
+            StartClientSession(ip, port);
         }
 
         public void DisconnectSession(string reason)
         {
             Plugin.Logger.LogInfo("[Coop] Disconnect via UI: " + reason);
-            // Persist the guest's character before tearing the session down, so its money/reputation survive.
-            SaveClientProfileBeforeStop("disconnect:" + reason);
+            TeardownSession("disconnect:" + reason, saveClientProfile: true);
+        }
+
+        private void TeardownSession(string reason, bool saveClientProfile)
+        {
+            if (saveClientProfile)
+                SaveClientProfileBeforeStop(reason);
             SaveTransfer.Reset();
             Pause.Clear();
             // An in-flight StreamSaveToClient is now pointless (its peer is going away) and must not
             // leave the queue slot held for the next session.
             ResetJoinStreaming();
             Net.Stop();
+            _notifications?.Clear();
             Missions.Clear();
             Sleep.Clear();
             Shop.Clear();
@@ -777,6 +839,7 @@ namespace SailwindCoop.Runtime
             NpcBoats.Clear();
             Boats.Clear();
             Players.Clear();
+            _rosterTimer = 0f;
         }
 
     }

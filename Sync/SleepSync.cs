@@ -56,6 +56,8 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
             _net.Broadcast(new SleepStateMsg { Sleeping = sleeping }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            _net.BroadcastNotice(sleeping ? GameplayNoticeKind.SleepStarted : GameplayNoticeKind.SleepEnded,
+                                 _net.MyNetId);
             Plugin.Logger.LogInfo("[SleepSync] out sleep=" + sleeping);
         }
 

@@ -25,6 +25,10 @@ namespace SailwindCoop.Runtime
         private string _port;
         private string _playerName;
         private string _status = "";
+        private SessionMemberInfo[] _drawRoster = new SessionMemberInfo[0];
+        private uint _kickConfirmNetId;
+        private float _kickConfirmUntil;
+        private Vector2 _scroll;
 
         private GUIStyle _window;
         private GUIStyle _title;
@@ -35,6 +39,7 @@ namespace SailwindCoop.Runtime
         private GUIStyle _smallButton;
         private GUIStyle _textField;
         private GUIStyle _pill;
+        private GUIStyle _crewCell;
         private GUIStyle _backdrop;
         private Texture2D _backdropTex;
         private Texture2D _shadowTex;
@@ -75,7 +80,7 @@ namespace SailwindCoop.Runtime
         private void DrawWindow()
         {
             float w = 430f;
-            float h = 476f;   // Tools second row (Logging) + its two-line hint + both status labels
+            float h = Mathf.Min(680f, Screen.height - 80f);
             float x = Mathf.Clamp(Screen.width - w - 18f, 10f, Screen.width - w - 10f);
             float y = 60f;
             var rect = new Rect(x, y, w, h);
@@ -86,6 +91,7 @@ namespace SailwindCoop.Runtime
             GUI.DrawTexture(rect, _windowTex, ScaleMode.StretchToFill);
             GUI.Box(rect, GUIContent.none, _window);
             GUILayout.BeginArea(new Rect(x + 14f, y + 12f, w - 28f, h - 24f));
+            _scroll = GUILayout.BeginScrollView(_scroll, false, true);
 
             GUILayout.BeginHorizontal();
             GUILayout.Label("Sailwind Co-op", _title);
@@ -97,6 +103,8 @@ namespace SailwindCoop.Runtime
             DrawIdentity();
             GUILayout.Space(8f);
             DrawConnection();
+            GUILayout.Space(8f);
+            DrawCrew();
             GUILayout.Space(10f);
             DrawActions();
             GUILayout.Space(10f);
@@ -112,6 +120,7 @@ namespace SailwindCoop.Runtime
             // Shown even with logging switched off — this is the only surface for an actionable failure.
             GUILayout.Label(CoopBehaviour.LastNotice ?? "", _muted);
 
+            GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
 
@@ -130,6 +139,110 @@ namespace SailwindCoop.Runtime
                 _status = "Player name updated";
             }
             GUILayout.EndHorizontal();
+
+            bool canReconnect = _net.HasConnectedSuccessfully &&
+                                (_net.State == LinkState.Idle || _net.State == LinkState.Failed || _net.State == LinkState.Rejected);
+            GUILayout.BeginHorizontal();
+            GUI.enabled = canReconnect;
+            if (GUILayout.Button("Reconnect", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+            {
+                if (GameState.playing)
+                    _status = "Return to the main menu before reconnecting";
+                else if (TryApplyConnectionFields(out int reconnectPort))
+                {
+                    _coop.ReconnectSession(_joinIp.Trim(), reconnectPort);
+                    _status = "Reconnecting to " + _joinIp.Trim() + ":" + reconnectPort;
+                }
+            }
+            GUI.enabled = _net.Role == Role.Host;
+            if (GUILayout.Button(_net.AcceptingClients ? "Lock session" : "Open session", _button,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+            {
+                _net.SetAcceptingClients(!_net.AcceptingClients);
+                _status = _net.AcceptingClients ? "Session open" : "Session locked";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawCrew()
+        {
+            // Row count must not change between Layout and Repaint.
+            if (Event.current.type == EventType.Layout)
+                _drawRoster = _net.RosterSnapshot;
+
+            GUILayout.Label("Crew", _label);
+            if (_drawRoster.Length == 0)
+            {
+                GUILayout.Label(_net.Role == Role.None ? "No active session." : "Waiting for crew state...", _muted);
+                return;
+            }
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Player", _crewCell, GUILayout.Width(116f));
+            GUILayout.Label("Status", _crewCell, GUILayout.Width(72f));
+            GUILayout.Label("Ping", _crewCell, GUILayout.Width(64f));
+            GUILayout.Label("Location", _crewCell, GUILayout.Width(72f));
+            GUILayout.EndHorizontal();
+
+            for (int i = 0; i < _drawRoster.Length; i++)
+            {
+                SessionMemberInfo member = _drawRoster[i];
+                GUILayout.BeginHorizontal();
+                string role = member.IsHost ? " (host)" : "";
+                GUILayout.Label(member.Name + role, _crewCell, GUILayout.Width(116f));
+                GUILayout.Label(MemberStateText(member.State), _crewCell, GUILayout.Width(72f));
+                GUILayout.Label(PingText(member), _crewCell, GUILayout.Width(64f));
+                GUILayout.Label(BoatText(member.BoatIndex), _crewCell, GUILayout.Width(72f));
+
+                bool canKick = _net.Role == Role.Host && !member.IsHost;
+                if (canKick)
+                {
+                    bool confirming = _kickConfirmNetId == member.NetId && Time.realtimeSinceStartup < _kickConfirmUntil;
+                    if (GUILayout.Button(confirming ? "Confirm" : "Kick", confirming ? _dangerButton : _smallButton,
+                                         GUILayout.Width(58f), GUILayout.Height(22f)))
+                    {
+                        if (!confirming)
+                        {
+                            _kickConfirmNetId = member.NetId;
+                            _kickConfirmUntil = Time.realtimeSinceStartup + 4f;
+                        }
+                        else
+                        {
+                            _net.DisconnectPlayer(member.NetId, "You were removed by the host");
+                            _kickConfirmNetId = 0;
+                            _status = member.Name + " removed";
+                        }
+                    }
+                }
+                GUILayout.EndHorizontal();
+            }
+        }
+
+        private static string PingText(SessionMemberInfo member)
+        {
+            if (member.IsHost) return "local";
+            return member.PingMs < 0 ? "—" : member.PingMs + " ms";
+        }
+
+        private static string MemberStateText(MemberJoinState state)
+        {
+            switch (state)
+            {
+                case MemberJoinState.Handshaking: return "Handshake";
+                case MemberJoinState.Queued: return "Waiting";
+                case MemberJoinState.ReceivingWorld: return "Receiving";
+                case MemberJoinState.LoadingWorld: return "Loading";
+                case MemberJoinState.Ready: return "Ready";
+                case MemberJoinState.Failed: return "Failed";
+                default: return "—";
+            }
+        }
+
+        private static string BoatText(int boatIndex)
+        {
+            if (boatIndex < 0 || boatIndex == ushort.MaxValue) return "No boat";
+            return "Boat " + boatIndex;
         }
 
         private void DrawConnection()
@@ -201,6 +314,9 @@ namespace SailwindCoop.Runtime
             if (GUILayout.Button("Dump water state", _button,
                                  GUILayout.Width(ButtonWidth * 2f + 6f), GUILayout.Height(ButtonHeight)))
                 _status = WaterDump.Write(_coop);
+            if (GUILayout.Button("Export report", _button,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+                _status = CoopReport.Write(_coop);
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
 
@@ -397,6 +513,11 @@ namespace SailwindCoop.Runtime
                 fontSize = 12,
                 wordWrap = true,
                 normal = { textColor = new Color(0.74f, 0.70f, 0.62f) }
+            };
+            _crewCell = new GUIStyle(_muted)
+            {
+                wordWrap = false,
+                clipping = TextClipping.Clip
             };
             _button = new GUIStyle(GUI.skin.button)
             {

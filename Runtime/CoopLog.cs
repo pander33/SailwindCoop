@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using BepInEx.Logging;
 
 namespace SailwindCoop.Runtime
@@ -52,6 +53,8 @@ namespace SailwindCoop.Runtime
 
         private int _silentErrors;
         private DateTime _nextSilentErrorAt = DateTime.MinValue;
+        private readonly Queue<string> _recent = new Queue<string>();
+        private const int RecentLimit = 32;
 
         public CoopLog(ManualLogSource sink, bool enabled)
         {
@@ -72,7 +75,7 @@ namespace SailwindCoop.Runtime
 
         public void LogInfo(object data) { if (_enabled && _sink != null) _sink.LogInfo(data); }
         public void LogMessage(object data) { if (_enabled && _sink != null) _sink.LogMessage(data); }
-        public void LogWarning(object data) { if (_enabled && _sink != null) _sink.LogWarning(data); }
+        public void LogWarning(object data) { Remember("WARN", data); if (_enabled && _sink != null) _sink.LogWarning(data); }
         public void LogDebug(object data) { if (_enabled && _sink != null) _sink.LogDebug(data); }
 
         /// <summary>Ungated (see the class remarks). Bounded by the silent-mode budget.</summary>
@@ -106,6 +109,7 @@ namespace SailwindCoop.Runtime
         {
             if (r.Gen != _generation) { r.Gen = _generation; r.Count = 0; }
             r.Count++;
+            if (r.Count <= 3) Remember("ERROR", what + ": " + detail);
 
             if (_enabled)
             {
@@ -140,11 +144,28 @@ namespace SailwindCoop.Runtime
 
         private void Emit(LogLevel level, object data)
         {
+            Remember(level.ToString().ToUpperInvariant(), data);
             if (_sink == null) return;
             if (_enabled) { _sink.Log(level, data); return; }
             if (!AllowWhileOff()) return;
             _sink.Log(level, data);
             NoteBudgetExhausted();
+        }
+
+        public string[] RecentSnapshot()
+        {
+            lock (_recent) return _recent.ToArray();
+        }
+
+        private void Remember(string level, object data)
+        {
+            string text = data == null ? "" : data.ToString();
+            if (text.Length > 500) text = text.Substring(0, 500);
+            lock (_recent)
+            {
+                while (_recent.Count >= RecentLimit) _recent.Dequeue();
+                _recent.Enqueue(DateTime.UtcNow.ToString("O") + " " + level + " " + text);
+            }
         }
 
         /// <summary>

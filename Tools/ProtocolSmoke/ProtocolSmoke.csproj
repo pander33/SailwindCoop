@@ -5,6 +5,7 @@
     <LangVersion>9.0</LangVersion>
     <GameDir>D:\SteamLibrary\steamapps\common\Sailwind</GameDir>
     <ManagedDir>$(GameDir)\Sailwind_Data\Managed</ManagedDir>
+    <DefineConstants>$(DefineConstants);PROTOCOL_SMOKE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

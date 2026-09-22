@@ -19,6 +19,19 @@ namespace SailwindCoop.Net
         public uint PlayerNetId;
         public string PlayerName = "";
         public string SelectedAvatar = ""; // avatar bundle file name chosen by this player
+        public MemberJoinState JoinState = MemberJoinState.Handshaking;
+        public int BoatIndex = -1;
+        public bool Kicked;
+    }
+
+    public sealed class SessionMemberInfo
+    {
+        public uint NetId;
+        public string Name = "";
+        public bool IsHost;
+        public MemberJoinState State;
+        public int PingMs = -1;
+        public int BoatIndex = -1;
     }
 
     /// <summary>
@@ -41,6 +54,9 @@ namespace SailwindCoop.Net
         public Role Role { get; private set; } = Role.None;
         public LinkState State { get; private set; } = LinkState.Idle;
         public string LastError { get; private set; } = "";
+        public string LastDisconnectReason { get; private set; } = "";
+        public bool AcceptingClients { get; private set; } = true;
+        public bool HasConnectedSuccessfully { get; private set; }
 
         /// <summary>This machine's own player NetId (host = 1, client = assigned by host).</summary>
         public uint MyNetId { get; private set; } = NetRegistry.HostPlayerNetId;
@@ -53,6 +69,9 @@ namespace SailwindCoop.Net
         private readonly Dictionary<uint, string> _playerNames = new Dictionary<uint, string>();
         private NetPeer _hostPeer;            // client side: the host
         private long _lastTimeSyncTick;
+        private SessionMemberInfo[] _roster = new SessionMemberInfo[0];
+        private int _rosterRevision;
+        private int _hostBoatIndex = -1;
 
         // Identity supplied by the runtime layer.
         public string ModVersion = "0.0.1";
@@ -78,6 +97,8 @@ namespace SailwindCoop.Net
         public event Action<HelloAckMsg> OnAccepted;
         // Raised when a remote player leaves (host side, with the leaver's NetId).
         public event Action<uint> OnPlayerLeft;
+        public event Action OnRosterChanged;
+        public event Action<GameplayNoticeMsg> OnGameplayNotice;
 
         public CoopNet(Action<string> log)
         {
@@ -91,6 +112,7 @@ namespace SailwindCoop.Net
 
         public int PeerCount => _sessions.Count;
         public double RttMs => Clock.RttMs;
+        public SessionMemberInfo[] RosterSnapshot => (SessionMemberInfo[])_roster.Clone();
 
         public string GetPlayerName(uint netId)
         {
@@ -106,6 +128,53 @@ namespace SailwindCoop.Net
             if (peer != null && _sessions.TryGetValue(peer.Id, out var session) && session.HandshakeDone)
                 return session.PlayerNetId;
             return 0;
+        }
+
+        public void SetAcceptingClients(bool accepting)
+        {
+            if (Role != Role.Host || AcceptingClients == accepting) return;
+            AcceptingClients = accepting;
+            BroadcastRoster();
+            BroadcastNotice(accepting ? GameplayNoticeKind.SessionOpened : GameplayNoticeKind.SessionLocked, MyNetId);
+        }
+
+        public void SetMemberState(uint netId, MemberJoinState state)
+        {
+            if (Role != Role.Host) return;
+            foreach (PeerSession session in _sessions.Values)
+            {
+                if (!session.HandshakeDone || session.PlayerNetId != netId) continue;
+                if (session.JoinState == state) return;
+                session.JoinState = state;
+                BroadcastRoster();
+                return;
+            }
+        }
+
+        public void SetMemberBoat(uint netId, int boatIndex)
+        {
+            if (Role != Role.Host) return;
+            foreach (PeerSession session in _sessions.Values)
+            {
+                if (!session.HandshakeDone || session.PlayerNetId != netId) continue;
+                session.BoatIndex = boatIndex;
+                return;
+            }
+        }
+
+        public bool DisconnectPlayer(uint netId, string reason)
+        {
+            if (Role != Role.Host || netId == NetRegistry.HostPlayerNetId) return false;
+            foreach (PeerSession session in _sessions.Values)
+            {
+                if (!session.HandshakeDone || session.PlayerNetId != netId || session.Peer == null) continue;
+                var msg = new DisconnectMsg { Reason = string.IsNullOrEmpty(reason) ? "Removed by host" : reason };
+                session.Kicked = true;
+                session.Peer.Send(msg, DeliveryMethod.ReliableOrdered);
+                session.Peer.Disconnect(Protocol.Write(msg));
+                return true;
+            }
+            return false;
         }
 
         // -----------------------------------------------------------------
@@ -129,9 +198,13 @@ namespace SailwindCoop.Net
             }
             Role = Role.Host;
             State = LinkState.Connected;   // host is "up" immediately; clients join later
+            AcceptingClients = true;
+            LastError = "";
+            LastDisconnectReason = "";
             MyNetId = NetRegistry.HostPlayerNetId;
             // Host registers its own player as NetId 1.
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
+            BroadcastRoster();
             _log("[CoopNet] Host listening on " + (bindAll ? "all interfaces" : ListenIp) +
                  " port " + port + " (protocol " + Protocol.Version + ")");
         }
@@ -149,6 +222,8 @@ namespace SailwindCoop.Net
             }
             Role = Role.Client;
             State = LinkState.Connecting;
+            LastError = "";
+            LastDisconnectReason = "";
             _log("[CoopNet] Connecting to " + ip + ":" + port + " ...");
             _net.Connect(ip, port, ConnKey);   // Hello is sent once the peer connects
         }
@@ -165,6 +240,11 @@ namespace SailwindCoop.Net
             // next session start with stale labels and, on a client, a NetId from the previous host.
             _playerNames.Clear();
             _hostPeer = null;
+            _roster = new SessionMemberInfo[0];
+            _rosterRevision = 0;
+            _hostBoatIndex = -1;
+            AcceptingClients = true;
+            OnRosterChanged?.Invoke();
             MyNetId = NetRegistry.HostPlayerNetId;
             _lastTimeSyncTick = 0;
             Registry.Clear();
@@ -254,21 +334,29 @@ namespace SailwindCoop.Net
             {
                 if (_sessions.TryGetValue(peer.Id, out var s) && s.HandshakeDone)
                 {
+                    BroadcastNotice(s.Kicked ? GameplayNoticeKind.PlayerKicked : GameplayNoticeKind.PlayerLeft,
+                                    s.PlayerNetId);
                     Registry.Remove(s.PlayerNetId);
                     _playerNames.Remove(s.PlayerNetId);
                     OnPlayerLeft?.Invoke(s.PlayerNetId);
                 }
                 _sessions.Remove(peer.Id);
+                BroadcastRoster();
                 _log("[CoopNet] Client disconnected (peer " + peer.Id + "): " + info.Reason);
             }
             else
             {
+                // Ignore a late disconnect from a previous attempt's peer. A null _hostPeer means the
+                // current attempt failed to connect and must still end as Failed.
+                if (_hostPeer != null && _hostPeer != peer) return;
                 _hostPeer = null;
                 TryReadRejectFromDisconnect(info);
                 if (State != LinkState.Rejected)
                 {
                     State = LinkState.Failed;
-                    LastError = "Disconnected: " + info.Reason;
+                    LastError = string.IsNullOrEmpty(LastDisconnectReason)
+                        ? "Disconnected: " + info.Reason
+                        : LastDisconnectReason;
                 }
                 _log("[CoopNet] Disconnected from host: " + info.Reason);
             }
@@ -283,8 +371,13 @@ namespace SailwindCoop.Net
                 var data = info.AdditionalData;
                 if (data == null || data.EndOfData) return;
                 MsgType type = Protocol.PeekType(data);
-                if (type != MsgType.Reject) return;
-                if (Protocol.ReadBody(type, data) is RejectMsg rej) HandleReject(rej);
+                if (type == MsgType.Reject)
+                {
+                    if (Protocol.ReadBody(type, data) is RejectMsg rej) HandleReject(rej);
+                    return;
+                }
+                if (type == MsgType.Disconnect && Protocol.ReadBody(type, data) is DisconnectMsg disconnect)
+                    LastDisconnectReason = disconnect.Reason;
             }
             catch { }
         }
@@ -341,8 +434,11 @@ namespace SailwindCoop.Net
                 case MsgType.Reject: HandleReject((RejectMsg)msg); break;
                 case MsgType.TimeSync: HandleTimeSync(peer, (TimeSyncMsg)msg); break;
                 case MsgType.AvatarChange: HandleAvatarChange(peer, (AvatarChangeMsg)msg); break;
+                case MsgType.SessionRoster: HandleSessionRoster((SessionRosterMsg)msg); break;
+                case MsgType.GameplayNotice: HandleGameplayNotice((GameplayNoticeMsg)msg); break;
                 case MsgType.Disconnect:
-                    _log("[CoopNet] Disconnect: " + ((DisconnectMsg)msg).Reason);
+                    LastDisconnectReason = ((DisconnectMsg)msg).Reason;
+                    _log("[CoopNet] Disconnect: " + LastDisconnectReason);
                     break;
                 default:
                     // Gameplay message — hand to the Sync layer (Stage 1+).
@@ -379,6 +475,7 @@ namespace SailwindCoop.Net
             session.PlayerNetId = assigned;
             session.PlayerName = string.IsNullOrEmpty(hello.PlayerName) ? ("Player" + assigned) : hello.PlayerName;
             session.SelectedAvatar = string.IsNullOrWhiteSpace(hello.SelectedAvatar) ? "" : hello.SelectedAvatar.Trim();
+            session.JoinState = MemberJoinState.Queued;
             _playerNames[assigned] = session.PlayerName;
             _playerNames[NetRegistry.HostPlayerNetId] = PlayerName;
 
@@ -392,6 +489,8 @@ namespace SailwindCoop.Net
             _log("[CoopNet] Client accepted: " + session.PlayerName + " -> NetId " + assigned);
             OnClientReady?.Invoke(session);
             SendKnownAvatarsTo(peer);
+            BroadcastRoster();
+            BroadcastNotice(GameplayNoticeKind.PlayerJoined, assigned);
         }
 
         /// <summary>
@@ -440,6 +539,11 @@ namespace SailwindCoop.Net
                 detail = "server " + ModVersion + ", client " + h.ModVersion;
                 return RejectReason.ModVersionMismatch;
             }
+            if (!AcceptingClients)
+            {
+                detail = "the host closed this session to new players";
+                return RejectReason.SessionLocked;
+            }
             string hostWorld = WorldIdProvider() ?? "";
             // Only enforce when both sides actually know their world (Stage 0 may not).
             if (!string.IsNullOrEmpty(hostWorld) && !string.IsNullOrEmpty(h.WorldId) && h.WorldId != hostWorld)
@@ -458,7 +562,10 @@ namespace SailwindCoop.Net
         {
             if (Role != Role.Client) return;
             State = LinkState.Connected;
+            LastError = "";
+            LastDisconnectReason = "";
             MyNetId = ack.AssignedNetId;
+            HasConnectedSuccessfully = true;
             // Seed the clock immediately with the host tick from the ack.
             Clock.OnReply(Clock.LocalTick, ack.ServerTick);
             Registry.Register(ack.AssignedNetId, NetObjKind.Player, ack.AssignedNetId);
@@ -475,6 +582,86 @@ namespace SailwindCoop.Net
             State = LinkState.Rejected;
             LastError = "Host rejected: " + rej.Reason + " (" + rej.Detail + ")";
             _log("[CoopNet] " + LastError);
+        }
+
+        public void BroadcastRoster(int? hostBoatIndex = null)
+        {
+            if (Role != Role.Host) return;
+            if (hostBoatIndex.HasValue) _hostBoatIndex = hostBoatIndex.Value;
+            var members = new List<SessionRosterMsg.Member>();
+            members.Add(new SessionRosterMsg.Member
+            {
+                NetId = NetRegistry.HostPlayerNetId,
+                Name = PlayerName,
+                IsHost = true,
+                State = MemberJoinState.Ready,
+                PingMs = 0,
+                BoatIndex = _hostBoatIndex,
+            });
+            foreach (PeerSession session in _sessions.Values)
+            {
+                if (!session.HandshakeDone) continue;
+                members.Add(new SessionRosterMsg.Member
+                {
+                    NetId = session.PlayerNetId,
+                    Name = session.PlayerName,
+                    IsHost = false,
+                    State = session.JoinState,
+                    PingMs = session.Peer == null ? -1 : session.Peer.RoundTripTime,   // Ping is RTT/2
+                    BoatIndex = session.BoatIndex,
+                });
+            }
+            members.Sort((a, b) => a.NetId.CompareTo(b.NetId));
+            var msg = new SessionRosterMsg
+            {
+                Revision = ++_rosterRevision,
+                AcceptingClients = AcceptingClients,
+                Members = members.ToArray(),
+            };
+            ApplyRoster(msg);
+            Broadcast(msg, DeliveryMethod.ReliableOrdered);
+        }
+
+        private void HandleSessionRoster(SessionRosterMsg msg)
+        {
+            if (Role != Role.Client || msg.Revision < _rosterRevision) return;
+            ApplyRoster(msg);
+        }
+
+        private void ApplyRoster(SessionRosterMsg msg)
+        {
+            _rosterRevision = msg.Revision;
+            AcceptingClients = msg.AcceptingClients;
+            var next = new SessionMemberInfo[msg.Members == null ? 0 : msg.Members.Length];
+            for (int i = 0; i < next.Length; i++)
+            {
+                SessionRosterMsg.Member m = msg.Members[i];
+                next[i] = new SessionMemberInfo
+                {
+                    NetId = m.NetId,
+                    Name = m.Name ?? "",
+                    IsHost = m.IsHost,
+                    State = m.State,
+                    PingMs = m.PingMs,
+                    BoatIndex = m.BoatIndex,
+                };
+                _playerNames[m.NetId] = m.Name ?? "";
+            }
+            _roster = next;
+            OnRosterChanged?.Invoke();
+        }
+
+        public void BroadcastNotice(GameplayNoticeKind kind, uint actorNetId, string detail = "")
+        {
+            if (Role != Role.Host) return;
+            var msg = new GameplayNoticeMsg { Kind = kind, ActorNetId = actorNetId, Detail = detail ?? "" };
+            OnGameplayNotice?.Invoke(msg);
+            Broadcast(msg, DeliveryMethod.ReliableOrdered);
+        }
+
+        private void HandleGameplayNotice(GameplayNoticeMsg msg)
+        {
+            if (Role == Role.Client) OnGameplayNotice?.Invoke(msg);
         }
 
         // -----------------------------------------------------------------

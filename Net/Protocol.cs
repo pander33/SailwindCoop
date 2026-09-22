@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 54;
+        public const int Version = 57;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -50,9 +50,14 @@ namespace SailwindCoop.Net
             {
                 // Throttled: a corrupt or spoofed UDP stream on the port would otherwise write a line
                 // per datagram. ShouldReport increments first, so nothing is built when suppressed.
+#if PROTOCOL_SMOKE
+                _malformedCount++;
+                _ = e;
+#else
                 if (Plugin.Logger.ShouldReport(ref _malformedCount))
                     Plugin.Logger.LogWarning("[Protocol] Malformed " + type + " payload dropped " +
                                              "(occurrence #" + _malformedCount + "): " + e.Message);
+#endif
                 return null;
             }
             return msg;
@@ -110,6 +115,10 @@ namespace SailwindCoop.Net
                 case MsgType.RodState: return new RodStateMsg();
                 case MsgType.WavePhases: return new WavePhasesMsg();
                 case MsgType.NpcBoatState: return new NpcBoatStateMsg();
+                case MsgType.SessionRoster: return new SessionRosterMsg();
+                case MsgType.GameplayNotice: return new GameplayNoticeMsg();
+                case MsgType.MissionDeliver: return new MissionDeliverMsg();
+                case MsgType.MissionDeliverResult: return new MissionDeliverResultMsg();
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

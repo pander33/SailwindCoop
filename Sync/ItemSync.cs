@@ -62,6 +62,7 @@ namespace SailwindCoop.Sync
         private ShipItem _pendingHeldItem;
 
         private GoPointer _gp;
+        private readonly HashSet<int> _rejectedPoseLogged = new HashSet<int>();
         private FieldInfo _fHeldItem;
         private static FieldInfo _fBoatCachedItems;
         private static FieldInfo _fShipItemCurrentBoatCollider;
@@ -273,8 +274,15 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
+            if (pointer != null) _gp = pointer;   // HeldItem() reads _gp
             RefreshItems(force: true);
-            if (!_byItem.TryGetValue(item, out var e)) return;
+            if (!_byItem.TryGetValue(item, out var e))
+            {
+                // Not synced (no stable id / not sold): the host keeps its copy where it lay.
+                Remember("local pickup NOT tracked '" + item.name + "' id=" + InstanceIdOf(item) +
+                         " prefab=" + PrefabIndexOf(item) + " sold=" + item.sold);
+                return;
+            }
 
             PrepareLocalPickupPose(pointer, item);
             SetPuppet(item, true);    // client-held items are visual only; no collision/boat push
@@ -654,7 +662,13 @@ namespace SailwindCoop.Sync
             }
             else
             {
-                if (msg.Action != ItemAction.State && e.HolderNetId != actor) return;   // Pose from a non-owner
+                if (msg.Action != ItemAction.State && e.HolderNetId != actor)
+                {
+                    // Can briefly happen when a Pose overtakes its Pickup.
+                    if (_rejectedPoseLogged.Add(e.InstanceId))
+                        Remember("reject non-owner " + (msg.Action == ItemAction.Pose ? "move" : msg.Action.ToString()) + " #" + e.Index + " actor=" + actor + " holder=" + e.HolderNetId);
+                    return;
+                }
                 if (e.HolderNetId == actor) SetPuppet(e.Item, true);                    // keep it a clean puppet while held
             }
 
@@ -776,14 +790,16 @@ namespace SailwindCoop.Sync
             // stream their pose the host puppet would freeze at the pickup spot ("hangs in the air"). Keep
             // them riding the client's avatar by streaming the belt-local pose every tick; the host already
             // thinks the actor holds them (set at Pickup), so the Pose updates keep applying.
+            // Also streams an item in hand that HeldItem() missed (it may read a different GoPointer).
             if (_localHeld.Count > 0)
             {
                 _poseScratch.Clear();
-                foreach (var kv in _localHeld) _poseScratch.Add(kv.Key);
+                foreach (var kv in _localHeld)
+                    if (kv.Value == _net.MyNetId) _poseScratch.Add(kv.Key);
                 foreach (var it in _poseScratch)
                 {
                     if (it == null || it == held) continue;
-                    if (InPersonalInventory(it)) StreamLocalPose(it);
+                    if (InPersonalInventory(it) || it.held != null) StreamLocalPose(it);
                 }
             }
         }
@@ -2609,6 +2625,35 @@ namespace SailwindCoop.Sync
             foreach (var e in newlyAdded) BroadcastSpawn(e);
         }
 
+        /// <summary>Client: host id of an item the local player carries.</summary>
+        public bool TryGetLocallyHeldKey(ShipItem item, out int instanceId, out int prefabIndex)
+        {
+            instanceId = 0;
+            prefabIndex = 0;
+            if (_net.Role != Role.Client || item == null) return false;
+            RefreshItems(force: false);
+            if (!_byItem.TryGetValue(item, out var e) || e.HolderNetId != _net.MyNetId) return false;
+            if (!_hostIds.Contains(e.InstanceId)) return false;
+            instanceId = e.InstanceId;
+            prefabIndex = e.PrefabIndex;
+            return true;
+        }
+
+        /// <summary>Host: find own item by id, null if gone.</summary>
+        public ShipItem HostFindItem(int instanceId, int prefabIndex)
+        {
+            if (_net.Role != Role.Host) return null;
+            RefreshItems(force: true);
+            var e = HostLookup(instanceId, prefabIndex);
+            return e != null ? e.Item : null;
+        }
+
+        /// <summary>Host: rescan on the next Tick (Destroy is deferred to end of frame).</summary>
+        public void HostRefreshNextTick()
+        {
+            if (_net.Role == Role.Host) _refreshTimer = 2f;
+        }
+
         /// <summary>Host: look up one of its own items by id (host is the id authority — no matching).</summary>
         private ItemEntry HostLookup(int instanceId, int prefabIndex)
         {
@@ -3246,6 +3291,7 @@ namespace SailwindCoop.Sync
             _pendingClientItems.Clear();
             _pendingHeldItem = null;
             _gp = null;
+            _rejectedPoseLogged.Clear();
             _fHeldItem = null;
             _refreshTimer = 0f;
             _sendTimer = 0f;
