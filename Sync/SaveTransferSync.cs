@@ -130,12 +130,12 @@ namespace SailwindCoop.Sync
             try
             {
                 var slm = SaveLoadManager.instance;
-                if (slm == null) return 1;
+                if (slm == null) return -1;
                 var f = typeof(SaveLoadManager).GetField("gameVersion", BindingFlags.Instance | BindingFlags.NonPublic);
                 if (f != null) return (int)f.GetValue(slm);
             }
             catch { }
-            return 1;
+            return -1;
         }
 
         // -----------------------------------------------------------------
@@ -145,6 +145,15 @@ namespace SailwindCoop.Sync
         public void OnBegin(SaveSnapshotBeginMsg msg)
         {
             if (_net.Role != Role.Client) return;
+            int localVersion = HostGameVersion();
+            if (localVersion < 0 || msg.GameVersion < 0 || localVersion != msg.GameVersion)
+            {
+                CoopBehaviour.Notice("Join failed: game save versions differ or could not be verified (host " +
+                    msg.GameVersion + ", local " + localVersion + ").");
+                Reset();
+                NotifyHostLoaded(false);
+                return;
+            }
 
             // Validate BEFORE allocating: these two numbers size arrays and arrive from the network.
             if (msg.TotalBytes <= 0 || msg.TotalBytes > MaxSaveBytes ||
@@ -200,6 +209,7 @@ namespace SailwindCoop.Sync
 
             try
             {
+                if (!msg.Ok) { NotifyHostLoaded(false); return; }
                 if (_receivedChunks != _expectedChunks)
                 {
                     Plugin.Logger.LogError("[SaveTransfer] Received " + _receivedChunks + "/" +
@@ -222,6 +232,7 @@ namespace SailwindCoop.Sync
             catch (Exception e)
             {
                 Plugin.Logger.LogError("[SaveTransfer] Failed to apply host save: " + e);
+                CoopBehaviour.Notice("Join failed: could not read or save the host world. Your previous files were preserved.");
                 NotifyHostLoaded(false);
             }
             finally
@@ -256,20 +267,27 @@ namespace SailwindCoop.Sync
         /// to the coop slot and triggers the game's load flow.</summary>
         private void ApplyHostSave(byte[] bytes)
         {
+            if (RefuseLoadIntoWorld()) return;
             SaveContainer host;
             using (var ms = new MemoryStream(bytes))
             {
                 host = (SaveContainer)new BinaryFormatter().Deserialize(ms);
             }
+            if (host == null || host.gameVersion != _hostGameVersion)
+                throw new InvalidDataException("World version differs from the verified snapshot header");
 
             CoopProfile.MergeInto(host);
 
             int slot = Mathf.Clamp(CoopSlot, 0, 5);
             string path = SaveSlots.GetSlotSavePath(slot);
-            using (var fs = File.Create(path))
+            bool preserveBackup = false;
+            if (File.Exists(path))
             {
-                new BinaryFormatter().Serialize(fs, host);
+                try { using (var fs = File.OpenRead(path))
+                    if (!(new BinaryFormatter().Deserialize(fs) is SaveContainer)) preserveBackup = true; }
+                catch { preserveBackup = true; }
             }
+            AtomicSaveFile.Write(path, fs => new BinaryFormatter().Serialize(fs, host), preserveBackup);
             Plugin.Logger.LogInfo("[SaveTransfer] Merged save written to slot " + slot + ": " + path);
 
             TriggerLoad(slot);
@@ -291,17 +309,20 @@ namespace SailwindCoop.Sync
             runner.StartCoroutine(LoadRoutine(slot));
         }
 
+        private bool RefuseLoadIntoWorld()
+        {
+            if (!GameState.playing && !GameState.currentlyLoading) return false;
+            // Refuse before merging/writing a slot, and recheck when starting the load coroutine.
+            Plugin.Logger.LogError("[SaveTransfer] Client is already in-game - host world was not loaded. " +
+                                   "Return to the main menu and reconnect.");
+            CoopBehaviour.Notice("Join failed: you were already in a world. Return to the main menu, then join.");
+            NotifyHostLoaded(false);
+            return true;
+        }
+
         private IEnumerator LoadRoutine(int slot)
         {
-            if (GameState.playing || GameState.currentlyLoading)
-            {
-                // Loading a save over an already-loaded world duplicates every saved prefab — refuse.
-                Plugin.Logger.LogError("[SaveTransfer] Client is already in-game - host world was not loaded. " +
-                                       "Return to the main menu and reconnect.");
-                CoopBehaviour.Notice("Join failed: you were already in a world. Return to the main menu, then join.");
-                NotifyHostLoaded(false);
-                yield break;
-            }
+            if (RefuseLoadIntoWorld()) yield break;
 
             SaveSlots.currentSlot = slot;
             if (SaveSlots.slotsActive != null && slot < SaveSlots.slotsActive.Length)

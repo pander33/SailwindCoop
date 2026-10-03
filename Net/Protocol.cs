@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 57;
+        public const int Version = 60;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -45,6 +45,9 @@ namespace SailwindCoop.Net
             try
             {
                 msg.Deserialize(r);
+                // LiteNetLib getters can read beyond the logical packet length when the
+                // pooled backing array is larger; do not accept those stale buffer bytes.
+                if (r.AvailableBytes < 0) throw new System.IO.InvalidDataException("Read past packet boundary");
             }
             catch (Exception e)
             {

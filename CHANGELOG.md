@@ -4,6 +4,36 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Boat controls, anchors, mooring, pumps, damage actions and deck interactions now carry a stable boat
+  address and a layout signature. Each owned boat keeps independent state and restores its original
+  client physics on disconnect. Protocol is now **60**; all players need this build.
+- Host fully trusts connected client actions and broadcasts the result. Only the sender handshake,
+  matching PlayerState NetId, object/index bounds/null checks and packet format checks remain.
+  Do not add gameplay eligibility or numeric request checks. Remote pump holds expire without renewal.
+- Owned boats near a guest remain active on the host even when its own player is beyond the horizon
+  activation range, so their authoritative controls and physics can continue running.
+- Character profiles and received world saves use atomic replacement with backups. A readable profile
+  backup is recovered automatically; unreadable profiles and mismatched save versions abort the join.
+- Interaction Harmony callbacks contain exceptions, including failures inside diagnostic reporting.
+- Truncated packets are rejected even when LiteNetLib's backing buffer contains additional bytes.
+
+- Mouse and sticky winch/wheel grabs and quick-release controls are supported. Host snapshots
+  do not overwrite the rope being operated locally.
+- Hatches replicate an authoritative open/closed target, retry it after an active animation and
+  periodically refresh it for joining clients; repeated state packets do not toggle hatches.
+
+- Mooring state acknowledges the latest local request and waits until the guest releases its rope
+  or length adjuster. Unchanged snapshots leave logs and last-action diagnostics untouched.
+  Missing docks are reported; client targets wait for loading, and unavailable host states acknowledge
+  requests without fabricating an unmoor. This dock failure path still needs in-game reproduction.
+- Fleet diagnostics display the actual state of each boat; control count mismatches report each part.
+- Joining from an already loaded world reports the existing error before overwriting the co-op slot.
+
+Validation: Release build, protocol smoke and 20 filesystem/patch/hatch/mooring scenarios pass on Windows
+.NET Framework. Multi-boat gameplay and `File.Replace` under Unity Mono still need in-game verification.
+
 ## [0.1.6] - 2026-09-22
 
 ### Added

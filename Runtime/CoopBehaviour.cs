@@ -132,6 +132,7 @@ namespace SailwindCoop.Runtime
             CrestWater = new CrestWaterSync();
             Env.Crest = CrestWater;
             Controls = new ControlsSync(Net);
+            new BoatAuthority(Net);
             Anchor = new AnchorSync(Net);
             Mooring = new MooringSync(Net);
             Damage = new BoatDamageSync(Net);
@@ -151,7 +152,7 @@ namespace SailwindCoop.Runtime
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
 
             Net.OnAccepted += ack =>
@@ -175,6 +176,7 @@ namespace SailwindCoop.Runtime
                 Players.RemoveRemote(netId);
                 Items.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
+                BoatAuthority.Instance?.ClearActor(netId);
                 Pause.Release(netId);
             };
 

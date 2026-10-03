@@ -556,6 +556,8 @@ namespace SailwindCoop.Sync
             // Host relays a client's pose to the other clients (skip the sender).
             if (_net.Role == Role.Host)
             {
+                if (_net.PlayerNetIdForPeer(fromPeer) != msg.NetId) return;
+                BoatAuthority.Instance?.Record(msg, fromPeer);
                 _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
                 _net.RelayExcept(msg, fromPeer, LiteNetLib.DeliveryMethod.Unreliable);
             }
@@ -674,6 +676,7 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            BoatAuthority.Instance?.Clear();
             foreach (var a in _remotes.Values)
                 if (a.Go != null) Object.Destroy(a.Go);
             _remotes.Clear();

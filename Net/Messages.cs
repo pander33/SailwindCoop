@@ -497,6 +497,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class AnchorStateMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public long Tick;
         public CoordFrame Frame;
         public Vector3 Pos;       // real space (World) or boat-local (Boat), per Frame
@@ -508,6 +510,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Tick);
             w.Put((byte)Frame);
             w.PutVector3(Pos);
@@ -518,6 +521,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Tick = r.GetLong();
             Frame = (CoordFrame)r.GetByte();
             Pos = r.GetVector3();
@@ -550,6 +554,10 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class ControlStateMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
+        public bool Reconcile;
+        public float[] WheelInputs = System.Array.Empty<float>();
         public long Tick;
         public float[] Lengths = System.Array.Empty<float>();
         public Quaternion[] Rotations = System.Array.Empty<Quaternion>();
@@ -558,7 +566,11 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Tick);
+            w.Put(Reconcile);
+            w.Put((ushort)WheelInputs.Length);
+            foreach (float input in WheelInputs) w.Put(input);
             w.Put((ushort)Lengths.Length);
             for (int i = 0; i < Lengths.Length; i++) w.Put(Lengths[i]);
             w.Put((ushort)Rotations.Length);
@@ -567,7 +579,11 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Tick = r.GetLong();
+            Reconcile = r.GetBool();
+            WheelInputs = new float[r.GetUShort()];
+            for (int i = 0; i < WheelInputs.Length; i++) WheelInputs[i] = r.GetFloat();
             int n = r.GetUShort();
             Lengths = new float[n];
             for (int i = 0; i < n; i++) Lengths[i] = r.GetFloat();
@@ -592,6 +608,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class ControlRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public float Length;
         public bool HasWinchRotation;
@@ -601,6 +619,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Index);
             w.Put(Length);
             w.Put(HasWinchRotation);
@@ -609,6 +628,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Index = r.GetUShort();
             Length = r.GetFloat();
             HasWinchRotation = r.GetBool();
@@ -625,13 +645,15 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class SteerRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public float Input;
 
         public MsgType Type => MsgType.SteerRequest;
 
-        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put(Input); }
-        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Input = r.GetFloat(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put(Input); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Input = r.GetFloat(); }
     }
 
     /// <summary>Mooring action on one rope.</summary>
@@ -649,34 +671,43 @@ namespace SailwindCoop.Net
     /// the receiver finds the nearest <c>GPButtonDockMooring</c> (docks are static world objects).
     ///
     /// <para>Host→client uses <see cref="MooringStateMsg"/>; client→host uses
-    /// <see cref="MooringRequestMsg"/>. Same payload, two directions, so the host stays the
+    /// <see cref="MooringRequestMsg"/>. Requests are acknowledged with their authenticated player
+    /// NetId and request number; unsolicited states use zero for both, so the host stays the
     /// authority (the only spring that holds the authoritative boat is the host's).</para>
     /// </summary>
     public sealed class MooringStateMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public MooringKind Kind;
         public Vector3 DockReal;   // real-space dock position (Moor only)
-        public float LengthSq;     // new currentRopeLengthSquared (Length only)
+        public float LengthSq;     // authoritative currentRopeLengthSquared (Moor/Length)
+        public uint RequesterNetId; // assigned by the host from the sending peer
+        public uint RequestId;      // zero for snapshots/local host events
+        public bool StateAvailable = true; // false acknowledges a request without inventing a missing dock
 
         public MsgType Type => MsgType.MooringState;
 
-        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); }
-        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequesterNetId); w.Put(RequestId); w.Put(StateAvailable); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt(); StateAvailable = r.GetBool(); }
     }
 
     /// <summary>Client -> host mooring action (see <see cref="MooringStateMsg"/>). Host applies + relays.</summary>
     public sealed class MooringRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public MooringKind Kind;
         public Vector3 DockReal;
         public float LengthSq;
+        public uint RequestId;
 
         public MsgType Type => MsgType.MooringRequest;
 
-        public void Serialize(NetDataWriter w) { w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); }
-        public void Deserialize(NetDataReader r) { Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequestId); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequestId = r.GetUInt(); }
     }
 
     // ---------------------------------------------------------------------
@@ -689,6 +720,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class BoatDamageStateMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public long Tick;
         public float WaterLevel;
         public float HullDamage;
@@ -700,6 +733,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Tick);
             w.Put(WaterLevel);
             w.Put(HullDamage);
@@ -710,6 +744,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Tick = r.GetLong();
             WaterLevel = r.GetFloat();
             HullDamage = r.GetFloat();
@@ -725,6 +760,7 @@ namespace SailwindCoop.Net
         Activate = 0,      // OnActivate(GoPointer) — primary click (toggles, presses)
         AltActivate = 1,   // OnAltActivate(GoPointer) — secondary action (untie, quick-release, unmoor)
         ActivateNoArg = 2, // OnActivate() — simple toggles such as trapdoors
+        HatchState = 3,    // Host -> clients: authoritative target, not a toggle request
     }
 
     /// <summary>
@@ -738,21 +774,28 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class ControlEventMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public InteractKind Kind;
+        public bool HatchOpen;
 
         public MsgType Type => MsgType.ControlEvent;
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Index);
             w.Put((byte)Kind);
+            w.Put(HatchOpen);
         }
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Index = r.GetUShort();
             Kind = (InteractKind)r.GetByte();
+            HatchOpen = r.GetBool();
         }
     }
 
@@ -763,6 +806,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class HoldRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public InteractKind Kind;
         public bool Down;
@@ -771,6 +816,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Index);
             w.Put((byte)Kind);
             w.Put(Down);
@@ -778,6 +824,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Index = r.GetUShort();
             Kind = (InteractKind)r.GetByte();
             Down = r.GetBool();
@@ -797,6 +844,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class DamageRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public DamageAction Action;
         public float Amount;
 
@@ -804,12 +853,14 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put((byte)Action);
             w.Put(Amount);
         }
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Action = (DamageAction)r.GetByte();
             Amount = r.GetFloat();
         }
@@ -822,6 +873,8 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class PushRequestMsg : INetMessage
     {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
         public ushort Index;
         public Vector3 RealPos;
         public Vector3 Force;
@@ -831,6 +884,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(BoatIndex); w.Put(LayoutHash);
             w.Put(Index);
             w.PutVector3(RealPos);
             w.PutVector3(Force);
@@ -839,6 +893,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
             Index = r.GetUShort();
             RealPos = r.GetVector3();
             Force = r.GetVector3();

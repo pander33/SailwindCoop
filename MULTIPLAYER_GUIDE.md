@@ -4,6 +4,9 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
+Use the same build on every machine. The current build uses **protocol 59** and cannot connect to
+earlier protocol builds. Independent boat controls are implemented; multi-boat gameplay validation is pending.
+
 ## Session Model
 
 - The host loads the real world save.
@@ -11,6 +14,10 @@ The short rule is: the host owns the world, while each player keeps their own ch
 - The host streams the current world save to the client.
 - The client loads that world into a dedicated co-op slot.
 - The guest keeps a local co-op profile for personal character progress such as money, reputation, needs, known prices, missions, journal data, and personal belt inventory.
+
+Profile and received-world writes keep the previous readable file as a `.bak` backup. If the profile
+cannot be read, its backup is tried; if both fail, joining stops. Different or unverifiable game save
+versions also stop the join before writing/loading the world.
 
 Do not treat the guest's normal single-player save as the active co-op world. In co-op, the host world is authoritative.
 
@@ -224,7 +231,7 @@ Before a long session, make a normal backup of important Sailwind saves.
 
 ## Reporting A Problem
 
-Logging is off by default, so a normal session writes nothing. Press F8 → **Logging** to switch it on,
+Routine logging is off by default; serious errors still use a limited log budget. Press F8 → **Logging** to switch full diagnostics on,
 reproduce the problem, then attach `BepInEx/LogOutput.log` and say which mod version each machine was
 running. Turning logging on afterwards does not help — the log will not contain the moment it broke.
 

@@ -28,11 +28,14 @@ namespace SailwindCoop.Sync
     /// </summary>
     public static class CoopProfile
     {
+        private static readonly object SaveGate = new object();
+        private static bool _saving;
+        private static bool _preserveBackup;
         public static string ProfilePath => Path.Combine(Application.persistentDataPath, "coop_profile.dat");
 
         public static bool Exists()
         {
-            try { return File.Exists(ProfilePath); }
+            try { return File.Exists(ProfilePath) || File.Exists(ProfilePath + ".bak"); }
             catch { return false; }
         }
 
@@ -45,23 +48,42 @@ namespace SailwindCoop.Sync
         /// gracefully instead of losing the whole profile.</summary>
         public static bool SaveFromGame()
         {
-            try
+            lock (SaveGate)
             {
-                var c = new SaveContainer();
-                FillCharacterFromGame(c);
-
-                using (var fs = File.Create(ProfilePath))
+                if (_saving) return false;
+                _saving = true;
+                try
                 {
-                    new BinaryFormatter().Serialize(fs, c);
+                    var c = new SaveContainer();
+                    FillCharacterFromGame(c);
+
+                    // Validate the primary before replacing it: a corrupt primary must never
+                    // overwrite the only readable backup, including after a fresh process start.
+                    bool preserve = _preserveBackup;
+                    if (File.Exists(ProfilePath))
+                    {
+                        try { using (var fs = File.OpenRead(ProfilePath)) ReadProfile(fs); }
+                        catch { preserve = true; }
+                    }
+                    AtomicSaveFile.Write(ProfilePath, fs => new BinaryFormatter().Serialize(fs, c), preserve);
+                    _preserveBackup = false;
+                    Plugin.Logger.LogInfo("[CoopProfile] Character profile saved: " + ProfilePath);
+                    return true;
                 }
-                Plugin.Logger.LogInfo("[CoopProfile] Character profile saved: " + ProfilePath);
-                return true;
+                catch (Exception e)
+                {
+                    Plugin.Logger.LogError("[CoopProfile] Failed to save profile: " + e);
+                    return false;
+                }
+                finally { _saving = false; }
             }
-            catch (Exception e)
-            {
-                Plugin.Logger.LogError("[CoopProfile] Failed to save profile: " + e);
-                return false;
-            }
+        }
+
+        private static SaveContainer ReadProfile(Stream stream)
+        {
+            var profile = new BinaryFormatter().Deserialize(stream) as SaveContainer;
+            if (profile == null) throw new InvalidDataException("Profile is not a SaveContainer");
+            return profile;
         }
 
         private static void FillCharacterFromGame(SaveContainer c)
@@ -162,10 +184,13 @@ namespace SailwindCoop.Sync
 
             try
             {
-                SaveContainer profile;
-                using (var fs = File.Open(ProfilePath, FileMode.Open))
+                bool recovered;
+                SaveContainer profile = AtomicSaveFile.Read(ProfilePath, ReadProfile, out recovered);
+                _preserveBackup = recovered;
+                if (recovered)
                 {
-                    profile = (SaveContainer)new BinaryFormatter().Deserialize(fs);
+                    Plugin.Logger.LogWarning("[CoopProfile] Primary unreadable; recovered character from .bak");
+                    SailwindCoop.Runtime.CoopBehaviour.Notice("Your character profile was recovered from its backup.");
                 }
                 CopyCharacterFields(profile, host);
                 int injected = InjectPersonalBelt(profile, host);
@@ -174,7 +199,8 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogError("[CoopProfile] Failed to apply profile (using host character): " + e);
+                Plugin.Logger.LogError("[CoopProfile] Profile and backup unreadable; join aborted: " + e);
+                throw; // Never silently replace the guest's progress with the host's character.
             }
         }
 

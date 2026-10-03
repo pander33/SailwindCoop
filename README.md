@@ -11,6 +11,7 @@
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
 **Current Version:** 0.1.6
+**Wire Protocol:** 60 — use the same build on every machine. Multi-boat and recent control/hatch/mooring fixes await in-game validation.
 **Requirements:** BepInEx 5.x, Sailwind
 
 ### ✨ Features
@@ -21,9 +22,9 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 - **In-game Co-op Menu:** Press F8 to host, join, disconnect, choose avatar, show diagnostics, and open debug tools
 - **Default Avatar Included:** The release includes `avatar.bundle` for remote player models
 - **Avatar Customization:** Replace `avatar.bundle` with your own compatible bundle if desired
-- **Up to 4 Players:** Host a game with up to 4 clients simultaneously
+- **Up to 5 Players:** One host with up to 4 clients simultaneously
 - **Shared Sea:** Waves, weather and time of day run on the host's clock, so every player sees the same water under the same hull
-- **Quiet by Default:** The mod writes nothing to the log unless you switch logging on from the menu
+- **Quiet by Default:** Routine diagnostics are off; serious errors still use a limited log budget
 - **Crew Status and Host Controls:** See who is loading or ready, their ping and boat; hosts can lock the session or remove a guest
 
 ### 📥 Installation
@@ -96,7 +97,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `ListenIp` | 0.0.0.0 | IP address to listen on (0.0.0.0 = all interfaces) |
 | `JoinIp` | 127.0.0.1 | IP address of the host to connect to |
 | `PlayerName` | Player | Your display name in-game |
-| `MaxClients` | 4 | Maximum number of players (1-4) |
+| `MaxClients` | 4 | Maximum number of guests (1-4), in addition to the host |
 | `SnapshotHz` | 20 | State snapshot send rate |
 | `InterpDelayMs` | 100 | Interpolation buffer delay, in ms |
 | **Avatar** |
@@ -160,7 +161,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 
 ### 🤝 Contributing
 
-Found a bug? Have a suggestion?  
+Found a bug? Have a suggestion?
 Visit: https://github.com/pander33/SailwindCoop
 
 ---
@@ -171,7 +172,7 @@ Visit: https://github.com/pander33/SailwindCoop
 
 Sailwind LAN Co-op — это мод, добавляющий мультиплеер в игру Sailwind. Позволяет играть с друзьями по локальной сети (LAN) или через VPN/туннелирование.
 
-**Текущая версия:** 0.1.5  
+**Текущая версия:** 0.1.6
 **Требования:** BepInEx 5.x, Sailwind (Steam версия)
 
 ### ✨ Особенности
@@ -182,9 +183,9 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - **Меню кооператива в игре:** F8 открывает меню для хоста, подключения, отключения, выбора аватара, диагностики и отладки
 - **Аватар по умолчанию в комплекте:** Релиз содержит `avatar.bundle` для моделей удаленных игроков
 - **Кастомизация аватаров:** При желании можно заменить `avatar.bundle` на совместимый свой bundle
-- **До 4 игроков:** Хост может принять до 4 клиентов одновременно
+- **До 5 игроков:** Один хост и до 4 клиентов одновременно
 - **Общее море:** Волны, погода и время суток идут по часам хоста — вода под лодкой одинакова у всех
-- **Тишина по умолчанию:** Мод ничего не пишет в лог, пока логирование не включено из меню
+- **Тишина по умолчанию:** Обычная диагностика выключена; серьёзные ошибки пишутся с ограничением частоты
 
 ### 📥 Установка
 
@@ -248,7 +249,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `ListenIp` | 0.0.0.0 | IP адрес для прослушивания (0.0.0.0 = все интерфейсы) |
 | `JoinIp` | 127.0.0.1 | IP адрес хоста для подключения |
 | `PlayerName` | Player | Ваше отображаемое имя в игре |
-| `MaxClients` | 4 | Максимум игроков (1-4) |
+| `MaxClients` | 4 | Максимум гостей (1-4), дополнительно к хосту |
 | `SnapshotHz` | 20 | Частота отправки снапшотов состояния |
 | `InterpDelayMs` | 100 | Задержка буфера интерполяции, мс |
 | **Аватар** |
@@ -312,7 +313,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 ### 🤝 Участие в разработке
 
-Нашли баг? Есть предложения?  
+Нашли баг? Есть предложения?
 Посетите: https://github.com/pander33/SailwindCoop
 
 ---

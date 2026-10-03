@@ -130,6 +130,8 @@ namespace SailwindCoop.Net
             return 0;
         }
 
+        public bool IsHostPeer(NetPeer peer) => Role == Role.Client && peer != null && peer == _hostPeer;
+
         public void SetAcceptingClients(bool accepting)
         {
             if (Role != Role.Host || AcceptingClients == accepting) return;

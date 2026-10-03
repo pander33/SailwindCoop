@@ -19,10 +19,14 @@ namespace SailwindCoop.Sync
     /// </summary>
     public sealed class AnchorSync
     {
+        private readonly Transform _boundBoat;
+        private readonly ushort _boatId = BoatLocator.NoBoat;
+        private uint _layoutHash;
+        private readonly BoatContexts<AnchorSync> _fleet;
+
         private readonly CoopNet _net;
         private readonly NetTransform _slave = new NetTransform();
 
-        private PlayerEmbarkerNew _emb;
         private Transform _cachedBoat;
         private Anchor _anchor;
         private Transform _anchorTr;
@@ -44,6 +48,7 @@ namespace SailwindCoop.Sync
         private bool _slaved;
         private CoordFrame _curFrame = CoordFrame.World;
         private bool _haveFrame;
+        private long _lastStateTick;
         private bool _haveNoticeState;
         private bool _lastNoticeSet;
         private object _noticeAnchor;   // switching boats is not an anchor event
@@ -52,14 +57,16 @@ namespace SailwindCoop.Sync
         /// <summary>Rope length (m) past which the anchor counts as deployed (world frame), not stowed.</summary>
         private const float DeployedLen = 0.5f;
 
-        public bool HasAnchor => _anchor != null;
+        public bool HasAnchor { get { if (_fleet == null) return _anchor != null; foreach (var c in _fleet.Values) if (c.HasAnchor) return true; return false; } }
         public bool ClientSet { get; private set; }
-        public bool Slaving => _slaved;
+        public bool Slaving { get { if (_fleet == null) return _slaved; foreach (var c in _fleet.Values) if (c.Slaving) return true; return false; } }
 
         public string AnchorText
         {
             get
             {
+
+                if (_fleet != null) return _fleet.Describe(c => "boat " + c._boatId + ": " + c.AnchorText);
                 if (_anchor == null) return "no anchor";
                 if (_net.Role == Role.Host) return _anchor.IsSet() ? "host: dropped" : "host: raised";
                 return (_slaved ? "slaved" : "—") + (ClientSet ? " dropped" : " raised") +
@@ -67,7 +74,19 @@ namespace SailwindCoop.Sync
             }
         }
 
-        public AnchorSync(CoopNet net) { _net = net; }
+        public AnchorSync(CoopNet net)
+        {
+            _net = net;
+
+            _fleet = new BoatContexts<AnchorSync>((boat, id) => new AnchorSync(net, boat, id), c => c.Clear(),
+                boat => BoatLayout.Stamp(boat.GetComponentsInChildren<Anchor>(true)));
+        }
+
+        private AnchorSync(CoopNet net, Transform boat, ushort id)
+        {
+            _net = net; _boundBoat = boat; _boatId = id;
+            RefreshAnchor();
+        }
 
         // -----------------------------------------------------------------
         // Host: author the anchor pose + set-state
@@ -75,6 +94,7 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
             if (_net.Role != Role.Host) return;
             if (_net.State != LinkState.Connected) return;
             if (!CoordSpace.Ready) return;
@@ -117,6 +137,7 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new AnchorStateMsg
             {
+                BoatIndex = _boatId, LayoutHash = _layoutHash,
                 Tick = tick,
                 Frame = frame,
                 Pos = pos,
@@ -143,7 +164,17 @@ namespace SailwindCoop.Sync
 
         public void OnAnchorState(AnchorStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading || !_net.IsHostPeer(fromPeer)) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "AnchorSync")) c.OnAnchorState(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Client) return;
+            if (msg.Tick < _lastStateTick || !BoatAuthority.Finite(msg.Pos) || !BoatAuthority.Finite(msg.Vel) || !BoatAuthority.Rotation(msg.Rot) ||
+                (msg.Frame != CoordFrame.Boat && msg.Frame != CoordFrame.World)) return;
+            _lastStateTick = msg.Tick;
             RefreshAnchor();
             if (_anchor == null || _anchorTr == null) return;
 
@@ -169,6 +200,7 @@ namespace SailwindCoop.Sync
         /// <summary>Client per-frame: drive the slaved anchor from its interpolation buffer.</summary>
         public void ApplyRemote()
         {
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyRemote(); return; }
             if (_net.Role != Role.Client) return;
             if (!_slaved || _anchorTr == null || !_slave.HasData) return;
             if (!CoordSpace.Ready) return;
@@ -216,14 +248,14 @@ namespace SailwindCoop.Sync
 
         private void RefreshAnchor()
         {
-            if (_emb == null) _emb = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
-            Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            Transform boat = _boundBoat;
             if (boat == _cachedBoat) return;
 
             RestoreSlaved();
             _cachedBoat = boat;
             _anchor = boat != null ? boat.GetComponentInChildren<Anchor>(true) : null;
             _anchorTr = _anchor != null ? _anchor.transform : null;
+            _layoutHash = BoatLayout.Hash(boat, boat.GetComponentsInChildren<Anchor>(true));
             _haveLast = false;
 
             if (_anchor != null)
@@ -266,6 +298,7 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            if (_fleet != null) { _fleet.Clear(); return; }
             RestoreSlaved();
             _cachedBoat = null;
             _anchor = null;

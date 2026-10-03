@@ -33,8 +33,12 @@ namespace SailwindCoop.Sync
             public Rigidbody Rb;    // its rigidbody (null = visual-only, e.g. a winch crank)
         }
 
+        private readonly Transform _boundBoat;
+        private readonly ushort _boatId = BoatLocator.NoBoat;
+        private uint _layoutHash;
+        private readonly BoatContexts<ControlsSync> _fleet;
+
         private readonly CoopNet _net;
-        private PlayerEmbarkerNew _emb;
 
         private Transform _cachedBoat;
         private RopeController[] _ropes = System.Array.Empty<RopeController>();
@@ -52,7 +56,6 @@ namespace SailwindCoop.Sync
         private float[] _steerLastSent = System.Array.Empty<float>();
         private float _steerTimer;
         private MethodInfo _miApplyRudder;
-        private const float SteerEps = 0.01f;
 
         // Diagnostics: steering-rope length + rudder angle, shown in the overlay so we can see
         // the steering channel move on both machines.
@@ -82,26 +85,30 @@ namespace SailwindCoop.Sync
         private long _lastReqTick;
 
         private float _sendTimer;
-        private bool _warnedMismatch;
+        private readonly HashSet<string> _warnedMismatch = new HashSet<string>();
+        private long _lastStateTick;
 
         // Reflection handle to the local interaction pointer (to detect a held control).
         private GoPointer _gp;
         private FieldInfo _fSticky;
+        private FieldInfo _fClicked;
 
         /// <summary>Control snapshot rate (Hz). The wheel/booms can move quickly, so keep it brisk.</summary>
         public float ControlHz = 12f;
         /// <summary>How fast the client slerps a node toward its latest target rotation.</summary>
         public float RotSmoothing = 14f;
 
-        public int RopeCount => _ropes.Length;
-        public int NodeCount => _nodes.Length;
-        public int WinchCount => _winches.Length;
+        public int RopeCount { get { if (_fleet == null) return _ropes.Length; int n = 0; foreach (var c in _fleet.Values) n += c.RopeCount; return n; } }
+        public int NodeCount { get { if (_fleet == null) return _nodes.Length; int n = 0; foreach (var c in _fleet.Values) n += c.NodeCount; return n; } }
+        public int WinchCount { get { if (_fleet == null) return _winches.Length; int n = 0; foreach (var c in _fleet.Values) n += c.WinchCount; return n; } }
 
         /// <summary>Steering readout: wheels found, steering-rope length, rudder angle. Compare host vs client.</summary>
         public string SteeringText
         {
             get
             {
+
+                if (_fleet != null) return _fleet.Describe(c => "boat " + c._boatId + ": " + c.SteeringText);
                 if (_wheels.Length == 0) return "no wheel";
                 string len = _steerRope != null ? _steerRope.currentLength.ToString("0.000") : "—";
                 string ang = RudderAngleText();
@@ -113,6 +120,8 @@ namespace SailwindCoop.Sync
         {
             get
             {
+
+                if (_fleet != null) return _fleet.Describe(c => "boat " + c._boatId + ": " + c.LastControlRequestText);
                 if (_lastReqIndex < 0) return "—";
                 long age = _net.Clock.ServerTick - _lastReqTick;
                 if (age < 0) age = 0;
@@ -122,7 +131,19 @@ namespace SailwindCoop.Sync
             }
         }
 
-        public ControlsSync(CoopNet net) { _net = net; }
+        public ControlsSync(CoopNet net)
+        {
+            _net = net;
+
+            _fleet = new BoatContexts<ControlsSync>((boat, id) => new ControlsSync(net, boat, id), c => c.Clear(),
+                boat => BoatLayout.Stamp(boat.GetComponentsInChildren<RopeController>(true), boat.GetComponentsInChildren<HingeJoint>(true), boat.GetComponentsInChildren<GPButtonSteeringWheel>(true)));
+        }
+
+        private ControlsSync(CoopNet net, Transform boat, ushort id)
+        {
+            _net = net; _boundBoat = boat; _boatId = id;
+            RefreshNodes();
+        }
 
         // currentAngle is non-public on both rudder types — read it reflectively for the readout.
         private FieldInfo _fRudderNewAngle, _fRudderOldAngle;
@@ -153,6 +174,7 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
             if (_net.Role != Role.Host) return;
             if (_net.State != LinkState.Connected) return;
 
@@ -164,6 +186,17 @@ namespace SailwindCoop.Sync
             if (_sendTimer < interval) return;
             _sendTimer = 0f;
 
+            SendState(null, false);
+        }
+
+        // -----------------------------------------------------------------
+        // Client: receive
+        // -----------------------------------------------------------------
+
+        private void SendState(LiteNetLib.NetPeer peer, bool reconcile)
+        {
+            var inputs = new float[_wheels.Length];
+            for (int i = 0; i < inputs.Length; i++) inputs[i] = _wheels[i] != null ? _wheels[i].currentInput : 0f;
             var lens = new float[_ropes.Length];
             for (int i = 0; i < _ropes.Length; i++)
                 lens[i] = _ropes[i] != null ? _ropes[i].currentLength : 0f;
@@ -172,24 +205,51 @@ namespace SailwindCoop.Sync
             for (int i = 0; i < _nodes.Length; i++)
                 rots[i] = _nodes[i].T != null ? _nodes[i].T.localRotation : Quaternion.identity;
 
-            _net.Broadcast(new ControlStateMsg { Tick = _net.Clock.ServerTick, Lengths = lens, Rotations = rots },
-                           LiteNetLib.DeliveryMethod.Unreliable);
+            var state = new ControlStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = _net.Clock.ServerTick, Reconcile = reconcile, WheelInputs = inputs, Lengths = lens, Rotations = rots };
+            if (peer == null) _net.Broadcast(state, LiteNetLib.DeliveryMethod.Unreliable);
+            else peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
-
-        // -----------------------------------------------------------------
-        // Client: receive
-        // -----------------------------------------------------------------
 
         public void OnControlState(ControlStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading || !_net.IsHostPeer(fromPeer)) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "ControlsSync")) c.OnControlState(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Client) return;
 
             RefreshNodes();
 
+            if (msg.Tick < _lastStateTick) return;
+            _lastStateTick = msg.Tick;
+            var held = HeldButton();
+            // Each part applies on its own: a count mismatch in one must not stop the others.
+            bool ropesMatch = msg.Lengths.Length == _ropes.Length;
+            bool wheelsMatch = msg.WheelInputs.Length == _wheels.Length;
+            if (wheelsMatch)
+            {
+                for (int i = 0; i < _wheels.Length; i++)
+                    if (_wheels[i] != null && (msg.Reconcile || held != _wheels[i]))
+                        _wheels[i].currentInput = msg.WheelInputs[i];
+            }
+            else WarnMismatch("wheels", msg.WheelInputs.Length, _wheels.Length);
+            if (msg.Reconcile)
+            {
+                if (ropesMatch)
+                {
+                    System.Array.Clear(_localUntil, 0, _localUntil.Length);
+                    System.Array.Copy(msg.Lengths, _lastSentLen, _lastSentLen.Length);
+                }
+                if (wheelsMatch) System.Array.Copy(msg.WheelInputs, _steerLastSent, _steerLastSent.Length);
+            }
+
             // Rope lengths apply straight away (reef/furl/anchor track length directly),
             // EXCEPT ropes the local player is currently operating — those we own for a
             // short window so the host's echo doesn't snap our adjustment back (Stage 2).
-            if (_ropes.Length > 0)
+            if (_ropes.Length > 0 || msg.Lengths.Length > 0)
             {
                 if (msg.Lengths.Length != _ropes.Length)
                 {
@@ -203,7 +263,7 @@ namespace SailwindCoop.Sync
                         var rc = _ropes[i];
                         if (rc == null) continue;
                         _hostLen[i] = msg.Lengths[i];
-                        if (now >= _localUntil[i] && rc.currentLength != msg.Lengths[i])
+                        if (!IsLocalRopeHeld(rc, held) && now >= _localUntil[i] && rc.currentLength != msg.Lengths[i])
                         {
                             rc.currentLength = msg.Lengths[i];
                             rc.changed = true;   // let the controller's Update re-apply
@@ -213,7 +273,7 @@ namespace SailwindCoop.Sync
             }
 
             // Node rotations are buffered and slerped in ApplyClient for smoothness.
-            if (_nodes.Length > 0)
+            if (_nodes.Length > 0 || msg.Rotations.Length > 0)
             {
                 if (msg.Rotations.Length != _nodes.Length)
                 {
@@ -235,6 +295,7 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void ApplyClient(float dt)
         {
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyClient(dt); return; }
             if (_net.Role != Role.Client) return;
 
             ForwardLocalRopeChanges(dt);
@@ -276,9 +337,8 @@ namespace SailwindCoop.Sync
             if (idx < 0) return;
 
             float input = wheel.currentInput;
-            if (idx < _steerLastSent.Length && Mathf.Abs(input - _steerLastSent[idx]) < SteerEps) return;
 
-            _net.Broadcast(new SteerRequestMsg { Index = (ushort)idx, Input = input },
+            _net.Broadcast(new SteerRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Input = input },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             if (idx < _steerLastSent.Length) _steerLastSent[idx] = input;
         }
@@ -286,6 +346,14 @@ namespace SailwindCoop.Sync
         /// <summary>Host: apply a client's wheel input — set it and re-run the rudder rotation.</summary>
         public void OnSteerRequest(SteerRequestMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading) return;
+                if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(fromPeer) == 0) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "ControlsSync")) c.OnSteerRequest(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Host) return;
             RefreshNodes();
             int i = msg.Index;
@@ -307,7 +375,7 @@ namespace SailwindCoop.Sync
             }
         }
 
-        /// <summary>The control the local player is sticky-holding (winch/wheel), or null.</summary>
+        /// <summary>The local player's sticky or actively clicked control, or null.</summary>
         private GoPointerButton HeldButton()
         {
             try
@@ -316,7 +384,13 @@ namespace SailwindCoop.Sync
                 if (_gp == null) return null;
                 if (_fSticky == null)
                     _fSticky = typeof(GoPointer).GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
-                return _fSticky != null ? _fSticky.GetValue(_gp) as GoPointerButton : null;
+                var sticky = _fSticky?.GetValue(_gp) as GoPointerButton;
+                if (sticky != null) return sticky;
+                if (_fClicked == null)
+                    _fClicked = typeof(GoPointer).GetField("clickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
+                var clicked = _fClicked?.GetValue(_gp) as GoPointerButton;
+                // GoPointer assigns clickedButton before Click; a denied Click is not a grab.
+                return clicked != null && clicked.IsCliked() ? clicked : null;
             }
             catch { return null; }
         }
@@ -334,12 +408,13 @@ namespace SailwindCoop.Sync
 
             long now = _net.Clock.ServerTick;
 
-            // Detect local divergence and (re)arm the ownership window.
+            var held = HeldButton();
+            // Restore the original divergence path, including quick-release without a grab.
             for (int i = 0; i < _ropes.Length; i++)
             {
                 var rc = _ropes[i];
                 if (rc == null) continue;
-                if (Mathf.Abs(rc.currentLength - _hostLen[i]) > LenEps)
+                if (IsLocalRopeHeld(rc, held) || Mathf.Abs(rc.currentLength - _hostLen[i]) > LenEps)
                     _localUntil[i] = now + (long)LocalHoldMs;
             }
 
@@ -353,9 +428,10 @@ namespace SailwindCoop.Sync
             {
                 var rc = _ropes[i];
                 if (rc == null) continue;
-                if (now < _localUntil[i] && Mathf.Abs(rc.currentLength - _lastSentLen[i]) > LenEps)
+                if (IsLocalRopeHeld(rc, held) ||
+                    (now < _localUntil[i] && Mathf.Abs(rc.currentLength - _lastSentLen[i]) > LenEps))
                 {
-                    var req = new ControlRequestMsg { Index = (ushort)i, Length = rc.currentLength };
+                    var req = new ControlRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)i, Length = rc.currentLength };
                     var winch = FindWinchForRope(rc);
                     if (winch != null)
                     {
@@ -376,6 +452,14 @@ namespace SailwindCoop.Sync
 
         public void OnControlRequest(ControlRequestMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading) return;
+                if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(fromPeer) == 0) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "ControlsSync")) c.OnControlRequest(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Host) return;
             RefreshNodes();
             int i = msg.Index;
@@ -385,9 +469,7 @@ namespace SailwindCoop.Sync
 
             RememberControlRequest(i, msg.Length, msg.HasWinchRotation, incoming: true);
 
-            // F3 authority point — future: reject if another actor owns this node, enforce
-            // per-node locks, etc. For now the host trusts and applies; its physics produces
-            // the result and the normal ControlState broadcast carries it to everyone.
+            // F3: the host applies client input and broadcasts the resulting state.
             if (rc.currentLength != msg.Length)
             {
                 rc.currentLength = msg.Length;
@@ -408,10 +490,7 @@ namespace SailwindCoop.Sync
 
         private void RefreshNodes()
         {
-            if (_emb == null) _emb = Object.FindObjectOfType<PlayerEmbarkerNew>();
-            Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
-            if (boat == null)
-                boat = BoatLocator.FirstBoat();
+            Transform boat = _boundBoat;
             // Same as MooringSync.Tick: null before boats are known is "not yet known", not "no boat".
             if (boat == null && !BoatLocator.IndicesAuthoritative) return;
             if (boat == _cachedBoat) return;
@@ -419,7 +498,11 @@ namespace SailwindCoop.Sync
             RestoreKinematic();   // release the previous boat's bodies before rebinding
             _cachedBoat = boat;
             _haveTargets = false;
-            _warnedMismatch = false;
+            _warnedMismatch.Clear();
+            _gp = null;
+            _fSticky = null;
+            _fClicked = null;
+            _lastStateTick = 0;
 
             _steerRope = null;
             _rudderNew = null;
@@ -468,6 +551,7 @@ namespace SailwindCoop.Sync
             foreach (var h in boat.GetComponentsInChildren<HingeJoint>(true))
                 nodes.Add(new Node { T = h.transform, Rb = h.GetComponent<Rigidbody>() });
             _nodes = nodes.ToArray();
+            _layoutHash = BoatLayout.Hash(boat, _ropes, boat.GetComponentsInChildren<HingeJoint>(true), _wheels);
 
             Plugin.Logger.LogInfo("[ControlsSync] Boat changed: ropes=" + _ropes.Length +
                                   ", nodes=" + _nodes.Length + ", wheels=" + _wheels.Length +
@@ -495,10 +579,16 @@ namespace SailwindCoop.Sync
 
         private void WarnMismatch(string what, int host, int client)
         {
-            if (_warnedMismatch) return;
-            _warnedMismatch = true;
-            Plugin.Logger.LogWarning("[ControlsSync] Count mismatch for " + what + ": host=" + host +
+            if (!_warnedMismatch.Add(what)) return;
+            Plugin.Logger.LogWarning("[ControlsSync] Count mismatch boat=" + _boatId + " for " + what + ": host=" + host +
                                      ", client=" + client + " - this part is not applied");
+        }
+
+        private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held)
+        {
+            if (held == null) return false;
+            return FindWinchForRope(rope) == held ||
+                (rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat));
         }
 
         private GPButtonRopeWinch FindWinchForRope(RopeController rope)
@@ -523,6 +613,7 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            if (_fleet != null) { _fleet.Clear(); return; }
             RestoreKinematic();
             _cachedBoat = null;
             _ropes = System.Array.Empty<RopeController>();
@@ -546,7 +637,10 @@ namespace SailwindCoop.Sync
             _lastReqHasWinchRotation = false;
             _lastReqIncoming = false;
             _lastReqTick = 0L;
-            _warnedMismatch = false;
+            _warnedMismatch.Clear();
+            _gp = null;
+            _fSticky = null;
+            _fClicked = null;
         }
     }
 }

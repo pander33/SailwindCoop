@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net46</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <GameDir>D:\SteamLibrary\steamapps\common\Sailwind</GameDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Compile Include="..\..\Sync\AtomicSaveFile.cs" Link="AtomicSaveFile.cs" />
+    <Compile Include="..\..\Runtime\PatchGuard.cs" Link="PatchGuard.cs" />
+    <Compile Include="..\..\Sync\DeferredToggle.cs" Link="DeferredToggle.cs" />
+    <Compile Include="..\..\Sync\PendingMooringState.cs" Link="PendingMooringState.cs" />
+    <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
+    <Reference Include="BepInEx"><HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

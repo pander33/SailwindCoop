@@ -18,16 +18,22 @@ namespace SailwindCoop.Sync
     {
         public static BoatDamageSync Instance { get; private set; }
 
+        private readonly Transform _boundBoat;
+        private readonly ushort _boatId = BoatLocator.NoBoat;
+        private uint _layoutHash;
+        private readonly BoatContexts<BoatDamageSync> _fleet;
+
         private readonly CoopNet _net;
-        private PlayerEmbarkerNew _emb;
         private Transform _cachedBoat;
         private BoatDamage _damage;
         private BilgePump[] _pumps = System.Array.Empty<BilgePump>();
 
         // actor NetId -> pump indexes currently held by that actor
         private readonly Dictionary<uint, HashSet<ushort>> _heldPumpsByActor = new Dictionary<uint, HashSet<ushort>>();
+        private readonly Dictionary<uint, float> _pumpSeen = new Dictionary<uint, float>();
 
         private float _sendTimer;
+        private long _lastStateTick;
         private string _lastPump = "—";
         private long _lastPumpTick;
         private string _lastRepair = "—";
@@ -41,12 +47,22 @@ namespace SailwindCoop.Sync
         {
             _net = net;
             Instance = this;
+            _fleet = new BoatContexts<BoatDamageSync>((boat, id) => new BoatDamageSync(net, boat, id), c => c.Clear(),
+                boat => BoatLayout.Stamp(boat.GetComponentsInChildren<BoatDamage>(true), boat.GetComponentsInChildren<BilgePump>(true)));
+        }
+
+        private BoatDamageSync(CoopNet net, Transform boat, ushort id)
+        {
+            _net = net; _boundBoat = boat; _boatId = id;
+            RefreshBoat();
         }
 
         public string DamageText
         {
             get
             {
+
+                if (_fleet != null) return _fleet.Describe(c => "boat " + c._boatId + ": " + c.DamageText);
                 if (_damage == null) return "no BoatDamage";
                 string pump = "—";
                 if (_lastPumpTick != 0)
@@ -72,6 +88,7 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
             if (_net.State != LinkState.Connected) return;
             RefreshBoat();
 
@@ -83,10 +100,14 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Host: update one remote actor's held-pump state from a HoldRequest.</summary>
-        public void SetRemotePump(ushort index, bool down, uint actorNetId)
+        public void SetRemotePump(ushort boatId, BilgePump pump, bool down, uint actorNetId)
         {
+            if (_fleet != null) { _fleet.Get(boatId)?.SetRemotePump(boatId, pump, down, actorNetId); return; }
             if (_net.Role != Role.Host) return;
             RefreshBoat();
+            int found = System.Array.IndexOf(_pumps, pump);
+            if (found < 0 || actorNetId == 0) return;
+            ushort index = (ushort)found;
             if (index >= _pumps.Length)
             {
                 Plugin.Logger.LogWarning("[BoatDamageSync] Pump request #" + index + ": boat only has " + _pumps.Length);
@@ -101,6 +122,7 @@ namespace SailwindCoop.Sync
 
             if (down) set.Add(index);
             else set.Remove(index);
+            _pumpSeen[actorNetId] = Time.unscaledTime;
             if (set.Count == 0) _heldPumpsByActor.Remove(actorNetId);
 
             RememberPump((down ? "in down" : "in up") + " #" + index + " p" + actorNetId);
@@ -109,13 +131,25 @@ namespace SailwindCoop.Sync
 
         public void ClearRemoteActor(uint actorNetId)
         {
+            if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actorNetId); return; }
+            _pumpSeen.Remove(actorNetId);
             if (_heldPumpsByActor.Remove(actorNetId))
                 Plugin.Logger.LogInfo("[BoatDamageSync] Cleared pump holds for player " + actorNetId);
         }
 
         public void OnDamageState(BoatDamageStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading || !_net.IsHostPeer(fromPeer)) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "BoatDamageSync")) c.OnDamageState(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Client) return;
+            if (msg.Tick < _lastStateTick || !BoatAuthority.Finite(msg.WaterLevel) || !BoatAuthority.Finite(msg.HullDamage) ||
+                !BoatAuthority.Finite(msg.Oakum) || !BoatAuthority.Finite(msg.WaterIntakeChunk)) return;
+            _lastStateTick = msg.Tick;
             RefreshBoat();
             if (_damage == null) return;
 
@@ -126,18 +160,32 @@ namespace SailwindCoop.Sync
             _damage.sunk = msg.Sunk;
         }
 
-        public void NotifyLocalDamageAction(DamageAction action, float amount)
+        public void NotifyLocalDamageAction(DamageAction action, float amount, BoatDamage damage)
         {
+            if (_fleet != null)
+            {
+                foreach (var c in _fleet.Values) if (c._damage == damage && damage != null)
+                    { c.NotifyLocalDamageAction(action, amount, damage); break; }
+                return;
+            }
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (amount <= 0.00001f) return;
 
-            _net.Broadcast(new DamageRequestMsg { Action = action, Amount = amount },
+            _net.Broadcast(new DamageRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Action = action, Amount = amount },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             RememberRepair("out " + action + " +" + amount.ToString("0.000"));
         }
 
         public void OnDamageRequest(DamageRequestMsg msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (_fleet != null)
+            {
+                if (!GameState.playing || GameState.currentlyLoading) return;
+                if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(fromPeer) == 0) return;
+                var c = _fleet.Get(msg.BoatIndex);
+                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "BoatDamageSync")) c.OnDamageRequest(msg, fromPeer);
+                return;
+            }
             if (_net.Role != Role.Host) return;
             RefreshBoat();
             if (_damage == null) return;
@@ -180,6 +228,7 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new BoatDamageStateMsg
             {
+                BoatIndex = _boatId, LayoutHash = _layoutHash,
                 Tick = _net.Clock.ServerTick,
                 WaterLevel = _damage.waterLevel,
                 HullDamage = _damage.hullDamage,
@@ -191,6 +240,10 @@ namespace SailwindCoop.Sync
 
         private void ApplyRemotePumps(float dt)
         {
+            var expired = new List<uint>();
+            foreach (var actor in _heldPumpsByActor.Keys)
+                if (!_pumpSeen.TryGetValue(actor, out var seen) || Time.unscaledTime - seen > 1f) expired.Add(actor);
+            foreach (uint actor in expired) ClearRemoteActor(actor);
             if (_damage == null || _damage.sunk || _heldPumpsByActor.Count == 0) return;
 
             bool any = false;
@@ -231,12 +284,12 @@ namespace SailwindCoop.Sync
 
         private void RefreshBoat()
         {
-            if (_emb == null) _emb = Object.FindObjectOfType<PlayerEmbarkerNew>();
-            Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
+            Transform boat = _boundBoat;
             if (boat == _cachedBoat) return;
 
             _cachedBoat = boat;
             _heldPumpsByActor.Clear();
+            _pumpSeen.Clear();
             _sendTimer = 0f;
 
             if (boat == null)
@@ -250,6 +303,7 @@ namespace SailwindCoop.Sync
                       ?? boat.GetComponentInParent<BoatDamage>()
                       ?? boat.GetComponentInChildren<BoatDamage>(true);
             _pumps = boat.GetComponentsInChildren<BilgePump>(true);
+            _layoutHash = BoatLayout.Hash(boat, boat.GetComponentsInChildren<BoatDamage>(true), _pumps);
 
             Plugin.Logger.LogInfo("[BoatDamageSync] Boat changed: damage=" + (_damage != null) +
                                   ", pumps=" + _pumps.Length + " ('" + boat.name + "')");
@@ -269,10 +323,12 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            if (_fleet != null) { _fleet.Clear(); return; }
             _cachedBoat = null;
             _damage = null;
             _pumps = System.Array.Empty<BilgePump>();
             _heldPumpsByActor.Clear();
+            _pumpSeen.Clear();
             _sendTimer = 0f;
             _lastPump = "—";
             _lastPumpTick = 0L;
@@ -335,7 +391,7 @@ namespace SailwindCoop.Sync
             {
                 float delta = ReadOakum(GetHullDamage(__instance)) - __state;
                 if (delta > 0.00001f)
-                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta);
+                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta, GetHullDamage(__instance));
             }
             catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostHullOakum: " + e.Message); }
         }
@@ -371,7 +427,7 @@ namespace SailwindCoop.Sync
 
                 if (delta > 0.00001f)
                 {
-                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.BailWater, delta);
+                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.BailWater, delta, GetWaterDamage(__instance));
                 }
                 if (bottleChanged)
                     ItemSync.Instance?.NotifyHeldItemStateChanged(bottle, "bail-water");
@@ -399,7 +455,7 @@ namespace SailwindCoop.Sync
             {
                 float delta = ReadOakum(CurrentBoatDamage()) - __state;
                 if (delta > 0.00001f)
-                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta);
+                    BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta, CurrentBoatDamage());
             }
             catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostOakumAlt: " + e.Message); }
         }
