@@ -75,6 +75,8 @@ namespace SailwindCoop.Net
         GameplayNotice = 84,    // host -> client : short co-op notification
         MissionDeliver = 85,    // client -> host : mission good carried by the client reached a port
         MissionDeliverResult = 86, // host -> client : delivery result for the UI
+        HatchSnapshot = 87,     // host -> client : initial hatch state, never an interaction event
+        AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -482,13 +484,12 @@ namespace SailwindCoop.Net
     }
 
     // ---------------------------------------------------------------------
-    // Anchor (Stage 2) — Unreliable, host -> client only
+    // Anchor — host snapshots (Unreliable) and pickup/drop replies (ReliableOrdered)
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// The boat anchor's pose + set-state. Anchor payout is already carried by the anchor
-    /// rope's length (ControlState), but on the client the anchor is a free rigidbody jointed
-    /// to a now-kinematic boat, so it drifts from the host. We slave it like the boat.
+    /// The boat anchor's pose, set-state and holder. Free payout belongs to ControlState;
+    /// during a hold the holder also supplies the length extended by Anchor.ExtraFixedUpdate.
     ///
     /// <para>Frame matters: <b>stowed</b> the anchor is fixed to the deck → <see cref="CoordFrame.Boat"/>
     /// (boat-local, immune to the floating origin and to interp lag while sailing); <b>deployed/set</b>
@@ -505,6 +506,10 @@ namespace SailwindCoop.Net
         public Quaternion Rot;    // world rotation (World) or boat-local rotation (Boat)
         public Vector3 Vel;       // real-space velocity for extrapolation (World only; else zero)
         public bool Set;          // Anchor.IsSet() — dug into the seabed
+        public uint HolderNetId;
+        public float RopeLength; // Normalized RopeControllerAnchor.currentLength
+        public uint Revision; // Order states even when host ticks coincide
+        public uint RequesterNetId, RequestId; // Pickup/drop acknowledgement; snapshots use zero
 
         public MsgType Type => MsgType.AnchorState;
 
@@ -517,6 +522,7 @@ namespace SailwindCoop.Net
             w.PutQuaternion(Rot);
             w.PutVector3(Vel);
             w.Put(Set);
+            w.Put(HolderNetId); w.Put(RopeLength); w.Put(Revision); w.Put(RequesterNetId); w.Put(RequestId);
         }
 
         public void Deserialize(NetDataReader r)
@@ -528,6 +534,31 @@ namespace SailwindCoop.Net
             Rot = r.GetQuaternion();
             Vel = r.GetVector3();
             Set = r.GetBool();
+            HolderNetId = r.GetUInt(); RopeLength = r.GetFloat(); Revision = r.GetUInt(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt();
+        }
+    }
+
+    /// <summary>Boat-local hand pose on the owning deck, real-space on shore and on drop. ReliableOrdered
+    /// keeps an older held pose from resurrecting a hold after its drop. Values are trusted.</summary>
+    public sealed class AnchorRequestMsg : INetMessage
+    {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash, RequestId;
+        public bool Held;
+        public CoordFrame Frame;
+        public Vector3 Pos, Vel;
+        public Quaternion Rot;
+        public float RopeLength;
+        public MsgType Type => MsgType.AnchorRequest;
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(BoatIndex); w.Put(LayoutHash); w.Put(RequestId); w.Put(Held); w.Put((byte)Frame);
+            w.PutVector3(Pos); w.PutQuaternion(Rot); w.PutVector3(Vel); w.Put(RopeLength);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); RequestId = r.GetUInt(); Held = r.GetBool(); Frame = (CoordFrame)r.GetByte();
+            Pos = r.GetVector3(); Rot = r.GetQuaternion(); Vel = r.GetVector3(); RopeLength = r.GetFloat();
         }
     }
 
@@ -686,11 +717,12 @@ namespace SailwindCoop.Net
         public uint RequesterNetId; // assigned by the host from the sending peer
         public uint RequestId;      // zero for snapshots/local host events
         public bool StateAvailable = true; // false acknowledges a request without inventing a missing dock
+        public bool IsInteraction; // true only for a local action or a response to a client request
 
         public MsgType Type => MsgType.MooringState;
 
-        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequesterNetId); w.Put(RequestId); w.Put(StateAvailable); }
-        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt(); StateAvailable = r.GetBool(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequesterNetId); w.Put(RequestId); w.Put(StateAvailable); w.Put(IsInteraction); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt(); StateAvailable = r.GetBool(); IsInteraction = r.GetBool(); }
     }
 
     /// <summary>Client -> host mooring action (see <see cref="MooringStateMsg"/>). Host applies + relays.</summary>
@@ -799,11 +831,19 @@ namespace SailwindCoop.Net
         }
     }
 
-    /// <summary>
-    /// A client's held-button transition. This is for interactions whose meaning is not a
-    /// one-shot click but "keep doing this until released" (currently BilgePump). The button
-    /// index uses the same boat-local <c>GoPointerButton</c> order as <see cref="ControlEventMsg"/>.
-    /// </summary>
+    /// <summary>Initial host hatch state for a joining peer or a newly bound hull.</summary>
+    public sealed class HatchSnapshotMsg : INetMessage
+    {
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash;
+        public ushort Index;
+        public bool Open;
+        public MsgType Type => MsgType.HatchSnapshot;
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put(Open); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Open = r.GetBool(); }
+    }
+
+    /// <summary>A client's held-button transition/renewal (currently BilgePump).</summary>
     public sealed class HoldRequestMsg : INetMessage
     {
         public ushort BoatIndex = ushort.MaxValue;
@@ -1141,6 +1181,8 @@ namespace SailwindCoop.Net
         public int CargoPort = -1; // CargoCarrier.portIndex (-1 = not in cargo)
         public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
 
+        public bool IsSnapshot; // initial item manifest; not a new-object event
+
         public MsgType Type => MsgType.SpawnObject;
 
         public void Serialize(NetDataWriter w)
@@ -1161,6 +1203,7 @@ namespace SailwindCoop.Net
             w.Put(CrateId);
             w.Put(CargoPort);
             w.Put(InventorySlot);
+            w.Put(IsSnapshot);
         }
 
         public void Deserialize(NetDataReader r)
@@ -1181,6 +1224,7 @@ namespace SailwindCoop.Net
             CrateId = r.GetInt();
             CargoPort = r.GetInt();
             InventorySlot = r.GetInt();
+            IsSnapshot = r.GetBool();
         }
     }
 

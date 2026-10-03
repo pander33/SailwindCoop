@@ -47,6 +47,32 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("anchor drop waits for its own latest reply", () => {
+                var gate = new AnchorStateGate();
+                Assert(gate.Receive(10, 0, 0, 7), "initial snapshot");
+                gate.Begin(1); gate.Begin(2);
+                Assert(!gate.Receive(13, 0, 0, 7) && gate.HasPending, "snapshot undid local drop");
+                Assert(!gate.Receive(11, 7, 1, 7), "old pickup reply unlocked drop");
+                Assert(!gate.Receive(12, 8, 2, 7), "another player unlocked drop");
+                Assert(gate.Receive(12, 7, 2, 7) && !gate.HasPending, "drop reply rejected after ignored snapshot");
+                Assert(gate.Receive(13, 0, 0, 7), "next snapshot rejected");
+            });
+            Test("anchor state ordering survives equal ticks and revision wrap", () => {
+                var gate = new AnchorStateGate();
+                Assert(gate.Receive(uint.MaxValue, 0, 0, 7), "first state");
+                Assert(gate.Receive(0, 0, 0, 7), "revision wrap");
+                Assert(!gate.Receive(uint.MaxValue, 0, 0, 7) && !gate.Receive(0, 0, 0, 7), "old or duplicate state accepted");
+                Assert(gate.Receive(1, 0, 0, 7), "later state");
+            });
+            Test("anchor pending hand is independent per boat", () => {
+                var a = new AnchorStateGate(); var b = new AnchorStateGate();
+                a.Begin(1);
+                Assert(b.Receive(5, 0, 0, 7) && !b.HasPending && a.HasPending, "one boat blocked the other");
+                Assert(a.Receive(5, 7, 1, 7), "pickup reply");
+                a.Begin(2);
+                Assert(!a.Receive(6, 7, 1, 7) && a.HasPending, "pickup echo undid new drop");
+                Assert(a.Receive(7, 7, 2, 7), "drop reply");
+            });
             Test("new target", () => { Write(path, "old"); Assert(File.ReadAllText(path) == "old", "contents"); });
             Test("replace and backup", () => { Write(path, "new"); Assert(File.ReadAllText(path + ".bak") == "old", "backup"); });
             Test("serialization failure preserves both files", () => {
@@ -112,6 +138,37 @@ internal static class Program
                 Assert(target.TryApply(() => open, activate) && accepted == 0, "stale target won");
                 target.Target = true; inMotion = false;
                 Assert(target.TryApply(() => open, activate) && open && accepted == 1, "late join state did not converge");
+            });
+            Test("hatch baseline is quiet and duplicate baselines do not toggle", () => {
+                bool open = false; int toggles = 0;
+                var target = new DeferredToggle();
+                target.Receive(true, interaction: false);
+                Assert(!target.HasInteraction, "initial state invented an interaction");
+                Assert(target.TryApply(() => open, () => { open = !open; toggles++; }), "baseline did not converge");
+                target.Receive(true, interaction: false);
+                Assert(target.TryApply(() => open, () => { open = !open; toggles++; }) && toggles == 1,
+                    "duplicate baseline toggled the hatch");
+            });
+            Test("hatch baseline cannot erase a queued interaction during animation", () => {
+                bool open = false, inMotion = true;
+                var target = new DeferredToggle();
+                target.Receive(true, interaction: true);
+                target.Receive(false, interaction: false);
+                target.Receive(true, interaction: false);
+                Assert(target.HasInteraction, "baseline erased a queued real interaction");
+                Action activate = () => { if (!inMotion) open = !open; };
+                Assert(!target.TryApply(() => open, activate), "busy animation accepted the target");
+                inMotion = false;
+                Assert(target.TryApply(() => open, activate) && open, "latest queued target did not converge");
+            });
+            Test("hatch interaction supersedes an initial baseline", () => {
+                bool open = false; int toggles = 0;
+                var target = new DeferredToggle();
+                target.Receive(true, interaction: false);
+                target.Receive(false, interaction: true);
+                Assert(target.HasInteraction && !target.Target, "stale baseline replaced the click");
+                Assert(target.TryApply(() => open, () => { open = !open; toggles++; }) && toggles == 0,
+                    "obsolete initial state was animated");
             });
             Test("mooring rejects pre-request snapshots and older replies", () => {
                 var state = new PendingMooringState<string>(); string applied = "local";

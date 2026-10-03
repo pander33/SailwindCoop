@@ -8,7 +8,7 @@ All notable user-facing changes are documented in this file.
 
 - Boat controls, anchors, mooring, pumps, damage actions and deck interactions now carry a stable boat
   address and a layout signature. Each owned boat keeps independent state and restores its original
-  client physics on disconnect. Protocol is now **60**; all players need this build.
+  client physics on disconnect. Protocol is now **63**; all players need this build.
 - Host fully trusts connected client actions and broadcasts the result. Only the sender handshake,
   matching PlayerState NetId, object/index bounds/null checks and packet format checks remain.
   Do not add gameplay eligibility or numeric request checks. Remote pump holds expire without renewal.
@@ -21,8 +21,18 @@ All notable user-facing changes are documented in this file.
 
 - Mouse and sticky winch/wheel grabs and quick-release controls are supported. Host snapshots
   do not overwrite the rope being operated locally.
-- Hatches replicate an authoritative open/closed target, retry it after an active animation and
-  periodically refresh it for joining clients; repeated state packets do not toggle hatches.
+- Anchors bind through their rope joint after the game reparents them. Guest pickup, held pose,
+  payout and drop now travel through the host; local holds and pending drops resist stale snapshots.
+  Remote anchor physics stays slaved, while free host anchors retain vanilla physics. In-game
+  validation of this carrying fix is pending.
+- Fold/unfold of maps and other foldable items now updates remote meshes, details and collider
+  sizes through absolute setters. Loaded folded meshes remain folded in initial snapshots; local
+  holds resist old echoes. Fold state is sent only when the shape changes. In-game validation pending.
+- Hatches send event targets only after interaction and retry them after an active animation.
+  A separate one-time snapshot provides the initial state for a joining client or new hull.
+- Initial/periodic states and item poses/echoes leave last-action diagnostics untouched. Mooring
+  distinguishes interaction replies from snapshots; initial item manifests go only to the joining
+  peer. Anchor physics polling no longer announces an invented player action.
 
 - Mooring state acknowledges the latest local request and waits until the guest releases its rope
   or length adjuster. Unchanged snapshots leave logs and last-action diagnostics untouched.
@@ -31,8 +41,10 @@ All notable user-facing changes are documented in this file.
 - Fleet diagnostics display the actual state of each boat; control count mismatches report each part.
 - Joining from an already loaded world reports the existing error before overwriting the co-op slot.
 
-Validation: Release build, protocol smoke and 20 filesystem/patch/hatch/mooring scenarios pass on Windows
+Validation: Release build, protocol smoke and 23 filesystem/patch/hatch/mooring scenarios pass on Windows
 .NET Framework. Multi-boat gameplay and `File.Replace` under Unity Mono still need in-game verification.
+An intermediate runtime run failed the existing File.Replace recovery scenario; a subsequent run
+passed all 23 cases. The intermittent failure remains unexplained.
 
 ## [0.1.6] - 2026-09-22
 

@@ -42,7 +42,14 @@ namespace SailwindCoop.Sync
         private GoPointerButton[] _buttons = Array.Empty<GoPointerButton>();
         private readonly Dictionary<GoPointerButton, int> _index = new Dictionary<GoPointerButton, int>();
         private readonly Dictionary<GPButtonTrapdoor, DeferredToggle> _hatchTargets = new Dictionary<GPButtonTrapdoor, DeferredToggle>();
-        private float _hatchTimer;
+        private bool _sentInitialHatches;
+        private sealed class QueuedHatchState
+        {
+            public uint LayoutHash;
+            public readonly DeferredToggle Target = new DeferredToggle();
+        }
+        private readonly Dictionary<ushort, Dictionary<ushort, QueuedHatchState>> _pendingHatches
+            = new Dictionary<ushort, Dictionary<ushort, QueuedHatchState>>();
 
         private GoPointer _hostPointer;
         private bool _replaying;          // guard so the host's replay doesn't re-forward
@@ -135,19 +142,22 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
-            if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
+            if (_fleet != null)
+            {
+                foreach (var c in _fleet.Values)
+                {
+                    ApplyQueuedHatches(c);
+                    c.Tick(dt);
+                }
+                return;
+            }
             if (_net.State != LinkState.Connected) return;
             RefreshButtons();
             if (_net.Role == Role.Client) ApplyHatchTargets();
-            else if (_net.Role == Role.Host)
+            else if (_net.Role == Role.Host && !_sentInitialHatches)
             {
-                _hatchTimer += dt;
-                if (_hatchTimer >= 0.5f)
-                {
-                    _hatchTimer = 0f;
-                    for (int i = 0; i < _buttons.Length; i++)
-                        if (_buttons[i] is GPButtonTrapdoor hatch) SendHatchState(hatch, i);
-                }
+                SendInitialHatches();
+                _sentInitialHatches = true;
             }
             _holdRenew += dt;
             if (_holdRenew >= 0.25f)
@@ -268,6 +278,11 @@ namespace SailwindCoop.Sync
         {
             if (_fleet != null)
             {
+                if (_net.IsHostPeer(fromPeer) && msg.Kind == InteractKind.HatchState)
+                {
+                    QueueHatchState(msg.BoatIndex, msg.LayoutHash, msg.Index, msg.HatchOpen, interaction: true);
+                    return;
+                }
                 if (!GameState.playing || GameState.currentlyLoading) return;
                 if (_net.Role == Role.Host)
                 { if (_net.PlayerNetIdForPeer(fromPeer) == 0) return; }
@@ -288,10 +303,7 @@ namespace SailwindCoop.Sync
                 if (_net.Role == Role.Client)
                 {
                     if (msg.Kind != InteractKind.HatchState) return;
-                    if (!_hatchTargets.TryGetValue(hatch, out var target))
-                        _hatchTargets[hatch] = target = new DeferredToggle();
-                    target.Target = msg.HatchOpen;
-                    Remember("in hatch #" + i + " open=" + msg.HatchOpen);
+                    ReceiveHatchTarget((ushort)i, msg.HatchOpen, interaction: true);
                     return;
                 }
                 if (msg.Kind != InteractKind.ActivateNoArg) return;
@@ -346,6 +358,57 @@ namespace SailwindCoop.Sync
                 Index = (ushort)index, Kind = InteractKind.HatchState, HatchOpen = hatch.IsOpen() };
             if (peer == null) _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
             else peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
+
+        /// <summary>One baseline for a joining peer or newly bound hull; no interaction is invented.</summary>
+        public void SendInitialHatches(LiteNetLib.NetPeer peer = null)
+        {
+            if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
+            if (_fleet != null) { foreach (var c in _fleet.Values) c.SendInitialHatches(peer); return; }
+            for (int i = 0; i < _buttons.Length; i++)
+            {
+                if (!(_buttons[i] is GPButtonTrapdoor hatch)) continue;
+                var state = new HatchSnapshotMsg { BoatIndex = _boatId, LayoutHash = _layoutHash,
+                    Index = (ushort)i, Open = hatch.IsOpen() };
+                if (peer == null) _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                else peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+        }
+
+        public void OnHatchSnapshot(HatchSnapshotMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            if (!_net.IsHostPeer(fromPeer)) return;
+            QueueHatchState(msg.BoatIndex, msg.LayoutHash, msg.Index, msg.Open, interaction: false);
+        }
+
+        private void QueueHatchState(ushort boat, uint layout, ushort index, bool open, bool interaction)
+        {
+            if (!_pendingHatches.TryGetValue(boat, out var hatches))
+                _pendingHatches[boat] = hatches = new Dictionary<ushort, QueuedHatchState>();
+            if (!hatches.TryGetValue(index, out var state))
+                hatches[index] = state = new QueuedHatchState();
+            state.LayoutHash = layout;
+            state.Target.Receive(open, interaction); // A baseline must not erase a queued real interaction.
+        }
+
+        private void ApplyQueuedHatches(InteractionSync context)
+        {
+            if (!_pendingHatches.TryGetValue(context._boatId, out var hatches)) return;
+            foreach (var pair in hatches)
+            {
+                BoatLayout.Matches(context._boatId, pair.Value.LayoutHash, context._layoutHash, "InteractionSync");
+                context.ReceiveHatchTarget(pair.Key, pair.Value.Target.Target, pair.Value.Target.HasInteraction);
+            }
+            _pendingHatches.Remove(context._boatId);
+        }
+
+        private void ReceiveHatchTarget(ushort index, bool open, bool interaction)
+        {
+            if (index >= _buttons.Length || !(_buttons[index] is GPButtonTrapdoor hatch)) return;
+            if (!_hatchTargets.TryGetValue(hatch, out var target))
+                _hatchTargets[hatch] = target = new DeferredToggle();
+            target.Target = open;
+            if (interaction) Remember("in hatch #" + index + " open=" + open);
         }
 
         private void ApplyHatchTargets()
@@ -672,13 +735,13 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
-            if (_fleet != null) { _fleet.Clear(); return; }
+            if (_fleet != null) { _fleet.Clear(); _pendingHatches.Clear(); return; }
             _cachedBoat = null;
             _buttons = Array.Empty<GoPointerButton>();
             _index.Clear();
             _hostPointer = null;
             _hatchTargets.Clear();
-            _hatchTimer = 0f;
+            _sentInitialHatches = false;
             _replaying = false;
             _gp = null;
             _fClicked = null;

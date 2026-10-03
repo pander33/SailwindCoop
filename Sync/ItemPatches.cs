@@ -73,7 +73,7 @@ namespace SailwindCoop.Sync
             bool bottleDrink = TryPatch(harmony, typeof(ShipItemBottle), "Drink", Type.EmptyTypes,
                 postfixName: nameof(PostBottleDrink));
             bool foldable = TryPatch(harmony, typeof(ShipItemFoldable), "OnAltActivate", Type.EmptyTypes,
-                postfixName: nameof(PostFoldableAltActivate));
+                prefixName: nameof(PreFoldableAltActivate), postfixName: nameof(PostFoldableAltActivate));
             bool broom = TryPatch(harmony, typeof(ShipItemBroom), "OnAltActivate", Type.EmptyTypes,
                 postfixName: nameof(PostBroomAltActivate));
             Plugin.Logger.LogInfo("[ItemPatches] Held alt-actions: OnAltHeld=" + held + ", OnAltActivate=" + alt);
@@ -405,10 +405,20 @@ namespace SailwindCoop.Sync
             catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostBottleDrink: " + e.Message); }
         }
 
-        private static void PostFoldableAltActivate(ShipItemFoldable __instance)
+        private static void PreFoldableAltActivate(ShipItemFoldable __instance, ref float __state)
         {
-            try { ItemSync.Instance?.NotifyItemStateChanged(__instance, "foldable-alt"); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostFoldableAltActivate: " + e.Message); }
+            float captured = 0f;
+            SailwindCoop.Runtime.PatchGuard.Run(() => captured = FoldableState.Capture(__instance),
+                e => Plugin.Logger.LogWarning("[ItemPatches] PreFoldableAltActivate: " + e.Message));
+            __state = captured;
+        }
+
+        private static void PostFoldableAltActivate(ShipItemFoldable __instance, float __state)
+        {
+            SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__instance != null && FoldableState.Capture(__instance) != __state)
+                    ItemSync.Instance?.NotifyItemStateChanged(__instance, "foldable-alt");
+            }, e => Plugin.Logger.LogWarning("[ItemPatches] PostFoldableAltActivate: " + e.Message));
         }
 
         private static void PostBroomAltActivate(ShipItemBroom __instance)

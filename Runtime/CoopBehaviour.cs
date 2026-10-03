@@ -152,6 +152,7 @@ namespace SailwindCoop.Runtime
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
+            AnchorPatches.Apply(_harmony);
             try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
 
@@ -175,6 +176,7 @@ namespace SailwindCoop.Runtime
             {
                 Players.RemoveRemote(netId);
                 Items.ClearRemoteActor(netId);
+                Anchor.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
                 Pause.Release(netId);
@@ -349,6 +351,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.AnchorState:
                     Anchor.OnAnchorState((AnchorStateMsg)msg, fromPeer);
                     break;
+                case MsgType.AnchorRequest:
+                    Anchor.OnAnchorRequest((AnchorRequestMsg)msg, fromPeer);
+                    break;
                 case MsgType.MooringState:
                     Mooring.OnMooringState((MooringStateMsg)msg, fromPeer);
                     break;
@@ -366,6 +371,9 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.ControlEvent:
                     Interactions.OnControlEvent((ControlEventMsg)msg, fromPeer);
+                    break;
+                case MsgType.HatchSnapshot:
+                    Interactions.OnHatchSnapshot((HatchSnapshotMsg)msg, fromPeer);
                     break;
                 case MsgType.HoldRequest:
                     Interactions.OnHoldRequest((HoldRequestMsg)msg, fromPeer);
@@ -460,8 +468,11 @@ namespace SailwindCoop.Runtime
                         Net.SetMemberState(netId, ((ClientWorldLoadedMsg)msg).Ok
                             ? MemberJoinState.Ready
                             : MemberJoinState.Failed);
-                        if (((ClientWorldLoadedMsg)msg).Ok)
+                        if (((ClientWorldLoadedMsg)msg).Ok && netId != 0)
+                        {
+                            Interactions.SendInitialHatches(fromPeer);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
+                        }
                         Pause.Release(netId);
                     }
                     break;

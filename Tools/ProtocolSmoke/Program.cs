@@ -55,7 +55,8 @@ namespace ProtocolSmoke
             }
 
             int populated = 0, truncated = 0;
-            foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null))
+            foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
+                t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg)))
             {
                 foreach (ushort boat in new ushort[] { 1, 511, 65534 })
                 {
@@ -65,8 +66,18 @@ namespace ProtocolSmoke
                         foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
                             field.SetValue(msg, Sample(field.FieldType));
                         type.GetField("BoatIndex").SetValue(msg, boat);
-                        type.GetField("LayoutHash").SetValue(msg, 0xFEDCBA98u);
-                        if (msg is MooringStateMsg mooring) mooring.StateAvailable = boat != 511;
+                        type.GetField("LayoutHash")?.SetValue(msg, 0xFEDCBA98u);
+                        if (msg is MooringStateMsg mooring)
+                        {
+                            mooring.StateAvailable = boat != 511;
+                            mooring.IsInteraction = boat != 511;
+                        }
+                        if (msg is HatchSnapshotMsg hatch) hatch.Open = boat != 511;
+                        if (msg is SpawnObjectMsg spawn) spawn.IsSnapshot = boat != 511;
+                        if (msg is AnchorRequestMsg anchorRequest) { anchorRequest.Held = boat != 511; anchorRequest.Frame = boat == 511 ? CoordFrame.World : CoordFrame.Boat; }
+                        if (msg is AnchorStateMsg anchorState) anchorState.Set = boat != 511;
+                        if (msg is ItemStateMsg itemState) itemState.Amount = boat == 511 ? 0f : 1f;
+                        if (msg is ItemRequestMsg itemRequest) { itemRequest.Action = ItemAction.State; itemRequest.Amount = boat == 511 ? 0f : 1f; }
                         var writer = Protocol.Write(msg);
                         var reader = new NetDataReader(writer.Data, 1, writer.Length);
                         var clone = Protocol.ReadBody(msg.Type, reader);
@@ -108,6 +119,8 @@ namespace ProtocolSmoke
 
         private static object Sample(Type type)
         {
+            if (type == typeof(byte)) return (byte)193;
+            if (type == typeof(int)) return 123456;
             if (type == typeof(ushort)) return (ushort)65534;
             if (type == typeof(uint)) return 0xFEDCBA98u;
             if (type == typeof(long)) return 9876543210L;

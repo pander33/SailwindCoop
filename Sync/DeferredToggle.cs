@@ -6,6 +6,12 @@ namespace SailwindCoop.Sync
     internal sealed class DeferredToggle
     {
         public bool Target { get; set; }
+        public bool HasInteraction { get; private set; }
+        public void Receive(bool target, bool interaction)
+        {
+            Target = target;
+            HasInteraction |= interaction;
+        }
         public bool TryApply(Func<bool> read, Action activate)
         {
             if (read() == Target) return true;

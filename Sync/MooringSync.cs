@@ -175,7 +175,7 @@ namespace SailwindCoop.Sync
                 }
 
                 if (_net.Role == Role.Host)
-                    _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, LengthSq = lengthSq },
+                    _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, LengthSq = lengthSq, IsInteraction = true },
                                    LiteNetLib.DeliveryMethod.ReliableOrdered);
                 else if (_net.Role == Role.Client)
                 {
@@ -258,7 +258,7 @@ namespace SailwindCoop.Sync
                 Kind = moored ? MooringKind.Moor : MooringKind.Unmoor,
                 DockReal = moored && available ? CoordSpace.LocalToReal(dock.transform.position) : Vector3.zero,
                 LengthSq = rope.currentRopeLengthSquared, RequesterNetId = requester, RequestId = requestId,
-                StateAvailable = available };
+                StateAvailable = available, IsInteraction = requester != 0 };
             _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
 
@@ -275,10 +275,10 @@ namespace SailwindCoop.Sync
             if (ropes == null || index >= ropes.Length || ropes[index] == null) return;
             var rope = ropes[index];
             bool held = IsLocallyHeld(rope);
-            state.TryApply(held, msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in"));
+            state.TryApply(held, msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in", recordInteraction: msg.IsInteraction));
         }
 
-        private bool Apply(ushort index, MooringKind kind, Vector3 dockReal, float lengthSq, string tag, bool applyMoorLength = true)
+        private bool Apply(ushort index, MooringKind kind, Vector3 dockReal, float lengthSq, string tag, bool applyMoorLength = true, bool recordInteraction = true)
         {
             var ropes = _bm != null ? _bm.ropes : null;
             if (ropes == null || index >= ropes.Length) { RefetchBoat(); ropes = _bm != null ? _bm.ropes : null; }
@@ -340,7 +340,7 @@ namespace SailwindCoop.Sync
             }
             finally { _applying = false; }
 
-            if (changed)
+            if (changed && recordInteraction)
             {
                 Remember(tag + " " + kind + " #" + index);
                 Plugin.Logger.LogInfo("[MooringSync] " + _net.Role + " Applied " + kind + " boat=" + _boatId + " rope #" + index);

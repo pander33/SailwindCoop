@@ -108,7 +108,6 @@ namespace SailwindCoop.Sync
             if (light == null) return;
 
             Apply(light, msg.On, msg.Health);
-            Remember("in #" + msg.Index + " " + (msg.On ? "on" : "off"));
         }
 
         private void Apply(ShipItemLight light, bool on, float health)

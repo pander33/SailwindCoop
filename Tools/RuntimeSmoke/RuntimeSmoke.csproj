@@ -11,6 +11,7 @@
     <Compile Include="..\..\Runtime\PatchGuard.cs" Link="PatchGuard.cs" />
     <Compile Include="..\..\Sync\DeferredToggle.cs" Link="DeferredToggle.cs" />
     <Compile Include="..\..\Sync\PendingMooringState.cs" Link="PendingMooringState.cs" />
+    <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
     <Reference Include="BepInEx"><HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath></Reference>
   </ItemGroup>

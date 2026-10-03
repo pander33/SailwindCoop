@@ -586,6 +586,7 @@ namespace SailwindCoop.Sync
 
         private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held)
         {
+            if (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false)) return true;
             if (held == null) return false;
             return FindWinchForRope(rope) == held ||
                 (rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat));
