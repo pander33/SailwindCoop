@@ -29,6 +29,7 @@ namespace SailwindCoop.Runtime
         public BoatDamageSync Damage { get; private set; }
         public LightSync Lights { get; private set; }
         public ItemSync Items { get; private set; }
+        public ChartSync Charts { get; private set; }
         public InteractionSync Interactions { get; private set; }
         public WindTotemSync WindTotem { get; private set; }
         public ShopSync Shop { get; private set; }
@@ -138,6 +139,7 @@ namespace SailwindCoop.Runtime
             Damage = new BoatDamageSync(Net);
             Lights = new LightSync(Net);
             Items = new ItemSync(Net);
+            Charts = new ChartSync(Net);
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
             Shop = new ShopSync(Net);
@@ -167,9 +169,25 @@ namespace SailwindCoop.Runtime
                         " bytes, above one unreliable datagram; sent reliably (occurrence #" + _oversizedPackets + ")");
             };
             InputScopePatches.Apply(_harmony);
+            ItemInstrumentPatches.Apply(_harmony);
+            ChartPatches.Apply(_harmony);
+            InstrumentPosePatches.Apply(_harmony);
             AnchorPatches.Apply(_harmony);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
+            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ItemOperationPatches.Apply(_harmony); ItemSimulationPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
+
+            PatchGuard.Run(() => {
+                var signatures = InteractionActionCatalog.Inspect(typeof(GoPointerButton).Assembly);
+                var actions = ItemActionCatalog.Inspect(typeof(ShipItem).Assembly);
+                PatchHealth.Report("Input signatures", signatures);
+                PatchHealth.Report("Item actions", actions);
+                Plugin.Logger.LogInfo("[Coop] Input signatures: " + signatures.Detail);
+                Plugin.Logger.LogInfo("[Coop] Item action coverage: " + actions.Detail);
+            }, e => {
+                PatchHealth.Set("Input signatures", PatchHealthState.Failed, e.Message);
+                PatchHealth.Set("Item actions", PatchHealthState.Failed, "catalog inspection failed");
+                Plugin.Logger.LogWarning("[Coop] role=initializing action catalog: " + e);
+            });
 
             Net.OnAccepted += ack =>
                 Plugin.Logger.LogInfo("[Coop] Connection accepted, NetId=" + ack.AssignedNetId);
@@ -279,6 +297,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Lights.Tick", () => Lights.Tick(_dt)),
                 new SyncStep("Items.Tick", () => Items.Tick(_dt)),
                 new SyncStep("Items.ApplyRemote", () => Items.ApplyRemote()),
+                new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
                 new SyncStep("Interactions.Tick", () => Interactions.Tick(_dt)),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
@@ -406,12 +425,24 @@ namespace SailwindCoop.Runtime
                 case MsgType.LightRequest:
                     Lights.OnLightRequest((LightRequestMsg)msg, fromPeer);
                     break;
+                case MsgType.ItemOperationRequest:
+                    Items.OnOperationRequest((ItemOperationRequestMsg)msg, fromPeer); break;
+                case MsgType.ItemOperationResult:
+                    Items.OnOperationResult((ItemOperationResultMsg)msg, fromPeer); break;
                 case MsgType.WheelLockRequest:
                     Controls.OnWheelLockRequest((WheelLockRequestMsg)msg, fromPeer); break;
                 case MsgType.MooringCarryRequest:
                     Mooring.OnCarryRequest((MooringCarryRequestMsg)msg, fromPeer); break;
                 case MsgType.MooringCarryState:
                     Mooring.OnCarryState((MooringCarryStateMsg)msg, fromPeer); break;
+                case MsgType.InstrumentRequest:
+                    Items.OnInstrumentRequest((InstrumentRequestMsg)msg, fromPeer); break;
+                case MsgType.InstrumentState:
+                    Items.OnInstrumentState((InstrumentStateMsg)msg, fromPeer); break;
+                case MsgType.ChartRequest:
+                    Charts.OnRequest((ChartRequestMsg)msg, fromPeer); break;
+                case MsgType.ChartState:
+                    Charts.OnState((ChartStateMsg)msg, fromPeer); break;
                 case MsgType.ItemState:
                     Items.OnItemState((ItemStateMsg)msg, fromPeer);
                     break;
@@ -470,6 +501,7 @@ namespace SailwindCoop.Runtime
                             case ResyncDomain.Anchor: Anchor.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Mooring: Mooring.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Damage: Damage.Resync(resync.BoatIndex); break;
+                            case ResyncDomain.World: Storms.Resync(); Items.ResyncInstruments(); break;
                         }
                     }
                     break;
@@ -764,12 +796,14 @@ namespace SailwindCoop.Runtime
             WindTotem?.Clear();
             Interactions?.Clear();
             Items?.Clear();
+            Charts?.Clear();
             Lights?.Clear();
             Damage?.Clear();
             Mooring?.Clear();
             Anchor?.Clear();
             Controls?.Clear();
             Env?.Clear();
+            Storms?.Clear();
             CrestWater?.Clear();
             NpcBoats?.Clear();
             Boats?.Clear();
@@ -877,12 +911,14 @@ namespace SailwindCoop.Runtime
             WindTotem.Clear();
             Interactions.Clear();
             Items.Clear();
+            Charts.Clear();
             Lights.Clear();
             Damage.Clear();
             Mooring.Clear();
             Anchor.Clear();
             Controls.Clear();
             Env.Clear();
+            Storms.Clear();
             HostPause.Clear();
             CrestWater.Clear();
             NpcBoats.Clear();

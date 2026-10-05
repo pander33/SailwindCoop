@@ -54,6 +54,7 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            ItemReliabilityTests.Run(Test);
             Test("boat configuration barrier holds future packets and discards old indices", () => {
                 var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<string>();
                 queue.Add(1, 2, "boat1 new rope"); queue.Add(2, 1, "boat2 unchanged"); queue.Add(1, 1, "boat1 old rope");
@@ -251,6 +252,28 @@ internal static class Program
                 }
                 finally { _fixtureClient = false; harmony.UnpatchSelf(); }
             });
+            Test("installed game matches all 93 types and 182 declared input signatures", VerifyGameInputCatalog);
+            Test("installed game sleep and item actions use the catalogued overloads", VerifyGameActionEntries);
+            Test("installed game recipe/component fields match typed adapters", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.FullName);
+                    var required = new Dictionary<string, string[]> {
+                        { "FoodState", new[] { "dried", "smoked", "salted", "spoiled", "inWater" } },
+                        { "CookableFood", new[] { "currentHeat", "currentTrigger" } },
+                        { "ShipItemSoup", new[] { "currentWater", "currentEnergy", "currentUncookedEnergy", "currentVitamins", "currentProtein", "currentSpoiled", "currentSalted" } },
+                        { "ShipItemKettle", new[] { "currentWater", "currentTeaAmount", "currentCookedTeaAmount", "currentTeaType" } },
+                        { "StoveFuel", new[] { "lit", "inserted", "fuelTrigger", "cookTrigger" } },
+                        { "StoveFuelTrigger", new[] { "currentFuel", "cookTrigger" } },
+                        { "ShipItemStove", new[] { "currentHeat", "slots" } },
+                        { "ShipItemPipe", new[] { "currentHeat", "tobaccoGraphics" } }
+                    };
+                    foreach (var pair in required)
+                        foreach (string field in pair.Value)
+                            Assert(types[pair.Key].Fields.Any(f => f.Name == field), pair.Key + "." + field + " binding missing");
+                    Assert(types["Rainbow"].Methods.Any(m => m.Name == "ForceShowRainbow" && m.Parameters.Count == 0), "elixir world effect moved");
+                }
+            });
             Test("released control waits for final acknowledgement independently of newer node pose", () => {
                 var rope = new ItemStateGate(); var wheel = new ItemStateGate(); bool semantic, pose;
                 Assert(rope.Receive(4, 100, 0, 0, 10, out semantic, out pose), "rope baseline");
@@ -320,6 +343,13 @@ internal static class Program
                         i.Operand is FieldReference field && field.Name == "held" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "drop does not clear hand before final hook");
                 }
             });
+            Test("totem effect revision survives an older storm snapshot at the same tick", () => {
+                var weather = new ItemStateGate(); bool semantic, pose;
+                Assert(weather.Receive(2, 100, 0, 0, 0, out semantic, out pose), "weather baseline");
+                Assert(weather.Receive(3, 100, 0, 0, 0, out semantic, out pose), "same-tick cast effect rejected");
+                Assert(!weather.Receive(2, 101, 0, 0, 0, out semantic, out pose), "old periodic attraction undid cast");
+                Assert(weather.Receive(4, 102, 0, 0, 0, out semantic, out pose), "authoritative attraction decay stopped");
+            });
             Test("document chunks replace only after complete identified revision", () => {
                 var chunks = new ChunkAccumulator<string>();
                 Assert(chunks.Add("map1/rev3", 2, 3, new[] { "C" }) == null, "partial document became visible");
@@ -333,6 +363,26 @@ internal static class Program
                 ExpectFailure(() => chunks.Add("invalid", 2, 2, new string[0]));
                 chunks.Add("count", 0, 2, new string[0]);
                 ExpectFailure(() => chunks.Add("count", 1, 3, new string[0]));
+            });
+            Test("technical document failure clears only matching pending request and retains revision", () => {
+                var gate = new ItemStateGate(); bool semantic, pose;
+                gate.Receive(5, 5, 0, 0, 10, out semantic, out pose); gate.Begin(21);
+                gate.Cancel(11, 21, 10); Assert(gate.Pending, "other player's missing result cleared prediction");
+                gate.Cancel(10, 20, 10); Assert(gate.Pending, "old failure cleared newer edit");
+                gate.Cancel(10, 21, 10); Assert(!gate.Pending && gate.Version == 5, "technical failure reset known document revision");
+                Assert(!gate.Receive(4, 6, 0, 0, 10, out semantic, out pose), "failure made old document acceptable");
+            });
+            Test("installed chart data is saved per map prefab and previews are separate", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    Assert(types["SavePrefabData"].Fields.Any(f => f.Name == "chartData" && f.FieldType.Name == "ChartData"), "map document save identity changed");
+                    foreach (string name in new[] { "tempLine", "lines", "points" }) Assert(types["ChartData"].Fields.Any(f => f.Name == name), name + " missing");
+                    Assert(types["MapChart"].Fields.Any(f => f.Name == "originalParent" && f.FieldType.Name == "Transform"), "stable map parent binding changed");
+                    Assert(types["MapChart"].Methods.Single(m => m.Name == "OnActivate").Parameters.Single().ParameterType.Name == "Vector3", "chart final hook changed");
+                    Assert(types["SaveablePrefab"].Methods.Single(m => m.Name == "PrepareSaveData").Body.Instructions.Any(i =>
+                        i.Operand is FieldReference field && field.Name == "chartData" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "host committed chart would not enter save");
+                }
             });
             Test("dirt chunks keep a pending stroke protected until the entire result arrives", () => {
                 var chunks = new ChunkAccumulator<byte>(); var gate = new ItemStateGate(); bool semantic, pose;
@@ -354,6 +404,52 @@ internal static class Program
                 samples.Push(Tuple.Create(50L, "stale")); Assert(samples.Count == 3 && samples[0].Item1 == 100, "stale sample resurrected");
                 samples.Push(Tuple.Create(400L, "D")); Assert(samples.Count == 3 && samples[0].Item1 == 200, "buffer capacity not enforced");
                 samples.Clear(); Assert(samples.Count == 0, "disconnect retained samples");
+            });
+            Test("child pose cannot cross its parent's drop epoch or older semantic revision", () => {
+                var parent = new ItemStateGate(); var child = new ItemStateGate(); var order = new ItemRequestOrder(); bool semantic, pose;
+                parent.Receive(3, 100, 0, 0, 10, out semantic, out pose); parent.Begin(9);
+                order.Accept(10, 8, false); order.Accept(10, 9, false);
+                Assert(!order.Accept(10, 8, true) && order.Accept(10, 9, true), "pre-drop bobber passed parent request ordering");
+                Assert(parent.Pending, "child delivery acknowledged the root drop");
+                parent.Receive(4, 100, 10, 9, 10, out semantic, out pose);
+                Assert(unchecked((int)(3u - parent.Version)) < 0, "older child root revision became current");
+                Assert(child.Receive(5, 100, 0, 0, 10, out semantic, out pose), "child final baseline rejected");
+                Assert(!child.Receive(4, 110, 0, 0, 10, out semantic, out pose), "later tick admitted older child state");
+                Assert(child.Receive(6, 100, 0, 0, 10, out semantic, out pose), "same-tick final child rejected");
+            });
+            Test("installed rod and chip-log have separately bound bobbers and passive visual methods", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    foreach (string type in new[] { "ShipItemFishingRod", "ShipItemChipLog" })
+                    {
+                        foreach (string name in new[] { "bobberJoint", "bobberBody", "currentTargetLength", "activated", "holding", "throwing", "targetReelVolume", "reelAudio" })
+                            Assert(types[type].Fields.Any(f => f.Name == name), "child binding changed: " + type + "." + name);
+                        foreach (string method in new[] { "Update", "ExtraLateUpdate", "UpdateRope", "OnAltActivate" }) Assert(types[type].Methods.Any(m => m.Name == method && m.Parameters.Count == 0), "child hook changed: " + type + "." + method);
+                        Assert(types[type].Methods.Single(m => m.Name == "OnLoad").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "set_parent"), "bobber isn't an independent shifting-world object anymore");
+                    }
+                    foreach (string name in new[] { "rod", "rodRotator", "currentFish", "fishEnergy", "currentTargetTension", "tensionAudio" }) Assert(types["FishingRodFish"].Fields.Any(f => f.Name == name), "fish visual binding changed: " + name);
+                    Assert(types["ShipItemFishingRod"].Methods.Any(m => m.Name == "UpdateBend"), "passive bend renderer absent");
+                    Assert(types["ShipItemChipLog"].Fields.Any(f => f.Name == "thrown"), "chip-log deployed state absent");
+                }
+            });
+            Test("installed instrument targets and totem completion match typed adapters", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    var required = new Dictionary<string, string[]> {
+                        { "ShipItemClock", new[] { "lid", "lidOpen", "lidAnimPlaying" } },
+                        { "ShipItemQuadrant", new[] { "rotatingParent", "inspecting", "initialRot", "inspectRot" } },
+                        { "ShipItemScroll", new[] { "currentPage", "pages", "page", "filter", "openMesh", "closedMesh", "arrowUp", "arrowDown" } },
+                        { "ShipItemTotem", new[] { "rune", "totem", "casting", "castingTime" } }
+                    };
+                    foreach (var pair in required) foreach (string field in pair.Value)
+                        Assert(types[pair.Key].Fields.Any(f => f.Name == field), pair.Key + "." + field + " binding missing");
+                    Assert(types["ShipItemClock"].Methods.Any(m => m.Name == "RotateLid" && m.Parameters.Count == 1), "absolute clock animator absent");
+                    Assert(types["ShipItemQuadrant"].Methods.Any(m => m.Name == "SmoothlyRotate" && m.Parameters.Count == 1), "absolute quadrant animator absent");
+                    var finish = types["ShipItemTotem"].Methods.Single(m => m.Name == "FinishCast" && m.Parameters.Count == 0);
+                    Assert(finish.Body.Instructions.Any(i => i.Operand is FieldReference field && field.Name == "totemAttraction" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stsfld), "cast world result moved");
+                }
             });
             Test("anchor state ordering survives equal ticks and revision wrap", () => {
                 var gate = new AnchorStateGate();
@@ -572,6 +668,68 @@ internal static class Program
             typeof(AssemblyMetadataAttribute), false).First(a => ((AssemblyMetadataAttribute)a).Key == "GameDir");
         return Path.Combine(metadata.Value, "Sailwind_Data", "Managed", "Assembly-CSharp.dll");
     }
+
+    private static bool Declares(TypeDefinition type, InteractionActionCatalog.Input input)
+        => type != null && type.Methods.Any(m => m.Name == input.Method && !m.IsAbstract &&
+            m.Parameters.Select(p => p.ParameterType.Name).SequenceEqual(input.Parameters));
+
+    private static void VerifyGameInputCatalog()
+    {
+        using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+        {
+            var types = game.MainModule.Types.ToDictionary(t => t.FullName);
+            var actual = new HashSet<string>();
+            foreach (var type in types.Values)
+            {
+                var current = type;
+                while (current != null)
+                {
+                    if (current.FullName == "GoPointerButton") { actual.Add(type.FullName); break; }
+                    if (current.BaseType == null || !types.TryGetValue(current.BaseType.FullName, out current)) break;
+                }
+            }
+            Assert(actual.SetEquals(InteractionActionCatalog.Types), "type inventory differs from installed game");
+            Assert(actual.Count == 93 && InteractionActionCatalog.Inputs.Length == 182, "audited baseline changed");
+            foreach (var input in InteractionActionCatalog.Inputs)
+                Assert(Declares(types[input.TypeName], input), input.TypeName + "." + input.Method + " signature absent");
+        }
+    }
+
+    private static void VerifyGameActionEntries()
+    {
+        using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+        {
+            var types = game.MainModule.Types.ToDictionary(t => t.FullName);
+            Assert(ItemActionCatalog.Routes.Length == 29 &&
+                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltHeld" && r.Input.Parameters.Length == 0) == 9 &&
+                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltActivate" && r.Input.Parameters.Length == 0) == 19,
+                "held/alt catalog incomplete");
+            foreach (var route in ItemActionCatalog.Routes)
+                Assert(Declares(types[route.Input.TypeName], route.Input), route.Input.TypeName + " action signature absent");
+            Assert(InteractionActionCatalog.HostOnlyInputs.Any(input => input.TypeName == "GPButtonAutosaveToggle" && input.Method == "OnActivate"),
+                "host-only autosave guard missing");
+            var autosave = InteractionActionCatalog.HostOnlyInputs.Single(input => input.TypeName == "GPButtonAutosaveToggle" && input.Method == "OnActivate");
+            Assert(Declares(types[autosave.TypeName], autosave), "host-only autosave signature absent");
+            var bed = types["ShipItemBed"].Methods.Single(m => m.Name == "OnAltActivate" && m.Parameters.Count == 0);
+            Assert(bed.Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "EnterBed"),
+                "sleep entry moved; revisit guard");
+            bool noArgFirst = types["GoPointer"].Methods.Where(m => m.HasBody).Any(m => {
+                var calls = m.Body.Instructions.Select(i => i.Operand as MethodReference)
+                    .Where(c => c != null && c.Name == "OnAltActivate").ToArray();
+                return calls.Length >= 2 && calls[0].Parameters.Count == 0 && calls[1].Parameters.Count == 1;
+            });
+            Assert(noArgFirst, "pointer call order changed; revisit guard");
+            var sleep = types["Sleep"];
+            Assert(sleep.Methods.Any(m => m.Name == "Update" && m.Parameters.Count == 0 && m.HasBody), "native sleep Update route missing");
+            Assert(sleep.Methods.Any(m => m.Name == "FallAsleep" && m.Parameters.Count == 0 && !m.IsStatic), "native FallAsleep signature changed");
+            Assert(sleep.Methods.Any(m => m.Name == "LeaveBed" && m.Parameters.Count == 0 && !m.IsStatic), "native LeaveBed signature changed");
+            Assert(sleep.Fields.Any(f => f.Name == "timeskipSleep" && f.IsStatic && f.FieldType.FullName == "System.Boolean"), "native timeskip flag changed");
+            Assert(ItemActionCatalog.Routes.Any(r => r.Input.TypeName == "ShipItemElixir" && r.Domain == "Item results") &&
+                ItemActionCatalog.Routes.Any(r => r.Input.TypeName == "ShipItemCrate" && r.Domain == "Local"),
+                "personal effect must use result domain; crate UI stays local");
+        }
+    }
+
     private static void Child(string stage, string path)
     {
         var info = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,

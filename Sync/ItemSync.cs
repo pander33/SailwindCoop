@@ -12,9 +12,10 @@ namespace SailwindCoop.Sync
     /// Spawn/despawn and containers are later P3 passes; this layer gives pickup/drop/held-pose
     /// sync for items that exist in both peers' copies of the same save.
     /// </summary>
-    public sealed class ItemSync
+    public sealed partial class ItemSync
     {
         public static ItemSync Instance { get; private set; }
+        internal bool IsClientSession => _net.Role == Role.Client && _net.State == LinkState.Connected;
 
         private sealed class ItemEntry
         {
@@ -34,7 +35,15 @@ namespace SailwindCoop.Sync
             public int InventorySlot = -1;
             public bool DropWithoutProxyVelocity;
             public bool ForceWorldPoseUntilDrop;
-            public long LastFoldStateTick = long.MinValue;
+            public uint Revision, LastLocalRequest, AckRequester, AckRequest;
+            public uint AuthorRequester, AuthorRequestId;
+            public bool SemanticActive;
+            public uint SentRevision;
+            public readonly ChangeStream PoseStream = new ChangeStream();
+            public ItemRequestMsg SentPose;
+            public ItemStateMsg LastSemantic;
+            public readonly ItemStateGate Gate = new ItemStateGate();
+            public readonly ItemRequestOrder Requests = new ItemRequestOrder();
         }
 
         private sealed class PendingDynamicRelease
@@ -46,6 +55,12 @@ namespace SailwindCoop.Sync
             public string Reason;
         }
 
+        private uint _nextRequest;
+        private readonly HashSet<int> _tombstones = new HashSet<int>();
+        private readonly ItemMembership<ShipItem> _crateMembership = new ItemMembership<ShipItem>();
+        private readonly ItemMembership<ShipItem> _cargoMembership = new ItemMembership<ShipItem>();
+        private readonly Dictionary<int, ItemStateMsg> _pendingStates = new Dictionary<int, ItemStateMsg>();
+        private readonly Dictionary<int, SpawnObjectMsg> _pendingSpawns = new Dictionary<int, SpawnObjectMsg>();
         private readonly CoopNet _net;
         private readonly List<ItemEntry> _items = new List<ItemEntry>();
         private readonly Dictionary<ShipItem, ItemEntry> _byItem = new Dictionary<ShipItem, ItemEntry>();
@@ -99,10 +114,12 @@ namespace SailwindCoop.Sync
         private readonly HashSet<int> _hostIds = new HashSet<int>();
         public const float MatchRadius = 0.5f;   // metres; items at rest match near-exactly
 
-        // Client: runtime items just authored locally (caught fish, counter-shop buys, market cargo buys),
-        // awaiting host SpawnObject ids. Keep a queue: market cargo can be bought repeatedly before the
-        // first host spawn returns, so a single pending slot would lose earlier local copies.
-        private readonly List<ShipItem> _pendingClientItems = new List<ShipItem>();
+        private readonly ItemAuthoring<ShipItem> _pendingClientItems = new ItemAuthoring<ShipItem>();
+        private readonly HashSet<ShipItem> _baselineItems = new HashSet<ShipItem>();
+        private readonly ItemSaveIdentity _saveIdentity = new ItemSaveIdentity();
+        private readonly OperationLedger<List<ItemEntry>> _authoredResults = new OperationLedger<List<ItemEntry>>();
+        private ShipItem _authoringItem;
+        private readonly Dictionary<ShipItem, KeyValuePair<uint, uint>> _authoredIdentity = new Dictionary<ShipItem, KeyValuePair<uint, uint>>();
 
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
@@ -131,12 +148,30 @@ namespace SailwindCoop.Sync
             Instance = this;
         }
 
+        internal void SetSaveBaseline(IEnumerable<SavePrefabData> saved)
+        {
+            _saveIdentity.Clear();
+            if (saved == null) return;
+            foreach (var data in saved)
+                if (data != null && !(data.itemParentObject <= 0 && data.inventorySlot >= 0 && data.inventorySlot < 100))
+                    _saveIdentity.Add(data.instanceId, data.prefabIndex);
+        }
+
         public void Tick(float dt)
         {
             if (_net.State != LinkState.Connected) return;
             RefreshItems(dt);
+            if (_net.Role == Role.Client && _baselineReady && _pendingSpawns.Count != 0)
+            {
+                var waiting = new List<SpawnObjectMsg>(_pendingSpawns.Values);
+                foreach (var spawn in waiting) OnSpawnObject(spawn, null);
+            }
+            if (_net.Role == Role.Client && _pendingStates.Count != 0)
+                foreach (var state in new List<ItemStateMsg>(_pendingStates.Values))
+                    if (TryApplyItemState(state) == ItemApplyStatus.Applied) _pendingStates.Remove(state.InstanceId);
             SendLocalHeldPose(dt);
-            TickRods(dt);
+            TickInstruments(dt);
+            TickOperations();
 
             if (_net.Role != Role.Host) return;
             ProcessPendingDynamic();
@@ -156,7 +191,7 @@ namespace SailwindCoop.Sync
             foreach (var e in _items)
             {
                 if (e.Item == null || !ShouldReplicate(e.Item)) continue;
-                bool hostHeld = e.Item.held != null;
+                bool hostHeld = LocalHand(e.Item);
                 bool freeMoving = e.HolderNetId == 0 && IsMoving(e.Item);
                 if (hostHeld || freeMoving)
                 {
@@ -204,6 +239,7 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client) return;
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
+            ItemComponents.RetryBindings();
 
             foreach (var e in _items)
             {
@@ -272,6 +308,8 @@ namespace SailwindCoop.Sync
 
         public void NotifyPickup(GoPointer pointer, PickupableItem pickup)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
@@ -303,6 +341,8 @@ namespace SailwindCoop.Sync
 
         public void NotifyDrop(GoPointer pointer, PickupableItem pickup, Vector3 throwVelocity, bool surfacePlaced = false)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
@@ -321,6 +361,8 @@ namespace SailwindCoop.Sync
                 ClaimItemToBelt(item, personalSlot);
                 return;
             }
+
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
 
             _localHeld.Remove(item);
             e.InventorySlot = -1;
@@ -411,11 +453,14 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Host) return;
             RefreshItems(force: true);
 
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (actor == 0) return;
             // Ready-ping (InstanceId == 0): a client finished loading and asks for the full item set so
             // it can match/remap its own copies to host ids. Reply with a SpawnObject for every item.
             if (msg.InstanceId == 0)
             {
                 SendManifest(fromPeer);
+                ChartSync.Instance?.SendBaseline(fromPeer);
                 return;
             }
 
@@ -426,9 +471,9 @@ namespace SailwindCoop.Sync
                 return;
             }
 
-            uint actor = _net.PlayerNetIdForPeer(fromPeer);
-            if (actor == 0) return;
-
+            bool continuous = msg.Action == ItemAction.Pose || msg.Action == ItemAction.AltHeld;
+            if (!e.Requests.Accept(actor, msg.RequestId, continuous)) return;
+            if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (msg.Action == ItemAction.Consume)
             {
                 // The client ate/consumed the item. The eater's PlayerNeeds is personal and already
@@ -596,7 +641,7 @@ namespace SailwindCoop.Sync
                 {
                     var afterOar = BuildState(e, _net.Clock.ServerTick);
                     _net.Broadcast(afterOar, LiteNetLib.DeliveryMethod.Unreliable);
-                    Remember("in oar-row #" + e.Index + " actor=" + actor);
+                    // Continuous physical input is state, not another last-action notice.
                     return;
                 }
 
@@ -607,8 +652,10 @@ namespace SailwindCoop.Sync
                     _net.RelayExcept(msg, fromPeer, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
                 var afterAction = BuildState(e, _net.Clock.ServerTick);
-                _net.Broadcast(afterAction, LiteNetLib.DeliveryMethod.Unreliable);
-                Remember("in " + msg.Action + " #" + e.Index + " actor=" + actor);
+                // AltActivate carries the acknowledgement of a pending request; AltHeld is a stream.
+                _net.Broadcast(afterAction, msg.Action == ItemAction.AltActivate
+                    ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
+                if (msg.Action != ItemAction.AltHeld) Remember("in " + msg.Action + " #" + e.Index + " actor=" + actor);
                 return;
             }
 
@@ -646,6 +693,8 @@ namespace SailwindCoop.Sync
                 _localHeld[e.Item] = actor;
                 SetProxyAttached(e.Item, false);   // vanilla OnPickup ran only on the client's copy
                 DisconnectHangable(e.Item);
+                ItemComponents.ClearCookBinding(e.Item);
+                ItemComponents.ApplyInstruments(e.Item, msg.Details);
                 // Выгрузка из телеги/крейта: ваниль зовёт PickUpItem ВНУТРИ WithdrawItem, поэтому этот
                 // Pickup приходит РАНЬШЕ Cargo/Crate-запроса. Зеркалим членство прямо из запроса
                 // (идемпотентно), иначе state уйдёт со старым CargoPort/CrateId и клиент по эху засунет
@@ -662,24 +711,22 @@ namespace SailwindCoop.Sync
             }
             else
             {
-                if (msg.Action != ItemAction.State && e.HolderNetId != actor)
-                {
-                    // Can briefly happen when a Pose overtakes its Pickup.
-                    if (_rejectedPoseLogged.Add(e.InstanceId))
-                        Remember("reject non-owner " + (msg.Action == ItemAction.Pose ? "move" : msg.Action.ToString()) + " #" + e.Index + " actor=" + actor + " holder=" + e.HolderNetId);
-                    return;
-                }
                 if (e.HolderNetId == actor) SetPuppet(e.Item, true);                    // keep it a clean puppet while held
             }
 
-            bool acceptClientScalars = msg.Action == ItemAction.State;
+            bool acceptClientScalars = msg.Action == ItemAction.State || msg.Action == ItemAction.Drop;
             bool worldDrop = msg.Action == ItemAction.Drop && msg.Frame == CoordFrame.World;
             bool delayedContainerDrop = msg.Action == ItemAction.Drop && msg.CargoIndex == -2;
             bool attachedDrop = msg.Action == ItemAction.Drop && msg.Attached;
             ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
                           acceptClientScalars ? msg.Amount : FoldableState.Capture(e.Item),
                           acceptClientScalars ? msg.Health : e.Item.health,
-                          e.Item.sold, e.Item.nailed, e.HolderNetId != 0 || worldDrop);
+                          acceptClientScalars ? msg.Sold : e.Item.sold, acceptClientScalars ? msg.Nailed : e.Item.nailed, e.HolderNetId != 0 || worldDrop);
+            if (acceptClientScalars)
+            {
+                ItemComponents.Apply(e.Item, msg.Details);
+                if (e.Item is ShipItemLight light) LightSync.ApplyState(light, msg.LightOn, msg.Health);
+            }
             if (msg.Action == ItemAction.Pickup)
                 EnterRemoteHeldVisual(e.Item, "host pickup #" + e.Index);
             else if (msg.Action == ItemAction.Drop)
@@ -696,66 +743,69 @@ namespace SailwindCoop.Sync
             // transform just teleported to the drop point — use the client's real rigidbody velocity
             // instead, or the dropped item would be flung off the ship on every receiver.
             if (msg.Action == ItemAction.Drop) state.Vel = msg.Vel;
-            _net.Broadcast(state, msg.Action == ItemAction.Pose ? LiteNetLib.DeliveryMethod.Unreliable : LiteNetLib.DeliveryMethod.ReliableOrdered);
-            if (msg.Action != ItemAction.Pose)
+            // A holder's resting pose arrives reliably and is relayed the same way: no later packet would repair it.
+            _net.Broadcast(state, msg.Action == ItemAction.Pose && _net.ReceivingUnreliable
+                ? LiteNetLib.DeliveryMethod.Unreliable : LiteNetLib.DeliveryMethod.ReliableOrdered);
+            if (msg.Action != ItemAction.Pose && msg.IsInteraction)
                 Remember("in " + msg.Action + " #" + e.Index + " actor=" + actor + " " + PoseLabel(msg.Frame, msg.BoatIndex, msg.Pos));
         }
 
         public void OnItemState(ItemStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
-            if (_net.Role != Role.Client) return;
-            RefreshItems(force: true);
-            var e = ResolveClient(msg.InstanceId, msg.PrefabIndex, msg.Frame, msg.BoatIndex, msg.Pos,
-                                  msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: msg.HolderNetId == 0);
-            if (e == null || e.Item == null)
-            {
-                return;
-            }
-
-            uint prevHolder = e.HolderNetId;
+            if (TryApplyItemState(msg) != ItemApplyStatus.Applied) QueueState(msg);
+        }
+        private ItemApplyStatus TryApplyItemState(ItemStateMsg msg)
+        {
+            if (_net.Role != Role.Client || _tombstones.Contains(msg.InstanceId)) return ItemApplyStatus.Applied;
+            if (!_hostIds.Contains(msg.InstanceId) || !_byInstanceId.TryGetValue(msg.InstanceId, out var e) || e.Item == null)
+                return ItemApplyStatus.Pending;
+            if (e.PrefabIndex != msg.PrefabIndex) return ItemApplyStatus.Pending;
+            bool semantic, pose;
+            var accepted = e.Gate.Copy();
+            if (!accepted.Receive(msg.Revision, msg.Tick, msg.Requester, msg.RequestId, _net.MyNetId, out semantic, out pose))
+                return ItemApplyStatus.Applied;
+            if (!ItemComponents.BindingsReady(e.Item, msg.Details)) return ItemApplyStatus.Pending;
+            return e.Gate.Apply(accepted, () => {
+            uint previousHolder = e.HolderNetId;
             e.HolderNetId = msg.HolderNetId;
             e.InventorySlot = msg.InventorySlot;
-            float amount = msg.Amount;
-            if (e.Item is ShipItemFoldable)
+            // Every accepted revision is complete; no individual metadata field bypasses ordering.
+            ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
+            ItemComponents.Apply(e.Item, msg.Details);
+            if (e.Item is ShipItemLight light) LightSync.ApplyState(light, msg.LightOn, msg.Health);
+            bool locallyHeld = msg.HolderNetId == _net.MyNetId && HeldItem() == e.Item;
+            if (!locallyHeld)
             {
-                // An older pose snapshot cannot roll back a newer fold/unfold result.
-                if (msg.Tick < e.LastFoldStateTick) amount = FoldableState.Capture(e.Item);
-                else e.LastFoldStateTick = msg.Tick;
-            }
-            ApplyScalarState(e.Item, amount, msg.Health, msg.Sold, msg.Nailed);
-            // Членство crate/cargo НЕ зеркалим из состояния предмета, который держим МЫ: ваниль уже
-            // выполнила операцию локально, а эхо может нести устаревший CargoPort/CrateId (Pickup при
-            // выгрузке обгоняет Cargo/Crate-запрос) — по нему свежевыданный предмет засовывался
-            // обратно в carrier (scale 0, слот) прямо из руки.
-            if (msg.HolderNetId != _net.MyNetId)
-            {
-                ApplyCrateMembership(e.Item, msg.CrateId);
-                ApplyCargoMembership(e.Item, msg.CargoPort);
-            }
-            // Mirror the vanilla attach flag (F-place) so the copy behaves like the host's after a
-            // reconnect/handover; puppets are kinematic anyway, so this is purely state fidelity.
-            if (msg.HolderNetId != _net.MyNetId)
+                var crate = TryApplyCrateMembership(e.Item, msg.CrateId);
+                if (crate != ItemApplyStatus.Applied) return crate;
+                var cargo = TryApplyCargoMembership(e.Item, msg.CargoPort);
+                if (cargo != ItemApplyStatus.Applied) return cargo;
                 SetProxyAttached(e.Item, msg.Attached);
-
-            if (msg.HolderNetId == _net.MyNetId)
-            {
-                SetRemoteInventoryVisual(e.Item, hidden: false);
-                return;
             }
-
-            SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0);
-
-            // Free OR remote-held: feed the pose into NetTransform; ApplyRemote drives the item as a
-            // kinematic puppet (game physics disabled), so it can't diverge / be ejected / vanish.
-            ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
-            if (prevHolder == _net.MyNetId && msg.HolderNetId == 0)
-                e.Net.Clear();
-            e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            if (ItemComponents.HasPendingBinding(e.Item)) return ItemApplyStatus.Pending;
+            SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0 && msg.HolderNetId != _net.MyNetId);
+            if (!locallyHeld && pose)
+            {
+                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
+                if (semantic || previousHolder == _net.MyNetId) e.Net.Clear();
+                e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            }
+            return ItemApplyStatus.Applied;
+            });
+        }
+        private void QueueState(ItemStateMsg msg)
+        {
+            ItemStateMsg previous;
+            if (!_pendingStates.TryGetValue(msg.InstanceId, out previous) ||
+                unchecked((int)(msg.Revision - previous.Revision)) > 0 ||
+                (msg.Revision == previous.Revision && msg.Tick > previous.Tick))
+                _pendingStates[msg.InstanceId] = msg;
         }
 
         public void ClearRemoteActor(uint actorNetId)
         {
             if (actorNetId == 0) return;
+            ForgetWaitingOperations(actorNetId);
 
             int released = 0;
             foreach (var e in _items)
@@ -819,7 +869,15 @@ namespace SailwindCoop.Sync
                 SetPuppet(item, true);    // hand-held items stay visual/kinematic; belt slots need vanilla ItemRigidbody
             else
                 RestoreLocalInventoryVisual(item, inInventory: true);
-            SendRequest(e, ItemAction.Pose, reliable: false);
+            if (!_hostIds.Contains(e.InstanceId)) return;
+            // The pose is boat-local on deck: an item held still (or parked on the belt) sends nothing.
+            var msg = BuildRequest(e, ItemAction.Pose, _net.Clock.ServerTick);
+            bool changed = e.SentPose == null || e.SentPose.Frame != msg.Frame || e.SentPose.BoatIndex != msg.BoatIndex ||
+                (e.SentPose.Pos - msg.Pos).sqrMagnitude > 1e-6f || Quaternion.Angle(e.SentPose.Rot, msg.Rot) > 0.1f;
+            var mode = e.PoseStream.Next(changed);
+            if (mode == StreamSend.None) return;
+            e.SentPose = msg;
+            _net.Broadcast(msg, mode == StreamSend.Reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
 
         // A personal belt slot returns slotIndex 0..4 from GetCurrentInventorySlot(); cargo carriers return
@@ -1323,12 +1381,19 @@ namespace SailwindCoop.Sync
         private void SendRequest(ItemEntry e, ItemAction action, bool reliable)
         {
             if (e == null || e.Item == null) return;
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             var msg = BuildRequest(e, action, _net.Clock.ServerTick);
             _net.Broadcast(msg, reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
 
         private ItemRequestMsg BuildRequest(ItemEntry e, ItemAction action, long tick)
         {
+            if (action != ItemAction.Pose && action != ItemAction.AltHeld)
+            {
+                if (++_nextRequest == 0) ++_nextRequest;
+                e.LastLocalRequest = _nextRequest;
+                e.Gate.Begin(_nextRequest);
+            }
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
             if (action == ItemAction.AltHeld && e.Item is ShipItemOar oar && oar.waterPos != null)
             {
@@ -1348,6 +1413,11 @@ namespace SailwindCoop.Sync
             return new ItemRequestMsg
             {
                 Action = action,
+                IsInteraction = action != ItemAction.Pose && action != ItemAction.AltHeld,
+                RequestId = e.LastLocalRequest,
+                LightOn = e.Item is ShipItemLight light && LightSync.IsOn(light),
+                Extras = Array.Empty<float>(),
+                Details = ItemComponents.Capture(e.Item),
                 Index = e.Index,
                 InstanceId = e.InstanceId,
                 PrefabIndex = e.PrefabIndex,
@@ -1394,11 +1464,16 @@ namespace SailwindCoop.Sync
         private ItemStateMsg BuildState(ItemEntry e, long tick)
         {
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
-            uint holder = e.HolderNetId != 0 ? e.HolderNetId : (e.Item.held != null ? _net.MyNetId : 0);
+            uint holder = e.HolderNetId != 0 ? e.HolderNetId : (LocalHand(e.Item) ? _net.MyNetId : 0);
             int inventorySlot = PersonalInventorySlotOf(e.Item);
             if (inventorySlot < 0) inventorySlot = e.InventorySlot;
-            return new ItemStateMsg
+            var state = new ItemStateMsg
             {
+                Requester = e.AckRequester,
+                RequestId = e.AckRequest,
+                LightOn = e.Item is ShipItemLight light && LightSync.IsOn(light),
+                Extras = Array.Empty<float>(),
+                Details = ItemComponents.Capture(e.Item),
                 Index = e.Index,
                 InstanceId = e.InstanceId,
                 PrefabIndex = e.PrefabIndex,
@@ -1418,6 +1493,13 @@ namespace SailwindCoop.Sync
                 InventorySlot = inventorySlot,
                 Attached = IsProxyAttached(e.Item),
             };
+            if (!ItemSemanticState.Equal(e.LastSemantic, state))
+            {
+                if (++e.Revision == 0) ++e.Revision;
+                e.LastSemantic = state;
+            }
+            state.Revision = e.Revision;
+            return state;
         }
 
         private void BuildPose(ShipItem item, long tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel)
@@ -1426,7 +1508,7 @@ namespace SailwindCoop.Sync
             bool forceWorld = e != null && e.ForceWorldPoseUntilDrop;
             Transform boat = forceWorld
                 ? null
-                : (item.held != null
+                : (LocalHand(item)
                     ? LocalPlayerBoat()
                     : (item.currentActualBoat != null ? item.currentActualBoat : ParentBoat(item.transform)));
             // The frame follows the INDEX, not the transform. A boat whose index is not currently
@@ -1548,65 +1630,110 @@ namespace SailwindCoop.Sync
         /// (the vanilla static <c>ShipItemCrate.crates</c> dict is never populated). Insert/Withdraw is
         /// done under the anti-echo guard so the relay patches don't bounce it back.
         /// </summary>
-        private void ApplyCrateMembership(ShipItem item, int crateId)
+        private void ApplyCrateMembership(ShipItem item, int crateId) => TryApplyCrateMembership(item, crateId);
+        private ItemApplyStatus TryApplyCrateMembership(ShipItem item, int crateId)
         {
-            if (item == null) return;
+            if (item == null) return ItemApplyStatus.Pending;
             var sv = item.GetComponent<SaveablePrefab>();
-            if (sv == null || sv.currentCrateId == crateId) return;
-
-            ApplyingCrate = true;
-            try
+            var target = CrateInventoryFor(crateId);
+            return _crateMembership.Apply(item,
+                () => sv != null && sv.currentCrateId == crateId && CrateListsMatch(item, target) && (crateId == 0 ||
+                    (target != null && target.containedItems.Contains(item))),
+                () => sv != null && item.itemRigidbodyC != null && (crateId == 0 || target != null),
+                () => {
+                    ApplyingCrate = true;
+                    try
+                    {
+                        foreach (var entry in _items)
+                        {
+                            var inventory = entry.Item != null ? entry.Item.GetComponent<CrateInventory>() : null;
+                                if (inventory != null && inventory != target &&
+                                    (inventory.containedItems.Contains(item) || InstanceIdOf(entry.Item) == sv.currentCrateId)) inventory.WithdrawItem(item);
+                        }
+                        if (target != null) target.InsertItem(item);
+                        else sv.currentCrateId = 0;
+                    }
+                    finally { ApplyingCrate = false; }
+                }, error => Plugin.Logger.LogWarning("[ItemSync] ApplyCrateMembership id=" + InstanceIdOf(item) + " crate=" + crateId + ": " + error));
+        }
+        private CrateInventory CrateInventoryFor(int id)
+        {
+            return id != 0 && _byInstanceId.TryGetValue(id, out var entry) && entry.Item != null
+                ? entry.Item.GetComponent<CrateInventory>() : null;
+        }
+        // Asked for every incoming item state: resolve the crates once per frame, not once per packet.
+        private readonly List<CrateInventory> _crateScan = new List<CrateInventory>();
+        private int _crateScanFrame = -1, _crateScanCount = -1;
+        private bool CrateListsMatch(ShipItem item, CrateInventory target)
+        {
+            if (_crateScanFrame != Time.frameCount || _crateScanCount != _items.Count)
             {
-                int oldId = sv.currentCrateId;
-                if (oldId != 0 && _byInstanceId.TryGetValue(oldId, out var oldC) && oldC.Item != null)
+                _crateScan.Clear(); _crateScanFrame = Time.frameCount; _crateScanCount = _items.Count;
+                foreach (var entry in _items)
                 {
-                    var inv = oldC.Item.GetComponent<CrateInventory>();
-                    if (inv != null) inv.WithdrawItem(item);
+                    var inventory = entry.Item != null ? entry.Item.GetComponent<CrateInventory>() : null;
+                    if (inventory != null) _crateScan.Add(inventory);
                 }
-                if (crateId != 0 && _byInstanceId.TryGetValue(crateId, out var newC) && newC.Item != null)
-                {
-                    var inv = newC.Item.GetComponent<CrateInventory>();
-                    if (inv != null) inv.InsertItem(item);
-                }
-                sv.currentCrateId = crateId;   // ensure exact match even if Insert/Withdraw were no-ops
             }
-            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ApplyCrateMembership: " + ex.Message); }
-            finally { ApplyingCrate = false; }
+            foreach (var inventory in _crateScan)
+                if (inventory != null && inventory != target && inventory.containedItems.Contains(item)) return false;
+            return true;
+        }
+        private bool MembershipTargetsReady(ShipItem item, ItemStateMsg state)
+        {
+            var carriers = CargoCarrier.carriers;
+            return item != null && item.itemRigidbodyC != null &&
+                (state.CrateId == 0 || CrateInventoryFor(state.CrateId) != null) &&
+                (state.CargoPort < 0 || (carriers != null && state.CargoPort < carriers.Length && carriers[state.CargoPort] != null &&
+                    carriers[state.CargoPort].cargo != null));
         }
 
         // Anti-echo guard for cargo membership (the Insert/Withdraw patches check it).
         internal static bool ApplyingCargo;
 
         /// <summary>
-        /// Mirror a cargo-storage membership change: pull the item out of its old carrier and/or push it
-        /// into the new one — VISUAL/state only (LoadSavedItem adds without charging the wallet; each
-        /// player's own wallet already ran the vanilla load/unload locally). Carriers are addressed by
-        /// stable portIndex via the static <c>CargoCarrier.carriers</c> array.
+        /// Mirror a cargo-storage membership change without replaying the local wallet.
         /// </summary>
-        private void ApplyCargoMembership(ShipItem item, int port)
+        private void ApplyCargoMembership(ShipItem item, int port) => TryApplyCargoMembership(item, port);
+        private ItemApplyStatus TryApplyCargoMembership(ShipItem item, int port)
         {
-            if (item == null) return;
-            int cur = CargoPortOf(item);
-            if (cur == port) return;
-
-            ApplyingCargo = true;
-            try
-            {
-                var carriers = CargoCarrier.carriers;
-                if (cur >= 0 && carriers != null && cur < carriers.Length && carriers[cur] != null)
-                {
-                    var c = carriers[cur];
-                    c.cargo.Remove(item);
-                    item.WithdrawFromCarrier();
-                    RestoreLocalInventoryVisual(item, inInventory: false);
-                }
-                if (port >= 0 && carriers != null && port < carriers.Length && carriers[port] != null)
-                {
-                    carriers[port].LoadSavedItem(item);   // EnterInventorySlot + InsertIntoCargoCarrier + scale 0, no wallet
-                }
-            }
-            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ApplyCargoMembership: " + ex.Message); }
-            finally { ApplyingCargo = false; }
+            if (item == null) return ItemApplyStatus.Pending;
+            var carriers = CargoCarrier.carriers;
+            var target = port >= 0 && carriers != null && port < carriers.Length ? carriers[port] : null;
+            return _cargoMembership.Apply(item,
+                () => ItemComponents.Read<CargoCarrier>(item, "currentCargoCarrier") == target &&
+                    CargoListsMatch(item, target) && (port < 0 || (target != null && target.cargo.Contains(item))),
+                () => item.itemRigidbodyC != null && (port < 0 || (target != null && target.cargo != null)),
+                () => {
+                    ApplyingCargo = true;
+                    try
+                    {
+                        int current = CargoPortOf(item);
+                        if (carriers != null)
+                            foreach (var carrier in carriers)
+                                if (carrier != null && carrier != target) carrier.cargo.Remove(item);
+                        if (current >= 0 && current != port || (port < 0 && item.itemRigidbodyC.GetCurrentInventorySlot() != null &&
+                            item.itemRigidbodyC.GetCurrentInventorySlot().GetComponent<CargoCarrier>() != null))
+                        {
+                            item.itemRigidbodyC.ExitInventorySlot();
+                            item.WithdrawFromCarrier();
+                            RestoreLocalInventoryVisual(item, inInventory: false);
+                        }
+                        if (target != null)
+                        {
+                            target.cargo.Remove(item);
+                            target.LoadSavedItem(item);
+                        }
+                    }
+                    finally { ApplyingCargo = false; }
+                }, error => Plugin.Logger.LogWarning("[ItemSync] ApplyCargoMembership id=" + InstanceIdOf(item) + " port=" + port + ": " + error));
+        }
+        private static bool CargoListsMatch(ShipItem item, CargoCarrier target)
+        {
+            if (CargoCarrier.carriers != null)
+                foreach (var carrier in CargoCarrier.carriers)
+                    if (carrier != null && carrier != target && carrier.cargo != null && carrier.cargo.Contains(item)) return false;
+            return true;
         }
 
         private void ConfigureNetFrame(ItemEntry e, CoordFrame frame, ushort boatIndex)
@@ -1815,12 +1942,18 @@ namespace SailwindCoop.Sync
 
         private void BroadcastSpawn(ItemEntry e, LiteNetLib.NetPeer peer = null, bool snapshot = false)
         {
-            if (e == null || e.Item == null) return;
-            BuildPose(e.Item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
-                      out Vector3 pos, out Quaternion rot, out Vector3 vel);
+            if (e == null || e.Item == null || _operationApplying || e.Item == _authoringItem) return;
+            var state = BuildState(e, _net.Clock.ServerTick);
+            CoordFrame frame = state.Frame; ushort boatIndex = state.BoatIndex;
+            Vector3 pos = state.Pos, vel = state.Vel; Quaternion rot = state.Rot;
             var msg = new SpawnObjectMsg
             {
+                AuthorRequester = e.AuthorRequester, AuthorRequestId = e.AuthorRequestId,
+                IsBaselineItem = _baselineItems.Contains(e.Item),
                 Kind = (byte)NetObjKind.Item,
+                Revision = state.Revision, Tick = state.Tick,
+                Requester = state.Requester, RequestId = state.RequestId,
+                LightOn = state.LightOn, Extras = state.Extras, Details = state.Details, Attached = state.Attached,
                 InstanceId = e.InstanceId,
                 PrefabIndex = e.PrefabIndex,
                 Frame = frame,
@@ -1828,60 +1961,66 @@ namespace SailwindCoop.Sync
                 Pos = pos,
                 Rot = rot,
                 Vel = vel,
-                HolderNetId = e.HolderNetId,
-                Amount = FoldableState.Capture(e.Item),
+                HolderNetId = state.HolderNetId,
+                Amount = state.Amount,
                 Health = e.Item.health,
                 Sold = e.Item.sold,
                 Nailed = e.Item.nailed,
                 CrateId = CrateIdOf(e.Item),
                 CargoPort = CargoPortOf(e.Item),
-                InventorySlot = e.InventorySlot,
+                InventorySlot = state.InventorySlot,
                 IsSnapshot = snapshot,
             };
             if (peer == null) _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
             else peer.Send(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            if (!snapshot) Remember("out spawn id=" + e.InstanceId + " prefab=" + e.PrefabIndex);
+
         }
 
         private void BroadcastDespawn(ItemEntry e)
         {
             if (e == null) return;
+            _tombstones.Add(e.InstanceId);
             _net.Registry.Remove(e.NetId);
+            if (_operationApplying) return;
             _net.Broadcast(new DespawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = e.InstanceId },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("out despawn id=" + e.InstanceId);
+
         }
 
         public void OnSpawnObject(SpawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
         {
-            if (_net.Role != Role.Client) return;
-            if (msg.Kind != (byte)NetObjKind.Item) return;
-            // Match the host's item to one of our own (remap id) or spawn it if we have none.
-            var e = ResolveClient(msg.InstanceId, msg.PrefabIndex, msg.Frame, msg.BoatIndex, msg.Pos,
-                                  msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: msg.HolderNetId == 0);
-            if (e == null || e.Item == null)
+            if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item || _tombstones.Contains(msg.InstanceId)) return;
+            if (!_baselineReady) { _pendingSpawns[msg.InstanceId] = msg; return; }
+            using (InteractionContext.Begin(InteractionSource.Baseline))
             {
-                Remember("reject spawn id=" + msg.InstanceId);
-                return;
+                var e = ResolveClient(msg.InstanceId, msg.PrefabIndex, msg.Frame, msg.BoatIndex, msg.Pos,
+                    msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: true,
+                    authorRequestId: msg.AuthorRequester == _net.MyNetId ? msg.AuthorRequestId : 0,
+                    baseline: msg.IsBaselineItem && msg.AuthorRequestId == 0);
+                if (e == null || e.Item == null) { _pendingSpawns[msg.InstanceId] = msg; return; }
+                OnItemState(new ItemStateMsg {
+                    InstanceId = msg.InstanceId, PrefabIndex = msg.PrefabIndex,
+                    Revision = msg.Revision, Tick = msg.Tick, Requester = msg.Requester, RequestId = msg.RequestId,
+                    Frame = msg.Frame, BoatIndex = msg.BoatIndex, Pos = msg.Pos, Rot = msg.Rot, Vel = msg.Vel,
+                    HolderNetId = msg.HolderNetId, Amount = msg.Amount, Health = msg.Health, Sold = msg.Sold,
+                    Nailed = msg.Nailed, CrateId = msg.CrateId, CargoPort = msg.CargoPort,
+                    InventorySlot = msg.InventorySlot, Attached = msg.Attached, LightOn = msg.LightOn, Extras = msg.Extras, Details = msg.Details
+                }, fromPeer);
+                ItemStateMsg waiting;
+                if (_pendingStates.TryGetValue(msg.InstanceId, out waiting))
+                    if (TryApplyItemState(waiting) == ItemApplyStatus.Applied) _pendingStates.Remove(msg.InstanceId);
+                _pendingSpawns.Remove(msg.InstanceId);
             }
-            e.HolderNetId = msg.HolderNetId;
-            e.InventorySlot = msg.InventorySlot;
-            ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
-            ApplyCrateMembership(e.Item, msg.CrateId);
-            ApplyCargoMembership(e.Item, msg.CargoPort);
-            SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0 && msg.HolderNetId != _net.MyNetId);
-            if (msg.HolderNetId != 0 && msg.HolderNetId != _net.MyNetId)
-            {
-                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
-                e.Net.Push(_net.Clock.ServerTick, msg.Pos, msg.Rot, msg.Vel);
-            }
-            if (!msg.IsSnapshot) Remember("in spawn id=" + msg.InstanceId);
+            // Lifecycle notices are emitted by the originating domain, never by manifests/echoes.
         }
 
         public void OnDespawnObject(DespawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
             if (msg.Kind != (byte)NetObjKind.Item) return;
+            _tombstones.Add(msg.InstanceId);
+            _pendingStates.Remove(msg.InstanceId);
+            _pendingSpawns.Remove(msg.InstanceId);
             // We claimed this item into our own belt — the despawn is the host dropping its shared copy in
             // response. Keep our local (now player-local) item; just untrack it. Other peers destroy theirs.
             if (_localClaimed.Remove(msg.InstanceId))
@@ -1893,16 +2032,17 @@ namespace SailwindCoop.Sync
                     _net.Registry.Remove(claimed.NetId);
                     if (claimed.Item != null) _byItem.Remove(claimed.Item);
                 }
-                Remember("in despawn id=" + msg.InstanceId + " (claimed -> keeping in belt)");
+
                 return;
             }
 
             if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e))
             {
-                Remember("missing despawn id=" + msg.InstanceId);
+
                 return;
             }
             var item = e.Item;
+            if (item != null) ItemComponents.RemoveBindings(item);
             _net.Registry.Remove(e.NetId);
             _items.Remove(e);
             _byInstanceId.Remove(msg.InstanceId);
@@ -1910,9 +2050,9 @@ namespace SailwindCoop.Sync
             {
                 _byItem.Remove(item);
                 _localHeld.Remove(item);
-                try { UnityEngine.Object.Destroy(item.gameObject); } catch { }
+                UnityEngine.Object.Destroy(item.gameObject);
             }
-            Remember("in despawn id=" + msg.InstanceId);
+
         }
 
         // -----------------------------------------------------------------
@@ -1922,6 +2062,8 @@ namespace SailwindCoop.Sync
         /// <summary>Client: a held item received a continuous OnAltHeld(GoPointer) tick. Throttled.</summary>
         public void NotifyAltHeld(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (item == null || item.held == null) return;
             float interval = 1f / Mathf.Max(1f, AltHeldHz);
@@ -1938,6 +2080,8 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void NotifyConsume(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (item == null) return;
             RefreshItems(force: false);
@@ -1954,9 +2098,12 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void OnLocalNail(ShipItem target)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected || target == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(target, out var e)) return;
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             long tick = _net.Clock.ServerTick;
             if (_net.Role == Role.Client)
             {
@@ -1981,9 +2128,12 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void OnLocalRodHook(ShipItemFishingRod rod, bool attached, ShipItem consumedHook)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected || rod == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(rod, out var e)) return;
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             long tick = _net.Clock.ServerTick;
             if (_net.Role == Role.Client)
             {
@@ -2013,9 +2163,12 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void OnLocalCrate(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (ApplyingCrate || _net.State != LinkState.Connected || item == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             long tick = _net.Clock.ServerTick;
             if (_net.Role == Role.Client)
             {
@@ -2032,9 +2185,11 @@ namespace SailwindCoop.Sync
         /// <summary>Client: forward an unseal so the host authors the crate's contents (host-only creation).</summary>
         public bool ForwardUnseal(ShipItemCrate crate)
         {
+            if (InteractionContext.Suppressed) return false;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected || crate == null) return false;
             var sv = crate.GetComponent<SaveablePrefab>();
             if (sv == null || sv.instanceId <= 0) return false;
+            if (!_hostIds.Contains(sv.instanceId)) return false;
             _net.Broadcast(new ItemRequestMsg
             {
                 Action = ItemAction.Unseal,
@@ -2056,9 +2211,12 @@ namespace SailwindCoop.Sync
         /// the host mirrors it and broadcasts authoritative state.</summary>
         public void OnLocalCargo(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (ApplyingCargo || _net.State != LinkState.Connected || item == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(item, out var e)) return;
+            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             int port = CargoPortOf(item);
             if (_net.Role == Role.Client && port < 0)
             {
@@ -2094,6 +2252,8 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void OnLocalInventory(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected || item == null) return;
             int slot = PersonalInventorySlotOf(item);
 
@@ -2153,6 +2313,8 @@ namespace SailwindCoop.Sync
         /// <summary>Client: a held item received a discrete OnAltActivate(GoPointer).</summary>
         public void NotifyAltActivate(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (item == null || item.held == null) return;
             // A crate's OnAltActivate only opens a LOCAL window (CrateSealUI / CrateInventory.OpenCrate) —
@@ -2160,12 +2322,14 @@ namespace SailwindCoop.Sync
             // the window open on the HOST's screen instead of the client's. The crate's real state changes
             // (unseal, insert/withdraw) are mediated by their own relays (PreUnseal, OnLocalCrate), so the
             // UI-opening alt must stay local.
-            if (item is ShipItemCrate || item is ShipItemFoldable) return;
+            if (item is ShipItemCrate || item is ShipItemFoldable || item is ShipItemChipLog || item is ShipItemFishingRod) return;
             ForwardHeldAction(item, ItemAction.AltActivate, reliable: true);
         }
 
         public void NotifyBroomActivated(ShipItemBroom broom)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected || broom == null) return;
             RefreshItems(force: false);
             if (!_byItem.TryGetValue(broom, out var e)) return;
@@ -2189,6 +2353,8 @@ namespace SailwindCoop.Sync
 
         public void NotifyLampHook(ShipItemLampHook hook, PickupableItem heldItem)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             var item = heldItem as ShipItem;
             if (hook == null || item == null || item.GetComponent<HangableItem>() == null) return;
@@ -2197,6 +2363,7 @@ namespace SailwindCoop.Sync
             int hookId = InstanceIdOf(hook);
             int hookPrefab = PrefabIndexOf(hook);
             if (hookId <= 0 || hookPrefab <= 0) return;
+            if (!_hostIds.Contains(e.InstanceId) || !_hostIds.Contains(hookId)) return;
 
             _suppressNextDrop.Add(item);
             _localHeld.Remove(item);
@@ -2215,6 +2382,8 @@ namespace SailwindCoop.Sync
         /// <summary>Client: vanilla changed scalars on the held item locally; make the host copy authoritative.</summary>
         public void NotifyHeldItemStateChanged(ShipItem item, string reason)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (item == null || item.held == null) return;
             NotifyItemStateChanged(item, reason);
@@ -2223,6 +2392,8 @@ namespace SailwindCoop.Sync
         /// <summary>Client: vanilla changed item scalar state locally; make the host copy authoritative.</summary>
         public void NotifyItemStateChanged(ShipItem item, string reason)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.State != LinkState.Connected) return;
             if (item == null) return;
             RefreshItems(force: false);
@@ -2250,7 +2421,7 @@ namespace SailwindCoop.Sync
             if (!_byItem.TryGetValue(item, out var e)) return;
             _localHeld[item] = _net.MyNetId;
             SendRequest(e, action, reliable);
-            Remember("out " + action + " #" + e.Index + " '" + item.name + "'");
+            if (action != ItemAction.AltHeld) Remember("out " + action + " #" + e.Index + " '" + item.name + "'");
         }
 
         private void ReplayHeldAction(ItemEntry e, ItemAction action, uint actor)
@@ -2309,7 +2480,7 @@ namespace SailwindCoop.Sync
             // Hammer target selection depends on the local player's GoPointer aim. The actual target result
             // is synced through ItemAction.Nail, so replaying no-arg hammer logic on the host would aim at
             // the wrong thing.
-            if (item is ShipItemHammer) return false;
+            if (item is ShipItemHammer || item is ShipItemChipLog || item is ShipItemFishingRod) return false;
             if (item is ShipItemBroom) return false;
             if (item is ShipItemFoldable) return false;
             if (action == ItemAction.AltActivate && !item.sold) return false;
@@ -2426,106 +2597,27 @@ namespace SailwindCoop.Sync
         // Per-type state (cooking / consumption)
         // -----------------------------------------------------------------
 
-        // type name -> ordered field names. Both peers share this table so the wire array is positional.
-        private static readonly Dictionary<string, string[]> ExtraFields = new Dictionary<string, string[]>
-        {
-            { "ShipItemStove", new[] { "currentHeat" } },
-            { "ShopStove", new[] { "currentHeat" } },
-            { "CookableFood", new[] { "currentHeat", "foodState" } },
-            { "CookableFoodSoup", new[] { "currentHeat" } },
-            { "CookableFoodKettle", new[] { "currentHeat" } },
-            { "ShipItemFood", new[] { "foodState" } },
-            { "ShipItemKettle", new[] { "currentWater", "currentTeaAmount", "currentTeaType" } },
-            { "ShipItemSoup", new[] { "currentWater", "currentEnergy", "currentSpoiled", "currentSalted" } },
-            { "ShipItemBottle", new[] { "capacity" } },
-            { "StoveFuel", new[] { "lit", "inserted" } },
-            { "ShipItemStoveFuel", new[] { "lit" } },
-        };
-
         private static readonly Dictionary<string, FieldInfo> _fieldCache = new Dictionary<string, FieldInfo>();
 
         private void SendExtraState(float dt)
         {
-            float interval = 1f / Mathf.Max(0.5f, ExtraStateHz);
             _extraTimer += dt;
-            if (_extraTimer < interval) return;
+            if (_extraTimer < 1f / Mathf.Max(0.5f, ExtraStateHz)) return;
             _extraTimer = 0f;
-
+            // BuildState advances the revision exactly when the item's semantic state differs from the
+            // last one built. Unchanged items send nothing; a run of changes ends with one reliable state.
             foreach (var e in _items)
             {
                 if (e.Item == null) continue;
-                if (!ExtraFields.TryGetValue(e.Item.GetType().Name, out var names)) continue;
-                var values = ReadExtra(e.Item, names);
-                if (values == null) continue;
-                _net.Broadcast(new ItemExtraStateMsg
-                {
-                    InstanceId = e.InstanceId,
-                    PrefabIndex = e.PrefabIndex,
-                    Values = values,
-                }, LiteNetLib.DeliveryMethod.Unreliable);
+                // Other callers of BuildState (operation capture, pose stream) advance the revision too,
+                // so compare with the revision this pass last sent rather than with the value before the call.
+                var state = BuildState(e, _net.Clock.ServerTick);
+                if (e.Revision != e.SentRevision) { e.SentRevision = e.Revision; _net.Broadcast(state, LiteNetLib.DeliveryMethod.Unreliable); e.SemanticActive = true; }
+                else if (e.SemanticActive) { _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered); e.SemanticActive = false; }
             }
         }
-
-        public void OnItemExtraState(ItemExtraStateMsg msg, LiteNetLib.NetPeer fromPeer)
-        {
-            if (_net.Role != Role.Client) return;
-            if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e) || e.Item == null) return;
-            if (e.HolderNetId == _net.MyNetId) return;   // don't fight the holder's local state
-            if (!ExtraFields.TryGetValue(e.Item.GetType().Name, out var names)) return;
-            WriteExtra(e.Item, names, msg.Values);
-        }
-
-        private static float[] ReadExtra(ShipItem item, string[] names)
-        {
-            try
-            {
-                var values = new float[names.Length];
-                for (int i = 0; i < names.Length; i++)
-                {
-                    var fi = GetFieldDeep(item.GetType(), names[i]);
-                    if (fi == null) { values[i] = 0f; continue; }
-                    object v = fi.GetValue(item);
-                    values[i] = ToFloat(v, fi.FieldType);
-                }
-                return values;
-            }
-            catch { return null; }
-        }
-
-        private static void WriteExtra(ShipItem item, string[] names, float[] values)
-        {
-            try
-            {
-                int n = Mathf.Min(names.Length, values.Length);
-                for (int i = 0; i < n; i++)
-                {
-                    var fi = GetFieldDeep(item.GetType(), names[i]);
-                    if (fi == null) continue;
-                    fi.SetValue(item, FromFloat(values[i], fi.FieldType));
-                }
-            }
-            catch { }
-        }
-
-        private static float ToFloat(object v, Type t)
-        {
-            if (v == null) return 0f;
-            if (t == typeof(bool)) return (bool)v ? 1f : 0f;
-            if (t.IsEnum) return Convert.ToInt32(v);
-            if (t == typeof(int)) return (int)v;
-            if (t == typeof(float)) return (float)v;
-            try { return Convert.ToSingle(v); } catch { return 0f; }
-        }
-
-        private static object FromFloat(float f, Type t)
-        {
-            if (t == typeof(bool)) return f > 0.5f;
-            if (t.IsEnum) return Enum.ToObject(t, Mathf.RoundToInt(f));
-            if (t == typeof(int)) return Mathf.RoundToInt(f);
-            if (t == typeof(float)) return f;
-            try { return Convert.ChangeType(f, t); } catch { return f; }
-        }
-
+        // The former positional-only ItemExtra packet has no ordering; active senders use full ItemState.
+        public void OnItemExtraState(ItemExtraStateMsg msg, LiteNetLib.NetPeer fromPeer) { }
         private static FieldInfo GetFieldDeep(Type type, string name)
         {
             string key = type.FullName + "::" + name;
@@ -2567,9 +2659,21 @@ namespace SailwindCoop.Sync
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
             var alive = new Dictionary<int, ShipItem>();
             foreach (var kv in prev)
-                if (kv.Value.Item != null && HasStableIdentity(kv.Value.Item)) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
+                if (kv.Value.Item != null && !_destroyingItems.Contains(kv.Value.Item) && HasStableIdentity(kv.Value.Item)) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
             foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
-                if (item != null && HasStableIdentity(item)) alive[InstanceIdOf(item)] = item;
+            {
+                if (item == null || _destroyingItems.Contains(item) || !HasStableIdentity(item)) continue;
+                int id = InstanceIdOf(item);
+                if (_net.Role == Role.Host && (_tombstones.Contains(id) ||
+                    (alive.TryGetValue(id, out var other) && other != item)))
+                {
+                    var saveable = item.GetComponent<SaveablePrefab>();
+                    do { id = UnityEngine.Random.Range(1, int.MaxValue); }
+                    while (_tombstones.Contains(id) || alive.ContainsKey(id) || prev.ContainsKey(id));
+                    saveable.instanceId = id;
+                }
+                alive[id] = item;
+            }
 
             // Establish the baseline once the local item set stops growing (save load finished).
             // Before that we never broadcast spawn/despawn or create copies — both peers are still
@@ -2579,9 +2683,13 @@ namespace SailwindCoop.Sync
                 _baselineCount = alive.Count;
                 _baselineChangedAt = Time.unscaledTime;
             }
-            if (!_baselineReady && _baselineCount > 0 && Time.unscaledTime - _baselineChangedAt >= SettleSeconds)
+            if (!_baselineReady && (!GameState.playing || GameState.currentlyLoading)) _baselineChangedAt = Time.unscaledTime;
+            if (!_baselineReady && ItemBaseline.Ready(GameState.playing, GameState.currentlyLoading,
+                _baselineCount, Time.unscaledTime - _baselineChangedAt, SettleSeconds))
             {
                 _baselineReady = true;
+                foreach (var item in alive.Values)
+                    if (!_pendingClientItems.Contains(item) && !IsOperationCreated(item)) _baselineItems.Add(item);
                 // Client just finished loading its own world — ask the host for its full item set so we
                 // can match/remap our copies to host ids (and spawn whatever we're missing).
                 if (_net.Role == Role.Client) SendReadyPing();
@@ -2624,6 +2732,8 @@ namespace SailwindCoop.Sync
                 e.InstanceId = instanceId;
                 e.PrefabIndex = prefabIndex;
                 e.Item = item;
+                if (_net.Role == Role.Host && _authoredIdentity.TryGetValue(item, out var author))
+                { e.AuthorRequester = author.Key; e.AuthorRequestId = author.Value; }
                 e.Net.InterpDelayMs = 90f;
                 _items.Add(e);
                 _byItem[item] = e;
@@ -2657,6 +2767,19 @@ namespace SailwindCoop.Sync
             RefreshItems(force: true);
             var e = HostLookup(instanceId, prefabIndex);
             return e != null ? e.Item : null;
+        }
+        internal bool TrySharedIdentity(ShipItem item, out int id, out int prefab)
+        {
+            id = prefab = 0;
+            if (!_byItem.TryGetValue(item, out var entry)) return false;
+            if (_net.Role == Role.Client && !_hostIds.Contains(entry.InstanceId)) return false;
+            id = entry.InstanceId; prefab = entry.PrefabIndex; return true;
+        }
+        internal IEnumerable<MapChart> SharedMaps()
+        {
+            foreach (var entry in _items)
+                if (entry.Item is ShipItemFoldable foldable && foldable.mapChart != null &&
+                    (_net.Role == Role.Host || _hostIds.Contains(entry.InstanceId))) yield return foldable.mapChart;
         }
 
         /// <summary>Host: rescan on the next Tick (Destroy is deferred to end of frame).</summary>
@@ -2693,13 +2816,12 @@ namespace SailwindCoop.Sync
         /// host-authoritative identity bridge — no destroy, and only genuinely-missing items are created.
         /// </summary>
         private ItemEntry ResolveClient(int instanceId, int prefabIndex, CoordFrame frame, ushort boatIndex,
-                                        Vector3 wirePos, float amount, float health, bool sold, bool nailed,
-                                        bool allowSpawn)
+                                         Vector3 wirePos, float amount, float health, bool sold, bool nailed,
+                                         bool allowSpawn, uint authorRequestId = 0, bool baseline = false)
         {
-            if (instanceId <= 0 || prefabIndex <= 0) return null;
-            _hostIds.Add(instanceId);
-
-            if (_byInstanceId.TryGetValue(instanceId, out var known))
+            if (instanceId <= 0 || prefabIndex <= 0 || _tombstones.Contains(instanceId)) return null;
+            bool shared = _hostIds.Contains(instanceId);
+            if (shared && _byInstanceId.TryGetValue(instanceId, out var known))
             {
                 if (known.PrefabIndex != prefabIndex)
                 {
@@ -2712,17 +2834,26 @@ namespace SailwindCoop.Sync
 
             if (!_baselineReady) return null;   // wait until our own save items are loaded
 
-            // An item we just authored locally (caught fish / bought good) is authored by the host now;
-            // adopt the host id onto that exact local copy before generic matching. Market cargo can be
-            // bought in batches, so consume the oldest pending item with the matching prefab.
-            var pending = PopPendingClientItem(prefabIndex);
+            if (_saveIdentity.Contains(instanceId, prefabIndex))
+            {
+                if (!_byInstanceId.TryGetValue(instanceId, out var saved) || saved.PrefabIndex != prefabIndex ||
+                    saved.Item == null || _pendingClientItems.Contains(saved.Item) || IsOperationCreated(saved.Item)) return null;
+                if (!ItemComponents.SaveLoaded(saved.Item)) return null;
+                _baselineItems.Remove(saved.Item);
+                _hostIds.Add(instanceId);
+                return saved;
+            }
+
+            var pending = _pendingClientItems.Resolve(_net.MyNetId, _net.MyNetId, authorRequestId, prefabIndex, instanceId);
             if (pending != null)
             {
                 RemapLocalItem(pending, instanceId);
+                _hostIds.Add(instanceId);
                 RefreshItems(force: true);
                 _byInstanceId.TryGetValue(instanceId, out var fr);
+                if (fr != null && fr.Item == pending) _pendingClientItems.Bind(authorRequestId, instanceId);
                 // If this item was just withdrawn from our belt to hand, tell the host we hold it now.
-                if (pending == _pendingHeldItem)
+                if (pending == _pendingHeldItem || LocalHand(pending))
                 {
                     _pendingHeldItem = null;
                     if (fr != null && fr.Item != null)
@@ -2731,19 +2862,12 @@ namespace SailwindCoop.Sync
                         _localHeld[fr.Item] = _net.MyNetId;
                         SetPuppet(fr.Item, true);
                         SendRequest(fr, ItemAction.Pickup, reliable: true);
-                        Remember("out belt->hand pickup id=" + instanceId);
                     }
                 }
                 return fr;
             }
 
-            var local = FindUnclaimedMatch(prefabIndex, frame, boatIndex, wirePos);
-            if (local != null)
-            {
-                RemapLocalItem(local, instanceId);
-                RefreshItems(force: true);
-                return _byInstanceId.TryGetValue(instanceId, out var rm) ? rm : null;
-            }
+            if (authorRequestId != 0) return null;
 
             // No local match. Only spawn for FREE items (allowSpawn): a held item's pose is the holder's
             // hand, so position matching can't work — defer; once it's dropped we match/spawn at rest.
@@ -2752,54 +2876,9 @@ namespace SailwindCoop.Sync
             var spawned = SpawnClientItem(instanceId, prefabIndex, frame, boatIndex, wirePos,
                                           Quaternion.identity, amount, health, sold, nailed);
             if (spawned == null) return null;
+            _hostIds.Add(instanceId);
             RefreshItems(force: true);
             return _byInstanceId.TryGetValue(instanceId, out var e) && e.PrefabIndex == prefabIndex ? e : null;
-        }
-
-        private ShipItem PopPendingClientItem(int prefabIndex)
-        {
-            for (int i = 0; i < _pendingClientItems.Count; i++)
-            {
-                var item = _pendingClientItems[i];
-                if (item == null)
-                {
-                    _pendingClientItems.RemoveAt(i--);
-                    continue;
-                }
-                if (PrefabIndexOf(item) != prefabIndex) continue;
-                _pendingClientItems.RemoveAt(i);
-                return item;
-            }
-            return null;
-        }
-
-        /// <summary>Find the nearest local ShipItem (same prefab, not yet claimed by a host id) within MatchRadius.</summary>
-        private ShipItem FindUnclaimedMatch(int prefabIndex, CoordFrame frame, ushort boatIndex, Vector3 wirePos)
-        {
-            ShipItem best = null;
-            float bestSq = MatchRadius * MatchRadius;
-            foreach (var e in _items)
-            {
-                if (e.Item == null) continue;
-                if (e.PrefabIndex != prefabIndex) continue;
-                if (_hostIds.Contains(e.InstanceId)) continue;   // already a host id (claimed/remapped)
-
-                Vector3 cand;
-                if (frame == CoordFrame.Boat)
-                {
-                    Transform boat = BoatLocator.FindByIndex(boatIndex);
-                    if (boat == null) continue;
-                    cand = boat.InverseTransformPoint(e.Item.transform.position);
-                }
-                else
-                {
-                    cand = CoordSpace.Ready ? CoordSpace.LocalToReal(e.Item.transform.position) : e.Item.transform.position;
-                }
-
-                float sq = (cand - wirePos).sqrMagnitude;
-                if (sq < bestSq) { bestSq = sq; best = e.Item; }
-            }
-            return best;
         }
 
         /// <summary>Reassign a live local item's instanceId to the host's, keeping engine dedup/caches sane.</summary>
@@ -2807,6 +2886,7 @@ namespace SailwindCoop.Sync
         {
             var saveable = local != null ? local.GetComponent<SaveablePrefab>() : null;
             if (saveable == null) return;
+            ReleaseUnsharedCollision(hostId, local);
             int oldId = saveable.instanceId;
             if (oldId == hostId) return;
 
@@ -2830,6 +2910,16 @@ namespace SailwindCoop.Sync
                 if (old.Item != null) _byItem.Remove(old.Item);
                 _net.Registry.Remove(old.NetId);
             }
+        }
+
+        private void ReleaseUnsharedCollision(int hostId, ShipItem target)
+        {
+            if (_hostIds.Contains(hostId) || !_byInstanceId.TryGetValue(hostId, out var collision) || collision.Item == target) return;
+            int replacement;
+            do { replacement = UnityEngine.Random.Range(1, int.MaxValue); }
+            while (_hostIds.Contains(replacement) || _byInstanceId.ContainsKey(replacement) || _tombstones.Contains(replacement));
+            RemapLocalItem(collision.Item, replacement);
+            RefreshItems(force: true);
         }
 
         /// <summary>Host: send a SpawnObject for every replicated item so a freshly-ready client can match/spawn.</summary>
@@ -2919,7 +3009,8 @@ namespace SailwindCoop.Sync
             {
                 if (!_baselineReady) return null;   // don't create until our own save items are loaded
                 if (instanceId <= 0 || prefabIndex <= 0) return null;
-                if (_byInstanceId.ContainsKey(instanceId)) return _byInstanceId[instanceId].Item;
+                if (_hostIds.Contains(instanceId) && _byInstanceId.ContainsKey(instanceId)) return _byInstanceId[instanceId].Item;
+                ReleaseUnsharedCollision(instanceId, null);
                 var dir = PrefabsDirectory.instance;
                 if (dir == null || dir.directory == null || prefabIndex <= 0 || prefabIndex >= dir.directory.Length)
                     return null;
@@ -3037,13 +3128,20 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void NotifyClientAuthored(ShipItem item)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected || item == null) return;
-            if (!_pendingClientItems.Contains(item))
-                _pendingClientItems.Add(item);
+            if (_pendingClientItems.Contains(item)) return;
+            int currentId = InstanceIdOf(item);
+            if (_hostIds.Contains(currentId) && !_tombstones.Contains(currentId)) return;
+            uint requestId = ++_nextRequest;
+            if (requestId == 0) requestId = ++_nextRequest;
+            _pendingClientItems.Add(requestId, item, PrefabIndexOf(item));
             BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
             {
+                RequestId = requestId,
                 PrefabIndex = PrefabIndexOf(item),
                 Frame = frame,
                 BoatIndex = boatIndex,
@@ -3060,8 +3158,11 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void NotifySold(int instanceId, int prefabIndex)
         {
+            if (InteractionContext.Suppressed) return;
+            if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (instanceId <= 0 || prefabIndex <= 0) return;
+            if (!_hostIds.Contains(instanceId)) return;
             _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = instanceId, PrefabIndex = prefabIndex },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("out sold(despawn) id=" + instanceId);
@@ -3071,6 +3172,8 @@ namespace SailwindCoop.Sync
         public void OnFishCatch(FishCatchMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Host) return;
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (actor == 0 || msg.RequestId == 0) return;
             try
             {
                 var dir = PrefabsDirectory.instance;
@@ -3097,20 +3200,35 @@ namespace SailwindCoop.Sync
                     rot = msg.Rot;
                 }
 
+                var retained = new List<ItemEntry>();
+                if (!_authoredResults.TryBegin(actor, msg.RequestId, retained, out var previous))
+                {
+                    foreach (var entry in previous) BroadcastSpawn(entry, fromPeer, snapshot: true);
+                    return;
+                }
                 var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
                 var item = go.GetComponent<ShipItem>();
                 var saveable = go.GetComponent<SaveablePrefab>();
                 if (item == null || saveable == null) { UnityEngine.Object.Destroy(go); return; }
+                _authoringItem = item;
+                _authoredIdentity[item] = new KeyValuePair<uint, uint>(actor, msg.RequestId);
                 item.sold = true;
                 saveable.prefabIndex = msg.PrefabIndex;
                 saveable.RegisterToSave();   // assigns a fresh nonzero host id
-                RefreshItems(force: true);   // diff detects the new item and broadcasts SpawnObject
+                RefreshItems(force: true);
+                var authored = _byItem[item];
+                authored.AuthorRequester = actor;
+                authored.AuthorRequestId = msg.RequestId;
+                retained.Add(authored);
+                _authoringItem = null;
+                BroadcastSpawn(authored);
                 Remember("in fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
             }
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[ItemSync] OnFishCatch: " + e.Message);
             }
+            finally { _authoringItem = null; }
         }
 
         // -----------------------------------------------------------------
@@ -3123,148 +3241,8 @@ namespace SailwindCoop.Sync
         // боббера возвращается.
         // -----------------------------------------------------------------
 
-        private const float RodStateHz = 10f;
-        private const float RodRemoteTimeout = 1.5f;
-
-        private sealed class RodRemote
-        {
-            public Vector3 RealPos;
-            public float Limit;
-            public float Bend;
-            public float LastTime;
-            public bool Kinematic;   // мы уже перевели боббер в kinematic (надо вернуть при выходе)
-        }
-
-        private readonly Dictionary<int, RodRemote> _rodRemote = new Dictionary<int, RodRemote>();
-        private readonly List<int> _rodDone = new List<int>();
-        private float _rodSendTimer;
-
-        private static readonly FieldInfo RodBobberJointField = typeof(ShipItemFishingRod).GetField(
-            "bobberJoint", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static readonly FieldInfo RodTargetLengthField = typeof(ShipItemFishingRod).GetField(
-            "currentTargetLength", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static readonly FieldInfo RodBendField = typeof(ShipItemFishingRod).GetField(
-            "currentRodBend", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        private void TickRods(float dt)
-        {
-            SendLocalRodState(dt);
-            ApplyRemoteRods();
-        }
-
-        /// <summary>Стрим состояния заброса удочки, которую физически держит ЛОКАЛЬНЫЙ игрок.</summary>
-        private void SendLocalRodState(float dt)
-        {
-            _rodSendTimer += dt;
-            if (_rodSendTimer < 1f / RodStateHz) return;
-            _rodSendTimer = 0f;
-            if (!CoordSpace.Ready) return;
-
-            try
-            {
-                foreach (var e in _items)
-                {
-                    var rod = e.Item as ShipItemFishingRod;
-                    if (rod == null || rod.held == null || !rod.sold || e.InstanceId <= 0) continue;
-                    var joint = RodBobberJointField?.GetValue(rod) as ConfigurableJoint;
-                    if (joint == null) continue;
-                    _net.Broadcast(new RodStateMsg
-                    {
-                        InstanceId = e.InstanceId,
-                        PrefabIndex = e.PrefabIndex,
-                        RealPos = CoordSpace.LocalToReal(joint.transform.position),
-                        Limit = joint.linearLimit.limit,
-                        Bend = RodBendField != null ? (float)RodBendField.GetValue(rod) : 0f,
-                    }, LiteNetLib.DeliveryMethod.Unreliable);
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Logger.LogWarning("[ItemSync] Fishing rod stream error: " + ex.Message);
-            }
-        }
-
-        /// <summary>Входящее состояние заброса чужой удочки; хост дополнительно ретранслирует всем.</summary>
-        public void OnRodState(RodStateMsg msg, LiteNetLib.NetPeer fromPeer)
-        {
-            // Ретрансляция всем (в т.ч. отправителю — его копия held != null, он проигнорирует ниже).
-            if (_net.Role == Role.Host) _net.Broadcast(msg, LiteNetLib.DeliveryMethod.Unreliable);
-
-            if (!_byInstanceId.TryGetValue(msg.InstanceId, out var e)) return;
-            var rod = e.Item as ShipItemFishingRod;
-            if (rod == null || rod.held != null) return;   // сами держим — эхо, игнор
-
-            if (!_rodRemote.TryGetValue(msg.InstanceId, out var r))
-            {
-                r = new RodRemote();
-                _rodRemote[msg.InstanceId] = r;
-                Remember("in rod-cast id=" + msg.InstanceId);
-            }
-            r.RealPos = msg.RealPos;
-            r.Limit = msg.Limit;
-            r.Bend = msg.Bend;
-            r.LastTime = Time.unscaledTime;
-        }
-
-        /// <summary>Каждый кадр (origin дрейфует): ведём бобберы удочек, которые держат другие игроки.</summary>
-        private void ApplyRemoteRods()
-        {
-            if (_rodRemote.Count == 0) return;
-            _rodDone.Clear();
-
-            foreach (var kv in _rodRemote)
-            {
-                var r = kv.Value;
-                ItemEntry e;
-                var rod = _byInstanceId.TryGetValue(kv.Key, out e) ? e.Item as ShipItemFishingRod : null;
-                ConfigurableJoint joint = null;
-                try { joint = rod != null ? RodBobberJointField?.GetValue(rod) as ConfigurableJoint : null; } catch { }
-
-                bool expired = rod == null || joint == null || rod.held != null ||
-                               Time.unscaledTime - r.LastTime > RodRemoteTimeout;
-                if (expired)
-                {
-                    try
-                    {
-                        var body = joint != null ? joint.GetComponent<Rigidbody>() : null;
-                        if (r.Kinematic && body != null)
-                        {
-                            body.isKinematic = false;
-                            body.velocity = Vector3.zero;
-                            body.angularVelocity = Vector3.zero;
-                        }
-                    }
-                    catch { }
-                    _rodDone.Add(kv.Key);
-                    continue;
-                }
-
-                if (!CoordSpace.Ready) continue;
-                try
-                {
-                    var body = joint.GetComponent<Rigidbody>();
-                    if (body != null && !body.isKinematic) { body.isKinematic = true; r.Kinematic = true; }
-
-                    Vector3 target = CoordSpace.RealToLocal(r.RealPos);
-                    var t = joint.transform;
-                    t.position = (target - t.position).sqrMagnitude > 25f
-                        ? target
-                        : Vector3.Lerp(t.position, target, Time.deltaTime * 12f);
-
-                    // Ваниль сама лерпит linearLimit к currentTargetLength и рисует леску/изгиб
-                    // (ExtraLateUpdate → UpdateRope; FishingRodFish.FixedUpdate → UpdateBend).
-                    RodTargetLengthField?.SetValue(rod, r.Limit);
-                    RodBendField?.SetValue(rod, r.Bend);
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Logger.LogWarning("[ItemSync] Bobber tracking error id=" + kv.Key + ": " + ex.Message);
-                    _rodDone.Add(kv.Key);
-                }
-            }
-
-            foreach (int id in _rodDone) _rodRemote.Remove(id);
-        }
+        // Protocol 75 retires the legacy unclocked RodState stream; keep its wire slot reserved.
+        public void OnRodState(RodStateMsg msg, LiteNetLib.NetPeer fromPeer) { }
 
         public void Clear()
         {
@@ -3272,21 +3250,7 @@ namespace SailwindCoop.Sync
                 if (e != null && e.Item != null)
                     RestoreDisconnectedItem(e.Item);
 
-            // Вернуть физику бобберам удочек, которые мы вели удалённо (пока живы lookup-таблицы).
-            foreach (var kv in _rodRemote)
-            {
-                if (!kv.Value.Kinematic) continue;
-                try
-                {
-                    var rod = _byInstanceId.TryGetValue(kv.Key, out var re) ? re.Item as ShipItemFishingRod : null;
-                    var joint = rod != null ? RodBobberJointField?.GetValue(rod) as ConfigurableJoint : null;
-                    var body = joint != null ? joint.GetComponent<Rigidbody>() : null;
-                    if (body != null) { body.isKinematic = false; body.velocity = Vector3.zero; }
-                }
-                catch { }
-            }
-            _rodRemote.Clear();
-            _rodSendTimer = 0f;
+            ClearInstruments();
 
             _items.Clear();
             _byItem.Clear();
@@ -3295,8 +3259,21 @@ namespace SailwindCoop.Sync
             _pendingDynamic.Clear();
             _suppressNextDrop.Clear();
             _hostIds.Clear();
+            _tombstones.Clear();
+            _pendingStates.Clear();
+            _crateMembership.Clear();
+            _cargoMembership.Clear();
+            _pendingSpawns.Clear();
+            _nextRequest = 0;
+            ClearOperations();
+            ItemComponents.Clear();
             _localClaimed.Clear();
             _pendingClientItems.Clear();
+            _baselineItems.Clear();
+            _saveIdentity.Clear();
+            _authoredResults.Clear();
+            _authoredIdentity.Clear();
+            _authoringItem = null;
             _pendingHeldItem = null;
             _gp = null;
             _rejectedPoseLogged.Clear();

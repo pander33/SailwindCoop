@@ -45,10 +45,10 @@ namespace SailwindCoop.Sync
         }
         internal void NotifyThrow(PickupableBoatMooringRope rope, GPButtonDockMooring dock)
         {
-            if (_net.Role != Role.Client || !InteractionContext.HasInput || InteractionContext.Suppressed) return;
-            NotifyLocalMoor(rope, dock);
-            // The request is out. Without this the end of the throw animation would send it again.
-            MooringPatches.ForgetPickup(rope);
+            // The only Moor request of a client throw: its dock trigger is suppressed (SuppressCarryTrigger),
+            // so the local MoorTo runs later, while the host state is applied, and sends nothing.
+            if (_net.Role == Role.Client && InteractionContext.HasInput && !InteractionContext.Suppressed)
+                NotifyLocalMoor(rope, dock);
         }
     }
 }

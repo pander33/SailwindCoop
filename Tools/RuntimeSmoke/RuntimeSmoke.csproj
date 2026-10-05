@@ -13,10 +13,12 @@
     <Compile Include="..\..\Runtime\PatchGuard.cs" Link="PatchGuard.cs" />
     <Compile Include="..\..\Runtime\PatchHookCatalog.cs" Link="PatchHookCatalog.cs" />
     <Compile Include="..\..\Runtime\PatchHealth.cs" Link="PatchHealth.cs" />
+    <Compile Include="..\..\Sync\InteractionActionCatalog.cs" Link="InteractionActionCatalog.cs" />
     <Compile Include="..\..\Sync\InteractionContext.cs" Link="InteractionContext.cs" />
     <Compile Include="..\..\Sync\DeferredToggle.cs" Link="DeferredToggle.cs" />
     <Compile Include="..\..\Sync\PendingMooringState.cs" Link="PendingMooringState.cs" />
     <Compile Include="..\..\Sync\OperationLedger.cs" Link="OperationLedger.cs" />
+    <Compile Include="..\..\Sync\ItemAuthoring.cs" Link="ItemAuthoring.cs" />
     <Compile Include="..\..\Sync\ItemResultProgress.cs" Link="ItemResultProgress.cs" />
     <Compile Include="..\..\Sync\ItemStateGate.cs" Link="ItemStateGate.cs" />
     <Compile Include="..\..\Sync\SessionCounters.cs" Link="SessionCounters.cs" />

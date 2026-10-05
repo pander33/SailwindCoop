@@ -276,6 +276,7 @@ namespace SailwindCoop.Sync
             if (host == null || host.gameVersion != _hostGameVersion)
                 throw new InvalidDataException("World version differs from the verified snapshot header");
 
+            ItemSync.Instance?.SetSaveBaseline(host.savedPrefabs);
             CoopProfile.MergeInto(host);
 
             int slot = Mathf.Clamp(CoopSlot, 0, 5);

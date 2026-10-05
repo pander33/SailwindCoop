@@ -15,136 +15,91 @@ namespace SailwindCoop.Sync
 
         public static void Apply(Harmony harmony)
         {
-            bool pickup = TryPatch(harmony, typeof(GoPointer), "PickUpItem", new[] { typeof(PickupableItem) }, postfixName: nameof(PostPickup));
-            bool drop = TryPatch(harmony, typeof(GoPointer), "DropItem", Type.EmptyTypes, prefixName: nameof(PreDrop), postfixName: nameof(PostDrop));
-            bool bottleClick = TryPatch(harmony, typeof(ShipItemBottle), "OnItemClick", new[] { typeof(PickupableItem) },
+            var hooks = new SailwindCoop.Runtime.PatchHookCatalog();
+            TryPatch(harmony, hooks, typeof(GoPointer), "PickUpItem", new[] { typeof(PickupableItem) }, prefixName: nameof(PrePickup), postfixName: nameof(PostPickup));
+            TryPatch(harmony, hooks, typeof(GoPointer), "DropItem", Type.EmptyTypes, prefixName: nameof(PreDrop), postfixName: nameof(PostDrop));
+            TryPatch(harmony, hooks, typeof(ShipItemBottle), "OnItemClick", new[] { typeof(PickupableItem) },
                 prefixName: nameof(PreBottleItemClick), postfixName: nameof(PostBottleItemClick));
-            bool oarHeld = TryPatch(harmony, typeof(ShipItemOar), "OnAltHeld", Type.EmptyTypes, postfixName: nameof(PostOarAltHeld));
+            TryPatch(harmony, hooks, typeof(ShipItemOar), "OnAltHeld", Type.EmptyTypes, postfixName: nameof(PostOarAltHeld));
             // Eating food is not an OnAltHeld replay (OnAltHeld only sets a flag; EatFood does the consume
             // + DestroyItem and touches the eater's personal PlayerNeeds). Forward the actual consume so
             // the host destroys its copy without running its own PlayerNeeds.
-            bool eat = TryPatch(harmony, typeof(ShipItemFood), "EatFood", Type.EmptyTypes, prefixName: nameof(PreEatFood));
+            TryPatch(harmony, hooks, typeof(ShipItemFood), "EatFood", Type.EmptyTypes, prefixName: nameof(PreEatFood));
             // Hammer nailing targets the item the LOCAL pointer aims at; the held-action replay can't
             // reproduce that aim, so we sync the result (target.nailed) from the two sites that change it:
             // NailItem (nail completes after the 2s hold) and OnAltActivate (instant un-nail).
-            bool nail = TryPatch(harmony, typeof(ShipItemHammer), "NailItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostNailItem));
-            bool unnail = TryPatch(harmony, typeof(ShipItemHammer), "OnAltActivate", Type.EmptyTypes, postfixName: nameof(PostHammerAltActivate));
+            TryPatch(harmony, hooks, typeof(ShipItemHammer), "NailItem", new[] { typeof(ShipItem) }, prefixName: nameof(PreNailItem), postfixName: nameof(PostNailItem));
+            TryPatch(harmony, hooks, typeof(ShipItemHammer), "OnAltActivate", Type.EmptyTypes, prefixName: nameof(PreHammerAltActivate), postfixName: nameof(PostHammerAltActivate));
             // A caught fish is created on the client by FishingRodFish.CollectFish (returns the new item);
             // forward it so the host authors the authoritative copy (client item replication is host-only).
-            bool fish = TryPatch(harmony, typeof(FishingRodFish), "CollectFish", Type.EmptyTypes, postfixName: nameof(PostCollectFish));
+            TryPatch(harmony, hooks, typeof(FishingRodFish), "CollectFish", Type.EmptyTypes, postfixName: nameof(PostCollectFish));
             // Крючок удочки: наличие = rod.health; ставится/теряется только на машине держащего
             // (OnItemClick attach / DetachHook при сходе рыбы) — форвардим результат, как nail.
-            bool rodDetach = TryPatch(harmony, typeof(ShipItemFishingRod), "DetachHook", Type.EmptyTypes, postfixName: nameof(PostDetachHook));
-            bool rodAttach = TryPatch(harmony, typeof(ShipItemFishingRod), "OnItemClick", new[] { typeof(PickupableItem) },
+            TryPatch(harmony, hooks, typeof(ShipItemFishingRod), "DetachHook", Type.EmptyTypes, prefixName: nameof(PreRodItemClick), postfixName: nameof(PostDetachHook));
+            TryPatch(harmony, hooks, typeof(ShipItemFishingRod), "OnItemClick", new[] { typeof(PickupableItem) },
                 prefixName: nameof(PreRodItemClick), postfixName: nameof(PostRodItemClick));
-            bool lampHook = TryPatch(harmony, typeof(ShipItemLampHook), "OnItemClick", new[] { typeof(PickupableItem) },
+            TryPatch(harmony, hooks, typeof(ShipItemLampHook), "OnItemClick", new[] { typeof(PickupableItem) },
                 postfixName: nameof(PostLampHookItemClick));
             // Crates: mirror inventory membership (Insert/Withdraw) and relay unseal (item creation) to host.
-            bool crateIn = TryPatch(harmony, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
-            bool crateOut = TryPatch(harmony, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
-            bool unseal = TryPatch(harmony, typeof(ShipItemCrate), "UnsealCrate", Type.EmptyTypes, prefixName: nameof(PreUnseal));
+            TryPatch(harmony, hooks, typeof(CrateInventory), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateInsert));
+            TryPatch(harmony, hooks, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
+            TryPatch(harmony, hooks, typeof(ShipItemCrate), "UnsealCrate", Type.EmptyTypes, prefixName: nameof(PreUnseal));
             // Cargo load/unload uses each player's OWN wallet (local money) → vanilla runs locally; we only
             // mirror the resulting membership (like crates). Postfix on insert; withdraw captures the item
             // in a prefix (it isn't an argument) and forwards it in the postfix.
-            bool cargoIn = TryPatch(harmony, typeof(CargoCarrier), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCargoInsert));
-            bool cargoOut = TryPatch(harmony, typeof(CargoCarrier), "WithdrawItem", new[] { typeof(GoPointer), typeof(int) }, prefixName: nameof(PreCargoWithdraw), postfixName: nameof(PostCargoWithdraw));
-            bool invIn = TryPatch(harmony, typeof(GPButtonInventorySlot), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostInventoryInsert));
-            bool invOut = TryPatch(harmony, typeof(GPButtonInventorySlot), "WithdrawItem", Type.EmptyTypes, prefixName: nameof(PreInventoryWithdraw), postfixName: nameof(PostInventoryWithdraw));
-            bool marketBuy = TryPatch(harmony, typeof(IslandMarket), "SpawnGood", new[] { typeof(GameObject) },
+            TryPatch(harmony, hooks, typeof(CargoCarrier), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCargoInsert));
+            TryPatch(harmony, hooks, typeof(CargoCarrier), "WithdrawItem", new[] { typeof(GoPointer), typeof(int) }, prefixName: nameof(PreCargoWithdraw), postfixName: nameof(PostCargoWithdraw));
+            TryPatch(harmony, hooks, typeof(GPButtonInventorySlot), "InsertItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostInventoryInsert));
+            TryPatch(harmony, hooks, typeof(GPButtonInventorySlot), "WithdrawItem", Type.EmptyTypes, prefixName: nameof(PreInventoryWithdraw), postfixName: nameof(PostInventoryWithdraw));
+            TryPatch(harmony, hooks, typeof(IslandMarket), "SpawnGood", new[] { typeof(GameObject) },
                 prefixName: nameof(PreMarketSpawnGood), postfixName: nameof(PostMarketSpawnGood));
-            bool marketSell = TryPatch(harmony, typeof(IslandMarketWarehouseArea), "SellGood", new[] { typeof(int) },
+            TryPatch(harmony, hooks, typeof(IslandMarketWarehouseArea), "SellGood", new[] { typeof(int) },
                 prefixName: nameof(PreWarehouseSellGood));
-            Plugin.Logger.LogInfo("[ItemPatches] Item patches: pickup=" + pickup + ", drop=" + drop +
-                                  ", bottleClick=" + bottleClick + ", oarHeld=" + oarHeld + ", eat=" + eat +
-                                  ", nail=" + nail + ", unnail=" + unnail + ", fish=" + fish +
-                                  ", rodDetach=" + rodDetach + ", rodAttach=" + rodAttach + ", lampHook=" + lampHook +
-                                  ", crateIn=" + crateIn + ", crateOut=" + crateOut + ", unseal=" + unseal +
-                                  ", cargoIn=" + cargoIn + ", cargoOut=" + cargoOut +
-                                  ", invIn=" + invIn + ", invOut=" + invOut +
-                                  ", marketBuy=" + marketBuy + ", marketSell=" + marketSell);
 
-            // Held alt-actions on ShipItem and its subclasses: a client holding the item triggers an
-            // authoritative effect (hammer nail/repair, oar rowing, eat/drink). We forward these so the
-            // host replays them on its copy. Patch the (GoPointer) overloads across the hierarchy so
-            // subclassed handlers are caught (the no-arg variants the game also calls are left alone to
-            // avoid double-forwarding).
-            int held = PatchShipItem(harmony, "OnAltHeld", nameof(PostAltHeld));
-            int alt = PatchShipItem(harmony, "OnAltActivate", nameof(PostAltActivate));
-            bool bottleDrink = TryPatch(harmony, typeof(ShipItemBottle), "Drink", Type.EmptyTypes,
-                postfixName: nameof(PostBottleDrink));
-            bool foldable = TryPatch(harmony, typeof(ShipItemFoldable), "OnAltActivate", Type.EmptyTypes,
+            TryPatch(harmony, hooks, typeof(ShipItemBottle), "Drink", Type.EmptyTypes, prefixName: nameof(PreBottleDrink), postfixName: nameof(PostBottleDrink));
+            TryPatch(harmony, hooks, typeof(ShipItemFoldable), "OnAltActivate", Type.EmptyTypes,
                 prefixName: nameof(PreFoldableAltActivate), postfixName: nameof(PostFoldableAltActivate));
-            bool broom = TryPatch(harmony, typeof(ShipItemBroom), "OnAltActivate", Type.EmptyTypes,
+            TryPatch(harmony, hooks, typeof(ShipItemBroom), "OnAltActivate", Type.EmptyTypes,
                 postfixName: nameof(PostBroomAltActivate));
-            Plugin.Logger.LogInfo("[ItemPatches] Held alt-actions: OnAltHeld=" + held + ", OnAltActivate=" + alt);
-            Plugin.Logger.LogInfo("[ItemPatches] Extra item patches: surfacePlace=DropItem, bottleDrink=" + bottleDrink + ", foldable=" + foldable +
-                                  ", broom=" + broom);
-
-            int ok = 0;
-            foreach (bool patched in new[]
-            {
-                pickup, drop, bottleClick, oarHeld, eat, nail, unnail, fish, rodDetach, rodAttach,
-                lampHook, crateIn, crateOut, unseal, cargoIn, cargoOut, invIn, invOut, marketBuy, marketSell
-            })
-                if (patched) ok++;
-            if (held > 0) ok++;
-            if (alt > 0) ok++;
-            if (bottleDrink) ok++;
-            if (foldable) ok++;
-            if (broom) ok++;
-            SailwindCoop.Runtime.PatchHealth.Report("Items", ok, 24, ok + "/24, held=" + held + ", alt=" + alt);
+            // Every supported action has an explicit result hook. Empty pointer overloads
+            // and pending personal/world effects must not become generic host replay.
+            SailwindCoop.Runtime.PatchHealth.Report("Items", hooks);
+            Plugin.Logger.LogInfo("[ItemPatches] " + hooks.Detail);
         }
 
-        private static int PatchShipItem(Harmony harmony, string gameMethod, string postfixName)
+        private static bool TryPatch(Harmony harmony, SailwindCoop.Runtime.PatchHookCatalog hooks,
+            Type type, string method, Type[] args, string prefixName = null, string postfixName = null)
         {
-            var postfix = new HarmonyMethod(typeof(ItemPatches).GetMethod(
-                postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-            var args = new[] { typeof(GoPointer) };
-            int patched = 0;
-            var baseType = typeof(ShipItem);
-            foreach (var t in baseType.Assembly.GetTypes())
-            {
-                if (!baseType.IsAssignableFrom(t)) continue;
-                MethodInfo mi;
-                try
-                {
-                    mi = t.GetMethod(gameMethod,
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly,
-                        null, args, null);
-                }
-                catch { continue; }
-                if (mi == null || mi.IsAbstract) continue;
-                try { harmony.Patch(mi, postfix: postfix); patched++; }
-                catch (Exception e)
-                {
-                    Plugin.Logger.LogWarning("[ItemPatches] Failed to patch " + t.Name + "." + gameMethod + ": " + e.Message);
-                }
-            }
-            return patched;
+            bool ok = hooks.Install(type, method, args, target => {
+                HarmonyMethod prefix = prefixName == null ? null : Callback(prefixName);
+                HarmonyMethod postfix = postfixName == null ? null : Callback(postfixName);
+                harmony.Patch(target, prefix: prefix, postfix: postfix);
+            });
+            if (!ok) WarnPatch("[ItemPatches] role=initializing required hook " +
+                SailwindCoop.Runtime.PatchHookCatalog.Signature(type.Name, method, args) +
+                " missing/failed; " + hooks.Detail);
+            return ok;
         }
 
-        private static bool TryPatch(Harmony harmony, Type type, string method, Type[] args, string prefixName = null, string postfixName = null)
+        private static HarmonyMethod Callback(string name)
         {
-            try
-            {
-                var mi = type.GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, args, null);
-                if (mi == null) return false;
-                HarmonyMethod prefix = prefixName == null ? null : new HarmonyMethod(typeof(ItemPatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));
-                HarmonyMethod postfix = postfixName == null ? null : new HarmonyMethod(typeof(ItemPatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-                harmony.Patch(mi, prefix: prefix, postfix: postfix);
-                return true;
-            }
-            catch (Exception e)
-            {
-                Plugin.Logger.LogWarning("[ItemPatches] " + method + ": " + e.Message);
-                return false;
-            }
+            var method = typeof(ItemPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic);
+            if (method == null) throw new MissingMethodException(typeof(ItemPatches).Name, name);
+            return new HarmonyMethod(method);
         }
 
+        private static void WarnPatch(string message)
+        {
+            try { Plugin.Logger?.LogWarning(message); } catch { }
+        }
+
+        private static void PrePickup(PickupableItem item)
+        { try { MooringPatches.ForgetPickup(item as PickupableBoatMooringRope); }
+          catch (Exception e) { WarnPatch("[ItemPatches] PrePickup: " + e); } }
         private static void PostPickup(GoPointer __instance, PickupableItem item)
         {
             try { ItemSync.Instance?.NotifyPickup(__instance, item); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostPickup: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostPickup: " + e.Message); }
         }
 
         private sealed class DropState
@@ -164,6 +119,8 @@ namespace SailwindCoop.Sync
 
                 var item = _fHeldItem != null ? _fHeldItem.GetValue(__instance) as PickupableItem : null;
                 var pointedAt = _fPointedAtButton != null ? _fPointedAtButton.GetValue(__instance) as GoPointerButton : null;
+                MooringPatches.MarkDrop(item as PickupableBoatMooringRope);
+                ItemOperationCapture.MarkDrop(item as ShipItem);
                 __state = new DropState
                 {
                     Item = item,
@@ -178,7 +135,7 @@ namespace SailwindCoop.Sync
         private static void PostDrop(GoPointer __instance, DropState __state)
         {
             try { ItemSync.Instance?.NotifyDrop(__instance, __state != null ? __state.Item : null, ComputeThrowVelocity(__instance), __state != null && __state.SurfacePlaced); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostDrop: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostDrop: " + e.Message); }
         }
 
         private static bool IsSurfacePlacement(GoPointerButton target, PickupableItem held)
@@ -252,7 +209,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemPatches] PreBottleItemClick: " + e.Message);
+                WarnPatch("[ItemPatches] PreBottleItemClick: " + e.Message);
             }
             return true;
         }
@@ -285,18 +242,8 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[ItemPatches] PostBottleItemClick: " + e.Message);
+                WarnPatch("[ItemPatches] PostBottleItemClick: " + e.Message);
             }
-        }
-
-        private static void PostAltHeld(GoPointerButton __instance)
-        {
-            try
-            {
-                if (__instance is ShipItemOar) return; // handled by the no-arg oar hook after vanilla sets isRowing
-                ItemSync.Instance?.NotifyAltHeld(__instance as ShipItem);
-            }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostAltHeld: " + e.Message); }
         }
 
         private static void PostOarAltHeld(ShipItemOar __instance)
@@ -306,7 +253,7 @@ namespace SailwindCoop.Sync
                 if (!OarIsRowing(__instance)) return;
                 ItemSync.Instance?.NotifyAltHeld(__instance);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostOarAltHeld: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostOarAltHeld: " + e.Message); }
         }
 
         private static bool OarIsRowing(ShipItemOar oar)
@@ -321,12 +268,6 @@ namespace SailwindCoop.Sync
             catch { return false; }
         }
 
-        private static void PostAltActivate(GoPointerButton __instance)
-        {
-            try { ItemSync.Instance?.NotifyAltActivate(__instance as ShipItem); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostAltActivate: " + e.Message); }
-        }
-
         // Runs just before vanilla EatFood. EatFood only consumes when the eat cooldown is clear;
         // if it will consume, the item is destroyed this call, so forward the consume first (while the
         // item still resolves). Client-only inside NotifyConsume; the host eats locally via vanilla.
@@ -338,55 +279,66 @@ namespace SailwindCoop.Sync
                 if (PlayerNeeds.instance != null && PlayerNeeds.instance.eatCooldown > 0f) return; // won't eat this call
                 ItemSync.Instance?.NotifyConsume(__instance);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreEatFood: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreEatFood: " + e.Message); }
         }
 
         // NailItem(item) is where a nail completes (item.nailed set true unless it bailed). Forward the
         // target's resulting nailed flag.
-        private static void PostNailItem(ShipItem __0)
+        private sealed class NailBefore { internal ShipItem Target; internal bool Nailed; }
+        private static void PreNailItem(ShipItem __0, out NailBefore __state)
         {
-            try { if (__0 != null) ItemSync.Instance?.OnLocalNail(__0); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostNailItem: " + e.Message); }
+            NailBefore state = null;
+            SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__0 != null) state = new NailBefore { Target = __0, Nailed = __0.nailed };
+            }, e => WarnPatch("[ItemPatches] PreNailItem: " + e));
+            __state = state;
+        }
+        private static void PreHammerAltActivate(ShipItemHammer __instance, out NailBefore __state)
+        {
+            NailBefore state = null;
+            SailwindCoop.Runtime.PatchGuard.Run(() => {
+                var target = __instance != null && __instance.held != null ? __instance.held.GetPointedAtItem() : null;
+                if (target != null) state = new NailBefore { Target = target, Nailed = target.nailed };
+            }, e => WarnPatch("[ItemPatches] PreHammerAltActivate: " + e));
+            __state = state;
+        }
+        private static void PostNailItem(NailBefore __state)
+        {
+            try { if (__state?.Target != null && __state.Target.nailed != __state.Nailed) ItemSync.Instance?.OnLocalNail(__state.Target); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostNailItem: " + e.Message); }
         }
 
         // OnAltActivate toggles an already-nailed target off (instant un-nail). Forward the pointed-at
-        // item's nailed flag; harmless if nothing changed (idempotent on the host).
-        private static void PostHammerAltActivate(ShipItemHammer __instance)
-        {
-            try
-            {
-                var target = __instance != null && __instance.held != null ? __instance.held.GetPointedAtItem() : null;
-                if (target != null) ItemSync.Instance?.OnLocalNail(target);
-            }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostHammerAltActivate: " + e.Message); }
-        }
+        // Use the captured target; a no-op or a changed pointer must not invent another action.
+        private static void PostHammerAltActivate(NailBefore __state) => PostNailItem(__state);
 
         // Рыба сорвалась (ReleaseFish) или шанс при CollectFish: держащий потерял крючок — форвардим.
-        private static void PostDetachHook(ShipItemFishingRod __instance)
+        private static void PostDetachHook(ShipItemFishingRod __instance, HealthBefore __state)
         {
-            try { if (__instance != null) ItemSync.Instance?.OnLocalRodHook(__instance, attached: false, consumedHook: null); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostDetachHook: " + e.Message); }
+            try { if (__state.Captured && __instance != null && !__state.Value.Equals(__instance.health)) ItemSync.Instance?.OnLocalRodHook(__instance, attached: false, consumedHook: null); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostDetachHook: " + e.Message); }
         }
 
         // Attach крючка: ваниль в OnItemClick ставит health=1 и уничтожает крючок-предмет. Ловим
         // переход health 0→>0 (prefix запоминает старое значение) и форвардим + Consume за крючок.
-        private static float _rodPreClickHealth;
+        private struct HealthBefore { internal bool Captured; internal float Value; }
 
-        private static void PreRodItemClick(ShipItemFishingRod __instance)
+        private static void PreRodItemClick(ShipItemFishingRod __instance, out HealthBefore __state)
         {
-            try { _rodPreClickHealth = __instance != null ? __instance.health : 1f; }
-            catch { _rodPreClickHealth = 1f; }
+            __state = default(HealthBefore);
+            try { if (__instance != null) __state = new HealthBefore { Captured = true, Value = __instance.health }; }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreRodItemClick: " + e); }
         }
 
-        private static void PostRodItemClick(ShipItemFishingRod __instance, PickupableItem __0)
+        private static void PostRodItemClick(ShipItemFishingRod __instance, PickupableItem __0, HealthBefore __state)
         {
             try
             {
-                if (__instance == null || _rodPreClickHealth > 0f || __instance.health <= 0f) return;
+                if (!__state.Captured || __instance == null || __state.Value > 0f || __instance.health <= 0f) return;
                 var hook = __0 != null ? __0.GetComponent<ShipItem>() : null;
                 ItemSync.Instance?.OnLocalRodHook(__instance, attached: true, consumedHook: hook);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostRodItemClick: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostRodItemClick: " + e.Message); }
         }
 
         private static void PostLampHookItemClick(ShipItemLampHook __instance, PickupableItem __0, bool __result)
@@ -396,20 +348,29 @@ namespace SailwindCoop.Sync
                 if (!__result || __0 == null || __0.GetComponent<HangableItem>() == null) return;
                 ItemSync.Instance?.NotifyLampHook(__instance, __0);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostLampHookItemClick: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostLampHookItemClick: " + e.Message); }
         }
 
-        private static void PostBottleDrink(ShipItemBottle __instance)
+        private static void PreBottleDrink(ShipItemBottle __instance, out BottleClickState __state)
         {
-            try { ItemSync.Instance?.NotifyItemStateChanged(__instance, "bottle-drink"); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostBottleDrink: " + e.Message); }
+            __state = default(BottleClickState);
+            try { if (__instance != null) __state = new BottleClickState {
+                HasTarget = true, TargetAmount = __instance.amount, TargetHealth = __instance.health }; }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreBottleDrink: " + e); }
+        }
+        private static void PostBottleDrink(ShipItemBottle __instance, BottleClickState __state)
+        {
+            try { if (__state.HasTarget && __instance != null &&
+                (!__state.TargetAmount.Equals(__instance.amount) || !__state.TargetHealth.Equals(__instance.health)))
+                ItemSync.Instance?.NotifyItemStateChanged(__instance, "bottle-drink"); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostBottleDrink: " + e.Message); }
         }
 
         private static void PreFoldableAltActivate(ShipItemFoldable __instance, ref float __state)
         {
             float captured = 0f;
             SailwindCoop.Runtime.PatchGuard.Run(() => captured = FoldableState.Capture(__instance),
-                e => Plugin.Logger.LogWarning("[ItemPatches] PreFoldableAltActivate: " + e.Message));
+                e => WarnPatch("[ItemPatches] PreFoldableAltActivate: " + e.Message));
             __state = captured;
         }
 
@@ -418,13 +379,13 @@ namespace SailwindCoop.Sync
             SailwindCoop.Runtime.PatchGuard.Run(() => {
                 if (__instance != null && FoldableState.Capture(__instance) != __state)
                     ItemSync.Instance?.NotifyItemStateChanged(__instance, "foldable-alt");
-            }, e => Plugin.Logger.LogWarning("[ItemPatches] PostFoldableAltActivate: " + e.Message));
+            }, e => WarnPatch("[ItemPatches] PostFoldableAltActivate: " + e.Message));
         }
 
         private static void PostBroomAltActivate(ShipItemBroom __instance)
         {
             try { ItemSync.Instance?.NotifyBroomActivated(__instance); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostBroomAltActivate: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostBroomAltActivate: " + e.Message); }
         }
 
         private static ShipItemBottle BottleOf(PickupableItem item)
@@ -438,7 +399,7 @@ namespace SailwindCoop.Sync
         private static void PostCollectFish(ShipItem __result)
         {
             try { if (__result != null) ItemSync.Instance?.NotifyClientAuthored(__result); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCollectFish: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostCollectFish: " + e.Message); }
         }
 
         private sealed class MarketSpawnState
@@ -450,21 +411,22 @@ namespace SailwindCoop.Sync
 
         private static void PreMarketSpawnGood(IslandMarket __instance, GameObject goodPrefab, out MarketSpawnState __state)
         {
-            __state = new MarketSpawnState
-            {
-                PrefabIndex = PatchPrefabIndex(goodPrefab),
-                Pos = __instance != null ? __instance.transform.position : Vector3.zero,
-                ExistingIds = new HashSet<int>(),
-            };
+            __state = null;
             try
             {
+                __state = new MarketSpawnState
+                {
+                    PrefabIndex = PatchPrefabIndex(goodPrefab),
+                    Pos = __instance != null ? __instance.transform.position : Vector3.zero,
+                    ExistingIds = new HashSet<int>(),
+                };
                 foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
                 {
                     int id = PatchInstanceId(item);
                     if (id > 0) __state.ExistingIds.Add(id);
                 }
             }
-            catch { }
+            catch (Exception e) { __state = null; WarnPatch("[ItemPatches] PreMarketSpawnGood: " + e.Message); }
         }
 
         private static void PostMarketSpawnGood(MarketSpawnState __state)
@@ -497,7 +459,7 @@ namespace SailwindCoop.Sync
                                           " id=" + PatchInstanceId(best) + " '" + best.name + "'");
                 }
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostMarketSpawnGood: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostMarketSpawnGood: " + e.Message); }
         }
 
         private static FieldInfo _fWarehouseGoodsInArea;
@@ -514,7 +476,7 @@ namespace SailwindCoop.Sync
                 if (item != null && sv != null)
                     ItemSync.Instance?.NotifySold(sv.instanceId, sv.prefabIndex);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreWarehouseSellGood: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreWarehouseSellGood: " + e.Message); }
         }
 
         private static Good FindWarehouseGood(IslandMarketWarehouseArea area, int goodIndex)
@@ -562,13 +524,13 @@ namespace SailwindCoop.Sync
         private static void PostCrateInsert(ShipItem __0)
         {
             try { if (!ItemSync.ApplyingCrate) ItemSync.Instance?.OnLocalCrate(__0); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCrateInsert: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostCrateInsert: " + e.Message); }
         }
 
         private static void PostCrateWithdraw(ShipItem __0)
         {
             try { if (!ItemSync.ApplyingCrate) ItemSync.Instance?.OnLocalCrate(__0); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCrateWithdraw: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostCrateWithdraw: " + e.Message); }
         }
 
         // UnsealCrate authors the contained items. On the client we don't author (phantoms); forward to the
@@ -581,7 +543,7 @@ namespace SailwindCoop.Sync
                 if (sync == null) return true;
                 return !sync.ForwardUnseal(__instance);   // forwarded → skip vanilla; else run it
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PreUnseal: " + e.Message); return true; }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreUnseal: " + e.Message); return true; }
         }
 
         // Cargo load/unload runs locally (own wallet); we only mirror the resulting membership.
@@ -589,7 +551,7 @@ namespace SailwindCoop.Sync
         private static void PostCargoInsert(ShipItem __0)
         {
             try { if (!ItemSync.ApplyingCargo) ItemSync.Instance?.OnLocalCargo(__0); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCargoInsert: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostCargoInsert: " + e.Message); }
         }
 
         // WithdrawItem(GoPointer, int index) doesn't take the item; capture it from carrier.cargo[index]
@@ -608,13 +570,13 @@ namespace SailwindCoop.Sync
         private static void PostCargoWithdraw(ShipItem __state)
         {
             try { if (__state != null && !ItemSync.ApplyingCargo) ItemSync.Instance?.OnLocalCargo(__state); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostCargoWithdraw: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostCargoWithdraw: " + e.Message); }
         }
 
         private static void PostInventoryInsert(ShipItem __0)
         {
             try { ItemSync.Instance?.OnLocalInventory(__0); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostInventoryInsert: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostInventoryInsert: " + e.Message); }
         }
 
         private static void PreInventoryWithdraw(GPButtonInventorySlot __instance, out ShipItem __state)
@@ -627,7 +589,7 @@ namespace SailwindCoop.Sync
         private static void PostInventoryWithdraw(ShipItem __state)
         {
             try { if (__state != null) ItemSync.Instance?.OnLocalInventory(__state); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ItemPatches] PostInventoryWithdraw: " + e.Message); }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostInventoryWithdraw: " + e.Message); }
         }
     }
 }

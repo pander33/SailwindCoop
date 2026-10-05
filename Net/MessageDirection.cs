@@ -30,8 +30,11 @@ namespace SailwindCoop.Net
                 case MsgType.MissionAbandon:
                 case MsgType.MissionDeliver:
                 case MsgType.ClientWorldLoaded:
+                case MsgType.ItemOperationRequest:
                 case MsgType.WheelLockRequest:
                 case MsgType.MooringCarryRequest:
+                case MsgType.ChartRequest:
+                case MsgType.InstrumentRequest:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
                     return MsgFlow.ToHost;
@@ -64,7 +67,10 @@ namespace SailwindCoop.Net
                 case MsgType.SessionRoster:
                 case MsgType.GameplayNotice:
                 case MsgType.HatchSnapshot:
+                case MsgType.ItemOperationResult:
                 case MsgType.MooringCarryState:
+                case MsgType.ChartState:
+                case MsgType.InstrumentState:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.

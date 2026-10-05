@@ -13,10 +13,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\Net\BoatGenerationQueue.cs" Link="Net\BoatGenerationQueue.cs" />
     <Compile Include="..\..\Net\BoatGenerationBook.cs" Link="Net\BoatGenerationBook.cs" />
+    <Compile Include="..\..\Net\ItemDetails.cs" Link="Net\ItemDetails.cs" />
+    <Compile Include="..\..\Net\ChartMessages.cs" Link="Net\ChartMessages.cs" />
+    <Compile Include="..\..\Net\InstrumentMessages.cs" Link="Net\InstrumentMessages.cs" />
+    <Compile Include="..\..\Net\ItemOperationMessages.cs" Link="Net\ItemOperationMessages.cs" />
     <Compile Include="..\..\Net\Messages.cs" Link="Net\Messages.cs" />
     <Compile Include="..\..\Net\Protocol.cs" Link="Net\Protocol.cs" />
     <Compile Include="..\..\Net\MessageDirection.cs" Link="Net\MessageDirection.cs" />
+    <Compile Include="..\..\Net\NetRegistry.cs" Link="Net\NetRegistry.cs" />
   </ItemGroup>
 
   <ItemGroup>

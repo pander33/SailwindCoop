@@ -54,9 +54,12 @@ namespace ProtocolSmoke
                     failures.Add("MsgType " + type + " has no INetMessage implementation");
             }
 
+            TestDirection(failures);
+            TestOversizedCounts(failures);
+
             int populated = 0, truncated = 0;
             foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
-                t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg)))
+                t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t)))
             {
                 foreach (ushort boat in new ushort[] { 1, 511, 65534 })
                 {
@@ -65,7 +68,7 @@ namespace ProtocolSmoke
                         var msg = (INetMessage)Activator.CreateInstance(type);
                         foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
                             field.SetValue(msg, Sample(field.FieldType));
-                        type.GetField("BoatIndex").SetValue(msg, boat);
+                        type.GetField("BoatIndex")?.SetValue(msg, boat);
                         type.GetField("LayoutHash")?.SetValue(msg, 0xFEDCBA98u);
                         if (msg is MooringStateMsg mooring)
                         {
@@ -73,11 +76,12 @@ namespace ProtocolSmoke
                             mooring.IsInteraction = boat != 511;
                         }
                         if (msg is HatchSnapshotMsg hatch) hatch.Open = boat != 511;
-                        if (msg is SpawnObjectMsg spawn) spawn.IsSnapshot = boat != 511;
+                        if (msg is SpawnObjectMsg spawn) { spawn.IsSnapshot = boat != 511; spawn.IsBaselineItem = boat == 511; }
                         if (msg is AnchorRequestMsg anchorRequest) { anchorRequest.Held = boat != 511; anchorRequest.Frame = boat == 511 ? CoordFrame.World : CoordFrame.Boat; }
                         if (msg is AnchorStateMsg anchorState) anchorState.Set = boat != 511;
                         if (msg is ItemStateMsg itemState) itemState.Amount = boat == 511 ? 0f : 1f;
                         if (msg is ItemRequestMsg itemRequest) { itemRequest.Action = ItemAction.State; itemRequest.Amount = boat == 511 ? 0f : 1f; }
+                        if (msg is ChartStateMsg chart) { chart.Chunk = 1; chart.Chunks = 2; }
                         var writer = Protocol.Write(msg);
                         var reader = new NetDataReader(writer.Data, 1, writer.Length);
                         var clone = Protocol.ReadBody(msg.Type, reader);
@@ -88,12 +92,10 @@ namespace ProtocolSmoke
                         populated++;
                         for (int length = 0; length < writer.Length - 1; length++)
                         {
-                            bool rejected = false;
                             byte[] cut = new byte[length];
                             Buffer.BlockCopy(writer.Data, 1, cut, 0, length);
-                            try { rejected = Protocol.ReadBody(msg.Type, new NetDataReader(cut)) == null; }
-                            catch { rejected = true; }
-                            if (!rejected) throw new Exception("accepted truncated body length " + length);
+                            if (Protocol.ReadBody(msg.Type, new NetDataReader(cut)) != null)
+                                throw new Exception("accepted truncated body length " + length);
                             truncated++;
                             if (Protocol.ReadBody(msg.Type, new NetDataReader(writer.Data, 1, length + 1)) != null)
                                 throw new Exception("accepted truncated pooled body length " + length);
@@ -104,9 +106,18 @@ namespace ProtocolSmoke
                 }
             }
 
-            TestOversizedCounts(failures);
-            CheckPopulatedMessage(new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage }, failures, ref populated, ref truncated);
-            TestDirection(failures);
+            foreach (INetMessage msg in new INetMessage[] {
+                new ItemOperationResultMsg { Actor = 10, OperationId = 41, Status = ItemOperationBody.WaitingTarget },
+                new ItemOperationResultMsg { Actor = 10, OperationId = 41, Status = ItemOperationBody.PartialFault,
+                    WorldEffects = 1, Consumed = new[] { 901 } },
+                new SpawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = 902, PrefabIndex = 12,
+                    AuthorRequester = 10, AuthorRequestId = 42, Revision = 1, Tick = 200 },
+                new SpawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = 901, PrefabIndex = 12,
+                    AuthorRequester = 10, AuthorRequestId = 41, Revision = 1, Tick = 201 },
+                new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage }
+            })
+                CheckPopulatedMessage(msg, failures, ref populated, ref truncated);
+
             if (failures.Count == 0)
             {
                 Console.WriteLine("Protocol smoke OK: " + messageTypes.Count + " message types, " + populated +
@@ -118,6 +129,35 @@ namespace ProtocolSmoke
             foreach (var failure in failures)
                 Console.Error.WriteLine(" - " + failure);
             return 1;
+        }
+
+        private static object Sample(Type type)
+        {
+            if (type == typeof(byte)) return (byte)193;
+            if (type == typeof(int)) return 123456;
+            if (type == typeof(ushort)) return (ushort)65534;
+            if (type == typeof(uint)) return 0xFEDCBA98u;
+            if (type == typeof(ulong)) return 0xFEDCBA9812345678ul;
+            if (type == typeof(long)) return 9876543210L;
+            if (type == typeof(float)) return 0.375f;
+            if (type == typeof(bool)) return true;
+            if (type == typeof(string)) return "Island/dock[1]/bollard[2]";
+            if (type == typeof(UnityEngine.Vector3)) return new UnityEngine.Vector3(12.5f, -8.25f, 100.75f);
+            if (type == typeof(UnityEngine.Quaternion)) return new UnityEngine.Quaternion(0f, 0.6f, 0f, 0.8f);
+            if (type.IsEnum) { var values = Enum.GetValues(type); return values.GetValue(values.Length - 1); }
+            if (type.IsArray)
+            {
+                var array = Array.CreateInstance(type.GetElementType(), 2);
+                for (int i = 0; i < 2; i++) array.SetValue(Sample(type.GetElementType()), i);
+                return array;
+            }
+            if (type == typeof(ItemDetails) || type == typeof(CreatedItemState) || type == typeof(ControlEpoch) || type == typeof(ChartMark) || typeof(INetMessage).IsAssignableFrom(type))
+            {
+                var value = Activator.CreateInstance(type);
+                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(value, Sample(field.FieldType));
+                return value;
+            }
+            throw new Exception("no sample for " + type.Name);
         }
 
         private static void TestDirection(List<string> failures)
@@ -150,34 +190,6 @@ namespace ProtocolSmoke
                 failures.Add("MessageDirection: HelloAck/Reject are host replies");
             if (MessageDirection.Accept((MsgType)250, true, true) || MessageDirection.Accept((MsgType)250, false, true))
                 failures.Add("MessageDirection: unknown type accepted");
-        }
-
-        private static object Sample(Type type)
-        {
-            if (type == typeof(byte)) return (byte)193;
-            if (type == typeof(int)) return 123456;
-            if (type == typeof(ushort)) return (ushort)65534;
-            if (type == typeof(uint)) return 0xFEDCBA98u;
-            if (type == typeof(long)) return 9876543210L;
-            if (type == typeof(float)) return 0.375f;
-            if (type == typeof(bool)) return true;
-            if (type == typeof(string)) return "Island/dock[1]/bollard[2]";
-            if (type == typeof(UnityEngine.Vector3)) return new UnityEngine.Vector3(12.5f, -8.25f, 100.75f);
-            if (type == typeof(UnityEngine.Quaternion)) return new UnityEngine.Quaternion(0f, 0.6f, 0f, 0.8f);
-            if (type.IsEnum) { var values = Enum.GetValues(type); return values.GetValue(values.Length - 1); }
-            if (type.IsArray)
-            {
-                var array = Array.CreateInstance(type.GetElementType(), 2);
-                for (int i = 0; i < 2; i++) array.SetValue(Sample(type.GetElementType()), i);
-                return array;
-            }
-            if (type == typeof(ControlEpoch))
-            {
-                var value = Activator.CreateInstance(type);
-                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(value, Sample(field.FieldType));
-                return value;
-            }
-            throw new Exception("no sample for " + type.Name);
         }
 
         /// <summary>A count field larger than the remaining payload must be refused before the
@@ -229,7 +241,8 @@ namespace ProtocolSmoke
                 for (int i = 0; i < aa.Length; i++) if (!Equal(aa.GetValue(i), bb.GetValue(i))) return false;
                 return true;
             }
-            if (a is ControlEpoch && b is ControlEpoch)
+            if (a != null && b != null && a.GetType() == b.GetType() &&
+                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is INetMessage))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

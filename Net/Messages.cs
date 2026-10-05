@@ -76,9 +76,15 @@ namespace SailwindCoop.Net
         MissionDeliver = 85,    // client -> host : mission good carried by the client reached a port
         MissionDeliverResult = 86, // host -> client : delivery result for the UI
         HatchSnapshot = 87,     // host -> client : initial hatch state, never an interaction event
+        ItemOperationRequest = 89,
+        ItemOperationResult = 90,
         WheelLockRequest = 91,
         MooringCarryRequest = 92,
         MooringCarryState = 93,
+        ChartRequest = 94,
+        ChartState = 95,
+        InstrumentRequest = 100,
+        InstrumentState = 101,
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
@@ -1168,10 +1174,25 @@ namespace SailwindCoop.Net
         public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
         public bool Attached;      // ItemRigidbody.attached — предмет "положен"/повешен (F-place), физика заморожена
 
+        public uint Revision;
+        public uint Requester;
+        public uint RequestId;
+        public bool LightOn;
+        public ItemDetails Details = new ItemDetails();
+        public float[] Extras = System.Array.Empty<float>();
+
         public MsgType Type => MsgType.ItemState;
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(Revision);
+            w.Put(Requester);
+            Details.Serialize(w);
+            w.Put(RequestId);
+            w.Put(LightOn);
+            w.Put((byte)Extras.Length);
+            for (int i = 0; i < Extras.Length; i++) w.Put(Extras[i]);
+
             w.Put(Index);
             w.Put(InstanceId);
             w.Put(PrefabIndex);
@@ -1194,6 +1215,16 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            Revision = r.GetUInt();
+            Requester = r.GetUInt();
+            Details.Deserialize(r);
+            RequestId = r.GetUInt();
+            LightOn = r.GetBool();
+            int extraCount = r.GetByte();
+            if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
+            Extras = new float[extraCount];
+            for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
+
             Index = r.GetUShort();
             InstanceId = r.GetInt();
             PrefabIndex = r.GetInt();
@@ -1217,6 +1248,7 @@ namespace SailwindCoop.Net
 
     public sealed class ItemRequestMsg : INetMessage
     {
+        public bool IsInteraction;
         public ItemAction Action;
         public ushort Index;
         public int InstanceId;
@@ -1237,10 +1269,22 @@ namespace SailwindCoop.Net
         public int InventorySlot = -1; // Inventory action: personal belt slot 0..4 (-1 = withdraw)
         public bool Attached;      // Drop: предмет "положен"/повешен через F-place (ItemRigidbody.attached), Vel игнорируется
 
+        public uint RequestId;
+        public bool LightOn;
+        public ItemDetails Details = new ItemDetails();
+        public float[] Extras = System.Array.Empty<float>();
+
         public MsgType Type => MsgType.ItemRequest;
 
         public void Serialize(NetDataWriter w)
         {
+            Details.Serialize(w);
+            w.Put(RequestId);
+            w.Put(LightOn);
+            w.Put((byte)Extras.Length);
+            for (int i = 0; i < Extras.Length; i++) w.Put(Extras[i]);
+
+            w.Put(IsInteraction);
             w.Put((byte)Action);
             w.Put(Index);
             w.Put(InstanceId);
@@ -1264,6 +1308,15 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            Details.Deserialize(r);
+            RequestId = r.GetUInt();
+            LightOn = r.GetBool();
+            int extraCount = r.GetByte();
+            if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
+            Extras = new float[extraCount];
+            for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
+
+            IsInteraction = r.GetBool();
             Action = (ItemAction)r.GetByte();
             Index = r.GetUShort();
             InstanceId = r.GetInt();
@@ -1300,6 +1353,9 @@ namespace SailwindCoop.Net
     /// </summary>
     public sealed class SpawnObjectMsg : INetMessage
     {
+        public uint AuthorRequester;
+        public uint AuthorRequestId;
+        public bool IsBaselineItem;
         public byte Kind;          // NetObjKind (Item)
         public int InstanceId;
         public int PrefabIndex;
@@ -1319,10 +1375,32 @@ namespace SailwindCoop.Net
 
         public bool IsSnapshot; // initial item manifest; not a new-object event
 
+        public uint Revision;
+        public uint Requester;
+        public uint RequestId;
+        public bool LightOn;
+        public ItemDetails Details = new ItemDetails();
+        public float[] Extras = System.Array.Empty<float>();
+        public long Tick;
+        public bool Attached;
+
         public MsgType Type => MsgType.SpawnObject;
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(AuthorRequester);
+            w.Put(AuthorRequestId);
+            w.Put(IsBaselineItem);
+            w.Put(Revision);
+            w.Put(Requester);
+            Details.Serialize(w);
+            w.Put(RequestId);
+            w.Put(LightOn);
+            w.Put((byte)Extras.Length);
+            for (int i = 0; i < Extras.Length; i++) w.Put(Extras[i]);
+            w.Put(Tick);
+            w.Put(Attached);
+
             w.Put(Kind);
             w.Put(InstanceId);
             w.Put(PrefabIndex);
@@ -1344,6 +1422,21 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            AuthorRequester = r.GetUInt();
+            AuthorRequestId = r.GetUInt();
+            IsBaselineItem = r.GetBool();
+            Revision = r.GetUInt();
+            Requester = r.GetUInt();
+            Details.Deserialize(r);
+            RequestId = r.GetUInt();
+            LightOn = r.GetBool();
+            int extraCount = r.GetByte();
+            if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
+            Extras = new float[extraCount];
+            for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
+            Tick = r.GetLong();
+            Attached = r.GetBool();
+
             Kind = r.GetByte();
             InstanceId = r.GetInt();
             PrefabIndex = r.GetInt();
@@ -1469,6 +1562,7 @@ namespace SailwindCoop.Net
     /// <summary>Client -> host: a fish (PrefabsDirectory prefab) was caught at this pose; author it.</summary>
     public sealed class FishCatchMsg : INetMessage
     {
+        public uint RequestId;
         public int PrefabIndex;
         public CoordFrame Frame;
         public ushort BoatIndex;
@@ -1479,6 +1573,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
+            w.Put(RequestId);
             w.Put(PrefabIndex);
             w.Put((byte)Frame);
             w.Put(BoatIndex);
@@ -1488,6 +1583,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
+            RequestId = r.GetUInt();
             PrefabIndex = r.GetInt();
             Frame = (CoordFrame)r.GetByte();
             BoatIndex = r.GetUShort();
@@ -1614,6 +1710,9 @@ namespace SailwindCoop.Net
         public Vector3[] Pos = System.Array.Empty<Vector3>();
         public bool[] Active = System.Array.Empty<bool>();
         public float Distance;
+        public float TotemAttraction;
+        public uint Revision;
+        public long Tick;
 
         public MsgType Type => MsgType.StormState;
 
@@ -1622,6 +1721,7 @@ namespace SailwindCoop.Net
             w.Put((byte)Pos.Length);
             for (int i = 0; i < Pos.Length; i++) { w.PutVector3(Pos[i]); w.Put(Active[i]); }
             w.Put(Distance);
+            w.Put(TotemAttraction); w.Put(Revision); w.Put(Tick);
         }
 
         public void Deserialize(NetDataReader r)
@@ -1631,6 +1731,7 @@ namespace SailwindCoop.Net
             Active = new bool[n];
             for (int i = 0; i < n; i++) { Pos[i] = r.GetVector3(); Active[i] = r.GetBool(); }
             Distance = r.GetFloat();
+            TotemAttraction = r.GetFloat(); Revision = r.GetUInt(); Tick = r.GetLong();
         }
     }
 

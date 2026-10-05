@@ -19,7 +19,6 @@ namespace SailwindCoop.Sync
         private readonly List<ShipItemLight> _lights = new List<ShipItemLight>();
         private readonly Dictionary<ShipItemLight, ushort> _index = new Dictionary<ShipItemLight, ushort>();
         private float _refreshTimer;
-        private float _sendTimer;
         private string _last = "—";
         private long _lastTick;
 
@@ -51,69 +50,20 @@ namespace SailwindCoop.Sync
         }
 
         public void Tick(float dt)
-        {
-            if (_net.State != LinkState.Connected) return;
-            RefreshLights(dt);
-            if (_net.Role != Role.Host) return;
-
-            float interval = 1f / Mathf.Max(0.5f, SnapshotHz);
-            _sendTimer += dt;
-            if (_sendTimer < interval) return;
-            _sendTimer = 0f;
-
-            for (int i = 0; i < _lights.Count; i++)
-            {
-                var light = _lights[i];
-                if (light == null) continue;
-                _net.Broadcast(new LightStateMsg
-                {
-                    Index = (ushort)i,
-                    On = IsOn(light),
-                    Health = light.health,
-                }, LiteNetLib.DeliveryMethod.Unreliable);
-            }
-        }
-
+        { if (_net.State == LinkState.Connected) RefreshLights(dt); }
         public void NotifyLocalLightChanged(ShipItemLight light)
         {
-            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
-            if (light == null) return;
-            RefreshLights(force: true);
-            if (!_index.TryGetValue(light, out ushort idx)) return;
-
-            var msg = new LightRequestMsg { Index = idx, On = IsOn(light), Health = light.health };
-            _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("out #" + idx + " " + (msg.On ? "on" : "off"));
+            if (InteractionContext.Suppressed || ItemOperationCapture.Absorb() || light == null) return;
+            ItemSync.Instance?.NotifyItemStateChanged(light, "light-change");
+            if (_net.State == LinkState.Connected) Remember("light '" + light.name + "' " + (IsOn(light) ? "on" : "off"));
         }
-
-        public void OnLightRequest(LightRequestMsg msg, LiteNetLib.NetPeer fromPeer)
-        {
-            if (_net.Role != Role.Host) return;
-            RefreshLights(force: true);
-            var light = GetLight(msg.Index);
-            if (light == null) return;
-
-            Apply(light, msg.On, msg.Health);
-            Remember("in #" + msg.Index + " " + (msg.On ? "on" : "off"));
-
-            _net.Broadcast(new LightStateMsg { Index = msg.Index, On = IsOn(light), Health = light.health },
-                           LiteNetLib.DeliveryMethod.ReliableOrdered);
-        }
-
-        public void OnLightState(LightStateMsg msg, LiteNetLib.NetPeer fromPeer)
-        {
-            if (_net.Role != Role.Client) return;
-            RefreshLights(force: true);
-            var light = GetLight(msg.Index);
-            if (light == null) return;
-
-            Apply(light, msg.On, msg.Health);
-        }
-
-        private void Apply(ShipItemLight light, bool on, float health)
+        // Retain registered message slots; Protocol 64 sends all light state through item identity/revision.
+        public void OnLightRequest(LightRequestMsg msg, LiteNetLib.NetPeer fromPeer) { }
+        public void OnLightState(LightStateMsg msg, LiteNetLib.NetPeer fromPeer) { }
+        internal static void ApplyState(ShipItemLight light, bool on, float health)
         {
             if (light == null) return;
-            light.health = Mathf.Max(0f, health);
+            light.health = health;
             try
             {
                 if (_miSetLight == null)
@@ -121,13 +71,10 @@ namespace SailwindCoop.Sync
                 if (_miSetLight != null) _miSetLight.Invoke(light, new object[] { on });
                 else if (_fOn != null) _fOn.SetValue(light, on);
             }
-            catch (Exception e)
-            {
-                Plugin.Logger.LogWarning("[LightSync] SetLight failed: " + e.Message);
-            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[LightSync] SetLight failed: " + e.Message); }
         }
 
-        private static bool IsOn(ShipItemLight light)
+        internal static bool IsOn(ShipItemLight light)
         {
             try
             {
@@ -175,7 +122,6 @@ namespace SailwindCoop.Sync
             _lights.Clear();
             _index.Clear();
             _refreshTimer = 0f;
-            _sendTimer = 0f;
             _last = "—";
             _lastTick = 0L;
         }
@@ -198,7 +144,8 @@ namespace SailwindCoop.Sync
                 var mi = typeof(ShipItemLight).GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, args, null);
                 if (mi == null) return false;
                 var postfix = new HarmonyMethod(typeof(LightPatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-                harmony.Patch(mi, postfix: postfix);
+                var prefix = new HarmonyMethod(typeof(LightPatches).GetMethod(nameof(PreLightChanged), BindingFlags.Static | BindingFlags.NonPublic));
+                harmony.Patch(mi, prefix: prefix, postfix: postfix);
                 return true;
             }
             catch (Exception e)
@@ -208,10 +155,23 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private static void PostLightChanged(ShipItemLight __instance)
+        private struct LightBefore { internal bool Captured, On; internal float Health; }
+        private static void PreLightChanged(ShipItemLight __instance, out LightBefore __state)
         {
-            try { LightSync.Instance?.NotifyLocalLightChanged(__instance); }
-            catch (Exception e) { Plugin.Logger.LogWarning("[LightPatches] PostLightChanged: " + e.Message); }
+            var state = new LightBefore();
+            SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__instance == null) return;
+                state.Captured = true; state.On = LightSync.IsOn(__instance); state.Health = __instance.health;
+            }, Report);
+            __state = state;
         }
+        private static void PostLightChanged(ShipItemLight __instance, LightBefore __state)
+            => SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__state.Captured && __instance != null &&
+                    (__state.On != LightSync.IsOn(__instance) || !__state.Health.Equals(__instance.health)))
+                    LightSync.Instance?.NotifyLocalLightChanged(__instance);
+            }, Report);
+        private static void Report(Exception error)
+        { try { Plugin.Logger?.LogWarning("[LightPatches] " + error); } catch { } }
     }
 }

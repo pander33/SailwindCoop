@@ -171,6 +171,7 @@ namespace SailwindCoop.Sync
                 return;
             }
             var request = new DamageRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Action = action, Amount = amount };
+            if (ItemOperationCapture.Damage(request)) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (amount <= 0.00001f) return;
 
@@ -247,6 +248,18 @@ namespace SailwindCoop.Sync
                 WaterLevel = _damage.waterLevel, HullDamage = _damage.hullDamage, Oakum = _damage.oakum,
                 WaterIntakeChunk = _damage.waterIntakeChunk, Sunk = _damage.sunk
             };
+        }
+        internal void ApplyOperationDamage(DamageRequestMsg msg)
+        {
+            if (_fleet != null) { _fleet.Get(msg.BoatIndex)?.ApplyOperationDamage(msg); return; }
+            RefreshBoat(); if (_damage == null) return;
+            if (msg.Action == DamageAction.AddOakum) _damage.oakum += msg.Amount;
+            if (msg.Action == DamageAction.BailWater) _damage.waterLevel = Mathf.Max(0f, _damage.waterLevel - msg.Amount);
+        }
+        internal void ApplyOperationState(BoatDamageStateMsg msg)
+        {
+            if (_fleet != null) { _fleet.Get(msg.BoatIndex)?.ApplyOperationState(msg); return; }
+            if (BoatGenerationBook.Session.Compare(msg.BoatIndex, msg.Generation) == GenerationOrder.Current) OnDamageState(msg, null);
         }
         private void BroadcastSnapshot(bool reliable = false, bool periodic = false)
         {
