@@ -50,6 +50,10 @@ namespace SailwindCoop.Sync
 
         public bool Active => _paused;
         public int PendingCount => _pending.Count;
+        internal void SetResumeTimeScale(float value)
+        {
+            if (_paused && _ownsTimeScale) _prevTimeScale = value;
+        }
 
         /// <summary>Host: freeze the world until <paramref name="netId"/> reports its load done.</summary>
         public void Hold(uint netId)

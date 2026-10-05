@@ -175,12 +175,14 @@ namespace SailwindCoop.Sync
         }
 
         private float _holdRenew;
+        private readonly Dictionary<GoPointerButton, bool> _localHoldDown = new Dictionary<GoPointerButton, bool>();
+        private readonly Dictionary<string, bool> _remoteHoldDown = new Dictionary<string, bool>();
         private static GoPointerButton[] SharedButtons(Transform boat)
         {
             var list = new List<GoPointerButton>();
             foreach (var button in boat.GetComponentsInChildren<GoPointerButton>(true))
                 if (button != null && InteractionPolicy.Classify(button) == InteractPolicy.Shared &&
-                    !(button is PickupableBoatMooringRope)) list.Add(button);
+                    !(button is PickupableBoatMooringRope) && !InteractionPolicy.IsSleepInput(button)) list.Add(button);
             return list.ToArray();
         }
 
@@ -223,8 +225,10 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void NotifyLocalInteract(GoPointerButton btn, InteractKind kind)
         {
+            if (InteractionPolicy.IsSleepInput(btn)) return;
+            if (InteractionContext.Suppressed) return;
             if (_fleet != null) { ForButton(btn)?.NotifyLocalInteract(btn, kind); return; }
-            if (_replaying) return;
+            if (_replaying || !InteractionContext.HasInput) return;
             if ((_net.Role != Role.Client && _net.Role != Role.Host) || _net.State != LinkState.Connected) return;
             if (btn == null) return;
             if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;  // only SHARED is forwarded
@@ -253,6 +257,7 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void NotifyLocalHold(GoPointerButton btn, InteractKind kind, bool down)
         {
+            if (InteractionContext.Suppressed) return;
             if (_fleet != null)
             {
                 ForButton(btn)?.NotifyLocalHold(btn, kind, down); return;
@@ -267,7 +272,10 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(new HoldRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, Down = down },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Remember("out hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
+            bool previous;
+            if (!_localHoldDown.TryGetValue(btn, out previous) || previous != down)
+                Remember("out hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
+            _localHoldDown[btn] = down;
         }
 
         // -----------------------------------------------------------------
@@ -452,7 +460,11 @@ namespace SailwindCoop.Sync
             if (btn is BilgePump)
             {
                 BoatDamageSync.Instance?.SetRemotePump(_boatId, (BilgePump)btn, msg.Down, actor);
-                Remember("in hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
+                string key = actor + ":" + i;
+                bool previous;
+                if (!_remoteHoldDown.TryGetValue(key, out previous) || previous != msg.Down)
+                    Remember("in hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
+                _remoteHoldDown[key] = msg.Down;
             }
         }
 
@@ -505,6 +517,10 @@ namespace SailwindCoop.Sync
         /// </summary>
         private static bool IsExcluded(GoPointerButton btn, InteractKind kind)
         {
+            string method = kind == InteractKind.AltActivate ? "OnAltActivate" : "OnActivate";
+            var args = kind == InteractKind.ActivateNoArg ? Type.EmptyTypes : new[] { typeof(GoPointer) };
+            var effective = btn.GetType().GetMethod(method, args);
+            if (effective == null || effective.DeclaringType == typeof(GoPointerButton)) return true;
             if (kind != InteractKind.Activate) return false;
             return btn is GPButtonRopeWinch
                 || btn is GPButtonSteeringWheel
@@ -733,6 +749,8 @@ namespace SailwindCoop.Sync
             _lastPushTick = _net.Clock.ServerTick;
         }
 
+        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
+
         public void Clear()
         {
             if (_fleet != null) { _fleet.Clear(); _pendingHatches.Clear(); return; }
@@ -766,82 +784,49 @@ namespace SailwindCoop.Sync
     {
         public static void Apply(Harmony harmony)
         {
-            int onActivateNoArg = PatchAll(harmony, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
-            int onActivate = PatchAll(harmony, "OnActivate", nameof(PostActivate));
-            int onAltActivate = PatchAll(harmony, "OnAltActivate", nameof(PostAltActivate));
-            int onUnactivate = PatchAll(harmony, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
-            int push = 0;
-            if (PatchPushFixedUpdate(harmony, typeof(GPButtonBoatPushCol))) push++;
-            if (PatchPushFixedUpdate(harmony, typeof(DockPushCol))) push++;
-            if (PatchPushFixedUpdate(harmony, typeof(GPButtonSailPusher))) push++;
-            int ok = (onActivateNoArg > 0 ? 1 : 0) + (onActivate > 0 ? 1 : 0) +
-                     (onAltActivate > 0 ? 1 : 0) + (onUnactivate > 0 ? 1 : 0) + push;
-            SailwindCoop.Runtime.PatchHealth.Report("Interactions", ok, 7,
-                "activate=" + onActivate + ", alt=" + onAltActivate + ", unactivate=" + onUnactivate + ", push=" + push + "/3");
+            var hooks = new PatchHookCatalog();
+            PatchAll(harmony, hooks, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
+            PatchAll(harmony, hooks, "OnActivate", nameof(PostActivate));
+            PatchAll(harmony, hooks, "OnAltActivate", nameof(PostAltActivate));
+            PatchAll(harmony, hooks, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
+            // No-arg host-only handlers run BEFORE the empty pointer overload in GoPointer.
+            // Prefix only: this entry must not invent an extra interaction event.
+            foreach (var input in InteractionActionCatalog.HostOnlyInputs)
+            {
+                if (!InteractionPolicy.IsHostOnlyType(input.TypeName))
+                    throw new InvalidOperationException("Host-only catalog/policy mismatch: " + input.TypeName);
+                hooks.Install(typeof(GoPointerButton).Assembly.GetType(input.TypeName), input.Method,
+                    Type.EmptyTypes, target => harmony.Patch(target, prefix: Callback(nameof(PreBlock))));
+            }
+            foreach (var type in new[] { typeof(GPButtonBoatPushCol), typeof(DockPushCol), typeof(GPButtonSailPusher) })
+                hooks.Install(type, "ExtraFixedUpdate", Type.EmptyTypes,
+                    target => harmony.Patch(target, prefix: Callback(nameof(PrePushFixedUpdate))));
+            PatchHealth.Report("Interactions", hooks);
+            Plugin.Logger.LogInfo("[InteractionPatches] role=initializing " + hooks.Detail);
         }
 
-        private static bool PatchPushFixedUpdate(Harmony harmony, Type type)
+        private static HarmonyMethod Callback(string name)
         {
-            try
-            {
-                var mi = type.GetMethod("ExtraFixedUpdate", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (mi == null)
-                {
-                    Plugin.Logger.LogWarning("[InteractionPatches] " + type.Name + " missing ExtraFixedUpdate");
-                    return false;
-                }
-                var prefix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
-                    nameof(PrePushFixedUpdate), BindingFlags.Static | BindingFlags.NonPublic));
-                harmony.Patch(mi, prefix: prefix);
-                Plugin.Logger.LogInfo("[InteractionPatches] " + type.Name + ".ExtraFixedUpdate: push-block patched");
-                return true;
-            }
-            catch (Exception e)
-            {
-                Plugin.Logger.LogWarning("[InteractionPatches] Failed to patch " + type.Name +
-                                         ".ExtraFixedUpdate: " + e.Message);
-                return false;
-            }
+            var method = typeof(InteractionPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic);
+            if (method == null) throw new MissingMethodException(typeof(InteractionPatches).Name, name);
+            return new HarmonyMethod(method);
         }
 
-        private static int PatchAll(Harmony harmony, string gameMethod, string postfixName, Type[] args = null, bool withBlockPrefix = true)
+        private static void PatchAll(Harmony harmony, PatchHookCatalog hooks, string gameMethod,
+            string postfixName, Type[] args = null, bool withBlockPrefix = true)
         {
             if (args == null) args = new[] { typeof(GoPointer) };
-            var postfix = new HarmonyMethod(typeof(InteractionPatches).GetMethod(
-                postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-            var prefix = withBlockPrefix
-                ? new HarmonyMethod(typeof(InteractionPatches).GetMethod(
-                    nameof(PreBlock), BindingFlags.Static | BindingFlags.NonPublic))
-                : null;
-
-            int patched = 0;
-            var baseType = typeof(GoPointerButton);
-            foreach (var t in baseType.Assembly.GetTypes())
+            var postfix = Callback(postfixName);
+            var prefix = withBlockPrefix ? Callback(nameof(PreBlock)) : null;
+            foreach (var type in typeof(GoPointerButton).Assembly.GetTypes())
             {
-                if (!baseType.IsAssignableFrom(t)) continue;
-                MethodInfo mi;
-                try
-                {
-                    mi = t.GetMethod(gameMethod,
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly,
-                        null, args, null);
-                }
-                catch { continue; }
-                if (mi == null || mi.IsAbstract) continue;
-                try
-                {
-                    harmony.Patch(mi, prefix: prefix, postfix: postfix);
-                    patched++;
-                }
-                catch (Exception e)
-                {
-                    Plugin.Logger.LogWarning("[InteractionPatches] Failed to patch " +
-                                             t.Name + "." + gameMethod + ": " + e.Message);
-                }
+                if (!typeof(GoPointerButton).IsAssignableFrom(type)) continue;
+                var target = type.GetMethod(gameMethod, BindingFlags.Public | BindingFlags.NonPublic |
+                    BindingFlags.Instance | BindingFlags.DeclaredOnly, null, args, null);
+                if (target == null || target.IsAbstract) continue;
+                hooks.Install(type, gameMethod, args,
+                    method => harmony.Patch(method, prefix: prefix, postfix: postfix));
             }
-            string sig = args.Length == 0 ? "()" : "(GoPointer)";
-            Plugin.Logger.LogInfo("[InteractionPatches] " + gameMethod + sig + ": patched " + patched + " methods");
-            return patched;
         }
 
         // The first GoPointer parameter is __0 (its name varies across overrides).

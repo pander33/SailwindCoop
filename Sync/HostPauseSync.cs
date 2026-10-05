@@ -61,7 +61,7 @@ namespace SailwindCoop.Sync
                 {
                     Refs.SetPlayerControl(false);
                 }
-                else if (SleepSync.Instance == null || !SleepSync.Instance.ClientAsleep)
+                else if ((SleepSync.Instance == null || !SleepSync.Instance.ClientAsleep) && GameState.inBed == null)
                 {
                     // Ведомый сон держит управление по своей причине — не возвращать его за него,
                     // иначе спящий клиент вдруг пойдёт гулять с чёрным экраном.

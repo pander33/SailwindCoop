@@ -54,6 +54,7 @@ namespace ProtocolSmoke
                     failures.Add("MsgType " + type + " has no INetMessage implementation");
             }
 
+            TestSleepOrdering(failures);
             TestDirection(failures);
             TestOversizedCounts(failures);
 
@@ -115,6 +116,12 @@ namespace ProtocolSmoke
                     AuthorRequester = 10, AuthorRequestId = 42, Revision = 1, Tick = 200 },
                 new SpawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = 901, PrefabIndex = 12,
                     AuthorRequester = 10, AuthorRequestId = 41, Revision = 1, Tick = 201 },
+                new SleepStateMsg { Revision = 23, CycleActor = 0x12345678, CycleId = 91, Requester = 0x87654321,
+                    RequestId = 92, Phase = SleepPhase.Sleeping, Reply = SleepReply.Applied,
+                    Address = new SleepAddress { Source = SleepSource.Tavern, Path = "island/tavern[2]", Timeskip = true },
+                    EntranceCommitted = true, Entrance = new SleepAddress { Source = SleepSource.Onsen, Path = "island/onsen[1]" } },
+                new SleepRequestMsg { RequestId = 104, CycleActor = 0x12345678, CycleId = 91, Phase = SleepPhase.Sleeping,
+                    Address = new SleepAddress { Source = SleepSource.ItemBed, InstanceId = 55, PrefabIndex = 12, Timeskip = true } },
                 new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage }
             })
                 CheckPopulatedMessage(msg, failures, ref populated, ref truncated);
@@ -208,6 +215,42 @@ namespace ProtocolSmoke
                 failures.Add("WavePhasesMsg: oversized phase count accepted");
         }
 
+        private static void TestSleepOrdering(List<string> failures)
+        {
+            var order = new SailwindCoop.Sync.SleepTransitionState();
+            if (!order.AcceptRequest(10, uint.MaxValue) || !order.AcceptRequest(10, 1) || order.AcceptRequest(10, uint.MaxValue))
+                failures.Add("SleepTransitionState: request wrap/duplicate order");
+            if (!order.AcceptRequest(10, 2) || !order.Transition(10, 2, SleepPhase.Begin, 0, 0))
+                failures.Add("SleepTransitionState: begin request");
+            uint revision = order.Revision;
+            if (order.AcceptRequest(10, 2) && order.Transition(10, 2, SleepPhase.Begin, 0, 0) || order.Revision != revision)
+                failures.Add("SleepTransitionState: duplicate begin");
+            if (!order.AcceptRequest(10, 3) || !order.Transition(10, 3, SleepPhase.Sleeping, 10, 2) ||
+                order.Transition(10, 3, SleepPhase.Wake, 11, 2)) failures.Add("SleepTransitionState: competing/stale cycle");
+            if (!order.ShouldPreservePresentationForRejectedAck(true, SleepReply.ObsoleteCycle, 1, 11) ||
+                order.ShouldPreservePresentationForRejectedAck(false, SleepReply.ObsoleteCycle, 1, 11) ||
+                order.ShouldPreservePresentationForRejectedAck(true, SleepReply.Applied, 1, 11) ||
+                order.ShouldPreservePresentationForRejectedAck(true, SleepReply.ObsoleteCycle, 0, 11) ||
+                order.ShouldPreservePresentationForRejectedAck(true, SleepReply.ObsoleteCycle, 1, 10))
+                failures.Add("SleepTransitionState: rejected local intent must preserve foreign sleeping presentation");
+            order.BeginPending(8); order.BeginEntrance(9);
+            if (order.ReceiveEntrance(10, 9, 11) || !order.ReceiveEntrance(11, 9, 11) || order.Pending != 8 ||
+                order.ReceiveEntrance(11, 9, 11)) failures.Add("SleepTransitionState: entrance acknowledgement correlation");
+            if (!order.Receive(uint.MaxValue, 11, 8, 11, out var ack) || !ack || order.Pending != 0 ||
+                !order.Receive(1, 0, 0, 11, out ack) || ack || order.Receive(1, 0, 0, 11, out ack))
+                failures.Add("SleepTransitionState: revision wrap/ack ordering");
+            order.BeginPending(10); order.Expire(11, 2);
+            if (order.Expired) failures.Add("SleepTransitionState: wrong actor expiry");
+            order.Expire(10, 2);
+            if (!order.Expired || order.Pending != 0) failures.Add("SleepTransitionState: expiry");
+            order.BeginEntrance(12);
+            if (!order.ExpireEntrance(12) || order.PendingEntrance != 0 || order.ExpireEntrance(12))
+                failures.Add("SleepTransitionState: entrance expiry");
+            order.Clear();
+            if (order.Active || order.Pending != 0 || order.PendingEntrance != 0 || order.Expired || order.Revision != 0)
+                failures.Add("SleepTransitionState: reset");
+        }
+
         private static void CheckPopulatedMessage(INetMessage msg, List<string> failures, ref int populated, ref int truncated)
         {
             try
@@ -243,7 +286,7 @@ namespace ProtocolSmoke
                 return true;
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
-                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is INetMessage))
+                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is SleepAddress || a is INetMessage))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

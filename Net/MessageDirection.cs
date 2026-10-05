@@ -37,6 +37,7 @@ namespace SailwindCoop.Net
                 case MsgType.DirtRequest:
                 case MsgType.OrbRequest:
                 case MsgType.InstrumentRequest:
+                case MsgType.SleepRequest:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
                     return MsgFlow.ToHost;

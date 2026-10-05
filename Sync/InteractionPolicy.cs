@@ -7,11 +7,11 @@ namespace SailwindCoop.Sync
     {
         /// <summary>Shared ship state — forward to the host, which replays it (default for deck controls).</summary>
         Shared,
-        /// <summary>A physical item (pickup/use) — handled by the future item-replication subsystem (P3); not forwarded yet.</summary>
+        /// <summary>A physical item; use/consume requires an explicit domain result, not generic button replay.</summary>
         Item,
         /// <summary>Personal/UI — settings, menus, zoom, personal map. Never synced; works locally only.</summary>
         Local,
-        /// <summary>Touches the host's authoritative world (economy, missions, sleep/time, save). Blocked on the client.</summary>
+        /// <summary>Sleep/time and world save entries blocked on the client until a dedicated request path exists.</summary>
         HostOnly,
     }
 
@@ -29,8 +29,6 @@ namespace SailwindCoop.Sync
         private static readonly System.Collections.Generic.HashSet<string> HostOnly =
             new System.Collections.Generic.HashSet<string>
             {
-                // sleep / time advance (conflicts with the shared world clock) — mediated later (P4.2)
-                "GPButtonBed", "GPButtonTavernSleep", "GPButtonOnsenEntrance", "ShipItemBed",
                 // save
                 "GPButtonAutosaveToggle",
             };
@@ -74,12 +72,17 @@ namespace SailwindCoop.Sync
         private static readonly System.Collections.Generic.HashSet<string> SharedPickupable =
             new System.Collections.Generic.HashSet<string>();
 
+        internal static bool IsHostOnlyType(string typeName) => HostOnly.Contains(typeName);
+        internal static bool IsSleepInput(GoPointerButton button) => button is GPButtonBed ||
+            button is GPButtonTavernSleep || button is GPButtonOnsenEntrance || button is ShipItemBed;
+
         public static InteractPolicy Classify(GoPointerButton btn)
         {
             if (btn == null) return InteractPolicy.Local;
             string n = btn.GetType().Name;
 
-            if (HostOnly.Contains(n)) return InteractPolicy.HostOnly;
+            if (IsSleepInput(btn)) return InteractPolicy.Local;
+            if (IsHostOnlyType(n)) return InteractPolicy.HostOnly;
             if (Local.Contains(n)) return InteractPolicy.Local;
             if (SharedPickupable.Contains(n)) return InteractPolicy.Shared;
             if (btn is PickupableItem) return InteractPolicy.Item;   // generic item — P3

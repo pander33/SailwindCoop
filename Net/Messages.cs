@@ -89,6 +89,7 @@ namespace SailwindCoop.Net
         OrbState = 99,
         InstrumentRequest = 100,
         InstrumentState = 101,
+        SleepRequest = 104,     // client -> host : addressed absolute shared-sleep transition
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
@@ -1741,6 +1742,31 @@ namespace SailwindCoop.Net
         }
     }
 
+    public enum SleepPhase : byte { Awake, Begin, Sleeping, Wake, Cancel }
+    public enum SleepSource : byte { Exhaustion, Bed, ItemBed, Tavern, Onsen }
+    public enum SleepReply : byte { Applied, ObsoleteCycle, MissingTarget }
+
+    /// <summary>Scene/hierarchy path for static inputs; host item identity for movable beds.
+    /// No position, eligibility, payment or personal needs are sent.</summary>
+    public sealed class SleepAddress
+    {
+        public SleepSource Source;
+        public string Path = "";
+        public int InstanceId, PrefabIndex;
+        public bool Timeskip;
+        public void Write(NetDataWriter writer)
+        {
+            writer.Put((byte)Source); writer.Put(Path ?? "");
+            writer.Put(InstanceId); writer.Put(PrefabIndex); writer.Put(Timeskip);
+        }
+        public void Read(NetDataReader reader)
+        {
+            Source = (SleepSource)reader.GetByte(); Path = reader.GetString(1024);
+            InstanceId = reader.GetInt(); PrefabIndex = reader.GetInt(); Timeskip = reader.GetBool();
+            if (Source > SleepSource.Onsen) throw new System.IO.InvalidDataException("Unknown sleep source");
+        }
+    }
+
     public enum ResyncDomain : byte { Controls, Anchor, Mooring, Damage, World }
 
     /// <summary>Client -> host, ReliableOrdered. Host state streams are sent only when their value
@@ -1759,16 +1785,64 @@ namespace SailwindCoop.Net
         }
     }
 
-    /// <summary>Host → client: the host is sleeping (true) or awake (false). Drives the client's shared
-    /// blackout + control lock while the host authoritatively warps time (P4.2).</summary>
+    /// <summary>Authenticated client -> host, ReliableOrdered. Absolute phase of one actor/request
+    /// cycle. Begin allocates the cycle from sender + RequestId; later phases name it explicitly.
+    /// Baseline is a quiet query. Retries reuse RequestId and never replay native payment/UI.
+    /// Missing targets produce a technical ack; session teardown discards all cycle IDs.</summary>
+    public sealed class SleepRequestMsg : INetMessage
+    {
+        public uint RequestId = 1;
+        public uint CycleActor, CycleId;
+        public SleepPhase Phase = SleepPhase.Begin;
+        public bool Baseline;
+        public SleepAddress Address = new SleepAddress();
+        public MsgType Type => MsgType.SleepRequest;
+        public void Serialize(NetDataWriter writer)
+        {
+            writer.Put(RequestId); writer.Put(CycleActor); writer.Put(CycleId);
+            writer.Put((byte)Phase); writer.Put(Baseline); Address.Write(writer);
+        }
+        public void Deserialize(NetDataReader reader)
+        {
+            RequestId = reader.GetUInt(); CycleActor = reader.GetUInt(); CycleId = reader.GetUInt();
+            Phase = (SleepPhase)reader.GetByte(); Baseline = reader.GetBool(); Address.Read(reader);
+            if (Phase > SleepPhase.Cancel || (!Baseline && (RequestId == 0 ||
+                (Phase == SleepPhase.Awake && Address.Source != SleepSource.Onsen))))
+                throw new System.IO.InvalidDataException("Invalid sleep request header");
+        }
+    }
+
+    /// <summary>Host -> client, ReliableOrdered: full absolute sleep lifecycle and host revision.
+    /// Requester/RequestId acknowledge only that actor's request; baseline/retry/echo are quiet.
+    /// CycleActor/CycleId order delayed wake against competing begin; Address identifies its input.
+    /// Tavern payment/bonus belong only to CycleActor, never to a receiving host singleton.</summary>
     public sealed class SleepStateMsg : INetMessage
     {
-        public bool Sleeping;
+        public uint Revision, CycleActor, CycleId, Requester, RequestId;
+        public SleepPhase Phase;
+        public SleepReply Reply;
+        public SleepAddress Address = new SleepAddress();
+        public bool EntranceCommitted;
+        public SleepAddress Entrance = new SleepAddress();
+        public bool Sleeping => Phase == SleepPhase.Sleeping;
 
         public MsgType Type => MsgType.SleepState;
 
-        public void Serialize(NetDataWriter w) { w.Put(Sleeping); }
-        public void Deserialize(NetDataReader r) { Sleeping = r.GetBool(); }
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Revision); w.Put(CycleActor); w.Put(CycleId); w.Put(Requester); w.Put(RequestId);
+            w.Put((byte)Phase); w.Put((byte)Reply); Address.Write(w);
+            w.Put(EntranceCommitted); Entrance.Write(w);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            Revision = r.GetUInt(); CycleActor = r.GetUInt(); CycleId = r.GetUInt(); Requester = r.GetUInt(); RequestId = r.GetUInt();
+            Phase = (SleepPhase)r.GetByte(); Reply = (SleepReply)r.GetByte(); Address.Read(r);
+            EntranceCommitted = r.GetBool(); Entrance.Read(r);
+            if (Phase > SleepPhase.Cancel || Reply > SleepReply.MissingTarget ||
+                ((Phase == SleepPhase.Begin || Phase == SleepPhase.Sleeping) && (CycleActor == 0 || CycleId == 0)))
+                throw new System.IO.InvalidDataException("Invalid sleep state header");
+        }
     }
 
     /// <summary>One active mission, mirroring the game's <c>SaveMissionData</c> (stable port/prefab

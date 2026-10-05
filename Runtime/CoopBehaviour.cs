@@ -217,6 +217,7 @@ namespace SailwindCoop.Runtime
                 Mooring.ClearRemoteActor(netId);
                 WindTotem.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
+                Sleep.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
                 Pause.Release(netId);
             };
@@ -291,7 +292,7 @@ namespace SailwindCoop.Runtime
                 // Straight after Env.Tick: that is what advances WaveClock, and Crest reads the
                 // provider in LateUpdate, so the value it sees is always this frame's.
                 new SyncStep("Storms.Tick", () => Storms.Tick(_dt)),
-                new SyncStep("Sleep.Tick", () => Sleep.Tick(_dt)),
+                new SyncStep("Sleep.Tick", () => Sleep.Tick(Time.unscaledDeltaTime)),
                 new SyncStep("Missions.Tick", () => Missions.Tick(_dt)),
                 new SyncStep("Controls.Tick", () => Controls.Tick(_dt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
@@ -493,6 +494,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.SleepState:
                     Sleep.OnSleepState((SleepStateMsg)msg, fromPeer);
                     break;
+                case MsgType.SleepRequest:
+                    Sleep.OnSleepRequest((SleepRequestMsg)msg, fromPeer);
+                    break;
                 case MsgType.MissionJournal:
                     Missions.OnMissionJournal((MissionJournalMsg)msg, fromPeer);
                     break;
@@ -552,6 +556,7 @@ namespace SailwindCoop.Runtime
                         if (((ClientWorldLoadedMsg)msg).Ok && netId != 0)
                         {
                             Interactions.SendInitialHatches(fromPeer);
+                            Sleep.SendBaseline(fromPeer);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         }
                         Pause.Release(netId);
