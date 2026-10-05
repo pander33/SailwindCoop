@@ -2,6 +2,15 @@
 
 Текущий плагин 0.1.6, Protocol 63. Реализация описана ниже; открытые задачи — §5 `СОСТОЯНИЕ.md`.
 
+Подробный будущий план по A1–A13 и остальным областям полного аудита —
+[INTERACTION_REMEDIATION_PLAN.md](INTERACTION_REMEDIATION_PLAN.md): T0–T13,
+зависимости, изменения протокола, целевые расширения и критерии приёмки.
+Реализованы T0, основа T1–T5 и T6; текущий протокол 72. Ограничения — СОСТОЯНИЕ.md §12–14. Gameplay и T7 частично реализован; T9, T8, T10–T13 открыты.
+
+2026-10-03: T0 реализован — [INTERACTION_CATALOG.md](INTERACTION_CATALOG.md),
+93 типа/182 signatures, 23 item hooks, guard no-arg bed и честный PatchHealth.
+RuntimeSmoke 31/31, ProtocolSmoke 52/48/4014, Release 0/0; gameplay открыт.
+
 ## A. Обработка исключений
 
 Interaction Harmony callbacks защищены PatchGuard. Ошибки обработчика и диагностики
@@ -74,3 +83,12 @@ ProtocolSmoke 52 типа / 48 round-trip / 4014 truncated cases, Protocol 63. �
 .NET Framework; игровая матрица и Unity Mono остаются открытыми.
 Один промежуточный RuntimeSmoke дал 22/1 на прежнем File.Replace recovery; повтор — 23/23.
 Причина нестабильности пока не установлена, код AtomicSaveFile не менялся.
+
+
+Текущее продолжение remediation (2026-10-04): T7 carry/dock wait — Protocol 70, T9 приборы/weather result — 71, committed chart marks — 72, UV/точная текстура грязи/CleanFully — 73. Последние проверки Release 0/0, ProtocolSmoke 61/78/21246, RuntimeSmoke 49/49. Остальные пункты и игровая приёмка открыты; журнал — СОСТОЯНИЕ.md §15–18.
+
+
+Продолжение T9: Protocol 74 — WindTotemOrb carry/parent visual и causal WindRequest, touch/VR-wheel capture; Protocol 75 — buffered Instrument child stream для rod/ChipLog/fish, root epoch/parent revision и reliable final drop. T9 кодовые пути реализованы, его игровая приёмка открыта. Следующие этапы T8, T10–T13; актуальные технические ограничения и проверки — СОСТОЯНИЕ.md §19–20.
+
+
+Продолжение 2026-10-04: Protocol 76 — T8 committed refit (sails/parts/repair/clean), local payment only, independent hull Generation и deferred indexed packets/context rebuild. Native preview/save publication isolated, clone preview отсутствует. Release 0/0, ProtocolSmoke 67/99/26604, RuntimeSmoke 58/58; игровая приёмка/Unity Mono, T10–T13 и прежние остатки открыты. См. СОСТОЯНИЕ.md §21.

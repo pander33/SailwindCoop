@@ -89,6 +89,8 @@ namespace SailwindCoop.Net
         OrbState = 99,
         InstrumentRequest = 100,
         InstrumentState = 101,
+        RefitRequest = 102,
+        RefitState = 103,
         SleepRequest = 104,     // client -> host : addressed absolute shared-sleep transition
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
@@ -947,8 +949,12 @@ namespace SailwindCoop.Net
     /// so its game logic (and the resulting state sync) is the source of truth. ReliableOrdered:
     /// these are one-shot events that must not be dropped.
     /// </summary>
-    public sealed class ControlEventMsg : INetMessage
+    public sealed class ControlEventMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
@@ -959,7 +965,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Index);
             w.Put((byte)Kind);
             w.Put(HatchOpen);
@@ -967,7 +973,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Index = r.GetUShort();
             Kind = (InteractKind)r.GetByte();
             HatchOpen = r.GetBool();
@@ -975,20 +981,28 @@ namespace SailwindCoop.Net
     }
 
     /// <summary>Initial host hatch state for a joining peer or a newly bound hull.</summary>
-    public sealed class HatchSnapshotMsg : INetMessage
+    public sealed class HatchSnapshotMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
         public bool Open;
         public MsgType Type => MsgType.HatchSnapshot;
-        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put(Open); }
-        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Open = r.GetBool(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put(Open); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); Open = r.GetBool(); }
     }
 
     /// <summary>A client's held-button transition/renewal (currently BilgePump).</summary>
-    public sealed class HoldRequestMsg : INetMessage
+    public sealed class HoldRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
@@ -999,7 +1013,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Index);
             w.Put((byte)Kind);
             w.Put(Down);
@@ -1007,7 +1021,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Index = r.GetUShort();
             Kind = (InteractKind)r.GetByte();
             Down = r.GetBool();
@@ -1058,8 +1072,12 @@ namespace SailwindCoop.Net
     /// same force vector Sailwind would apply locally while the push collider is clicked;
     /// the host applies it to the authoritative rigidbody at the real-space contact point.
     /// </summary>
-    public sealed class PushRequestMsg : INetMessage
+    public sealed class PushRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
@@ -1071,7 +1089,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Index);
             w.PutVector3(RealPos);
             w.PutVector3(Force);
@@ -1080,7 +1098,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Index = r.GetUShort();
             RealPos = r.GetVector3();
             Force = r.GetVector3();

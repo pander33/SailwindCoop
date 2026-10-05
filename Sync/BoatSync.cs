@@ -106,7 +106,7 @@ namespace SailwindCoop.Sync
             long tick = _net.Clock.ServerTick;
             foreach (var hb in _hostBoats.Values)
             {
-                if (hb.Boat == null) continue;
+                if (hb.Boat == null || ShipyardSync.Suspended(hb.Index)) { hb.HaveLast = false; continue; }
 
                 Vector3 real = CoordSpace.LocalToReal(hb.Boat.position);
                 Vector3 vel = Vector3.zero;
@@ -167,7 +167,7 @@ namespace SailwindCoop.Sync
 
             foreach (var cb in _clientBoats.Values)
             {
-                if (cb.Boat == null || !cb.Net.HasData) continue;
+                if (cb.Boat == null || !cb.Net.HasData || ShipyardSync.Suspended(cb.Index)) continue;
 
                 // Not slaved yet: keep buffering under vanilla physics until the stream is trustworthy,
                 // then take over in one controlled step (see EngageSlave).

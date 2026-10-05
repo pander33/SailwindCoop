@@ -88,6 +88,7 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client && !InteractionContext.HasInput) return true;
             byte[] before = DirtPainter.Capture(target);
             DirtPainter.Clean(target);
+            if (ShipyardSync.Instance?.Confirming == true) return true; // One compound refit result, not an independent clean request.
             if (InteractionContext.HasInput && !InteractionContext.Suppressed && !before.SequenceEqual(DirtPainter.Capture(target)))
             {
                 Submit(surface, DirtAction.CleanFully, 0, 0, false);
@@ -226,6 +227,7 @@ namespace SailwindCoop.Sync
             (!surface.Gate.Pending || (msg.Requester == _net.MyNetId && msg.RequestId == surface.Gate.PendingRequest));
         private bool Apply(Surface surface, DirtStateMsg msg, byte[] png)
         {
+            if (ShipyardSync.PendingClean(surface.Target)) return false;
             if (!Eligible(surface, msg)) return true; // Finished obsolete transfer cannot replace prediction.
             if (surface.Target == null || ItemComponents.Read<Material>(surface.Target, "dirtMaterial") == null) return false;
             if (!DirtPainter.Capture(surface.Target).SequenceEqual(png))

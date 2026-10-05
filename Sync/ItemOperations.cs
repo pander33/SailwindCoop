@@ -428,7 +428,8 @@ namespace SailwindCoop.Sync
         private static bool OperationHullReady(ushort boat, uint generation)
         {
             if (generation == 0) generation = BoatGenerationBook.Session.Get(boat);
-            if (BoatDamageSync.Instance == null || BoatGenerationBook.Session.Compare(boat, generation) != GenerationOrder.Current) return false;
+            if (BoatDamageSync.Instance == null || BoatGenerationBook.Session.Compare(boat, generation) != GenerationOrder.Current ||
+                ShipyardSync.Suspended(boat)) return false;
             var hull = BoatLocator.FindByIndex(boat);
             return hull != null && (hull.GetComponent<BoatDamage>() != null || hull.GetComponentInParent<BoatDamage>() != null ||
                 hull.GetComponentInChildren<BoatDamage>(true) != null);

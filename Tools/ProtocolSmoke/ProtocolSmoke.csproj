@@ -15,6 +15,7 @@
   <ItemGroup>
     <Compile Include="..\..\Net\BoatGenerationQueue.cs" Link="Net\BoatGenerationQueue.cs" />
     <Compile Include="..\..\Net\BoatGenerationBook.cs" Link="Net\BoatGenerationBook.cs" />
+    <Compile Include="..\..\Net\RefitMessages.cs" Link="Net\RefitMessages.cs" />
     <Compile Include="..\..\Net\ItemDetails.cs" Link="Net\ItemDetails.cs" />
     <Compile Include="..\..\Net\ChartMessages.cs" Link="Net\ChartMessages.cs" />
     <Compile Include="..\..\Net\DirtMessages.cs" Link="Net\DirtMessages.cs" />

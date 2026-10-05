@@ -251,6 +251,7 @@ namespace SailwindCoop.Sync
         }
         internal void ApplyOperationDamage(DamageRequestMsg msg)
         {
+            if (_fleet != null && ShipyardSync.Instance?.DeferEmbedded(msg, () => ApplyOperationDamage(msg)) == true) return;
             if (_fleet != null) { _fleet.Get(msg.BoatIndex)?.ApplyOperationDamage(msg); return; }
             RefreshBoat(); if (_damage == null) return;
             if (msg.Action == DamageAction.AddOakum) _damage.oakum += msg.Amount;
@@ -258,6 +259,7 @@ namespace SailwindCoop.Sync
         }
         internal void ApplyOperationState(BoatDamageStateMsg msg)
         {
+            if (_fleet != null && ShipyardSync.Instance?.DeferEmbedded(msg, () => ApplyOperationState(msg)) == true) return;
             if (_fleet != null) { _fleet.Get(msg.BoatIndex)?.ApplyOperationState(msg); return; }
             if (BoatGenerationBook.Session.Compare(msg.BoatIndex, msg.Generation) == GenerationOrder.Current) OnDamageState(msg, null);
         }

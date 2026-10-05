@@ -416,6 +416,25 @@ internal static class Program
                     Assert(!touch.Body.Instructions.Any(i => i.Operand is FieldReference field && field.Name == "currentInput" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "touch-wheel adapter should be re-audited: game now updates currentInput itself");
                 }
             });
+            Test("installed shipyard pays before installation and saves native configuration", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    var calls = types["Shipyard"].Methods.Single(m => m.Name == "ConfirmOrder").Body.Instructions;
+                    int payment = calls.ToList().FindIndex(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stind_I4);
+                    int install = calls.ToList().FindIndex(i => i.Operand is MethodReference method && method.Name == "InstallSails");
+                    int parts = calls.ToList().FindIndex(i => i.Operand is MethodReference method && method.Name == "ApplyCurrentOrder");
+                    Assert(payment >= 0 && payment < install && install < parts, "paid-success marker is before payment or actual install sequence changed");
+                    foreach (string name in new[] { "AdmitShip", "CancelOrder", "DischargeShip", "ConfirmOrder" })
+                        Assert(types["Shipyard"].Methods.Any(m => m.Name == name && m.HasBody), "shipyard hook missing: " + name);
+                    Assert(types["Shipyard"].Fields.Any(f => f.Name == "originalData" && f.FieldType.Name == "SaveBoatCustomizationData"), "cancel data binding changed");
+                    Assert(types["SaveableBoatCustomization"].Methods.Single(m => m.Name == "LoadData").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "LoadSail"), "native refit loader changed");
+                    Assert(types["Mast"].Methods.Any(m => m.Name == "LoadSail" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "SaveSailData"), "sail loader signature changed");
+                    Assert(types["Sail"].Methods.Any(m => m.Name == "IsInstalled" && m.Parameters.Count == 0), "partial-result filter cannot distinguish installed sails");
+                    foreach (string name in new[] { "prefabIndex", "mastIndex", "installHeight", "sailColor", "scaleY", "scaleZ" })
+                        Assert(types["SaveSailData"].Fields.Any(f => f.Name == name), "saved sail field missing: " + name);
+                }
+            });
             Test("installed dirt hooks bind actual UV and the texture saved on its scene object", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
                 {

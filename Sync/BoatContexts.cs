@@ -23,7 +23,8 @@ namespace SailwindCoop.Sync
             get
             {
                 if (!GameState.playing || GameState.currentlyLoading) yield break;
-                Refresh(); foreach (var e in _entries.Values) yield return e.Context;
+                Refresh(); foreach (var pair in _entries)
+                    if (!ShipyardSync.Suspended(pair.Key)) yield return pair.Value.Context;
             }
         }
 
@@ -42,6 +43,7 @@ namespace SailwindCoop.Sync
         private int _missingWarnings;
         public T Get(ushort id)
         {
+            if (ShipyardSync.Suspended(id)) return null;
             Refresh();
             if (_entries.TryGetValue(id, out var e)) return e.Context;
             if (Plugin.Logger != null && Plugin.Logger.ShouldReport(ref _missingWarnings))
@@ -60,6 +62,7 @@ namespace SailwindCoop.Sync
                 ushort id = BoatLocator.IndexOf(boat);
                 if (boat == null || id == BoatLocator.NoBoat) continue;
                 alive.Add(id);
+                if (ShipyardSync.Suspended(id)) continue;
                 long stamp = _stamp(boat);
                 if (_entries.TryGetValue(id, out var old))
                 {

@@ -149,6 +149,8 @@ namespace SailwindCoop.Runtime
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
             Shipyard = new ShipyardSync(Net);
+            Shipyard.Dispatch = OnGameMessage;
+            Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
             SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = true;
             Pause = new JoinPause();
@@ -174,6 +176,7 @@ namespace SailwindCoop.Runtime
             ItemInstrumentPatches.Apply(_harmony);
             ChartPatches.Apply(_harmony);
             DirtPatches.Apply(_harmony);
+            ShipyardRefitPatches.Apply(_harmony);
             OrbCarryPatches.Apply(_harmony);
             InstrumentPosePatches.Apply(_harmony);
             AnchorPatches.Apply(_harmony);
@@ -273,6 +276,7 @@ namespace SailwindCoop.Runtime
             _steps = new[]
             {
                 new SyncStep("Pause.Tick", () => Pause.Tick()),
+                new SyncStep("Shipyard.Tick", () => Shipyard.Tick(_dt)),
                 new SyncStep("Boats.Tick", () => Boats.Tick(_dt)),
                 new SyncStep("Boats.ApplyRemote", () => Boats.ApplyRemote()),
                 // Сразу за лодкой игрока: AI-корабли ни к кому не приаттачены, но должны встать до
@@ -371,8 +375,11 @@ namespace SailwindCoop.Runtime
             Plugin.Logger.ReportError("[Coop] " + step.Name + " failed", e, ref step.Failures);
         }
 
+        private int _gateExpiries, _oversizedPackets;
+
         private void OnGameMessage(MsgType type, INetMessage msg, LiteNetLib.NetPeer fromPeer)
         {
+            if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
             {
                 case MsgType.PlayerState:
@@ -529,6 +536,10 @@ namespace SailwindCoop.Runtime
                 case MsgType.MissionDeliverResult:
                     Missions.OnMissionDeliverResult((MissionDeliverResultMsg)msg, fromPeer);
                     break;
+                case MsgType.RefitRequest:
+                    Shipyard.OnRefitRequest((RefitRequestMsg)msg, fromPeer); break;
+                case MsgType.RefitState:
+                    Shipyard.OnRefitState((RefitStateMsg)msg, fromPeer); break;
                 case MsgType.BoatPurchase:
                     Shipyard.OnBoatPurchase((BoatPurchaseMsg)msg, fromPeer);
                     break;
@@ -555,6 +566,7 @@ namespace SailwindCoop.Runtime
                             : MemberJoinState.Failed);
                         if (((ClientWorldLoadedMsg)msg).Ok && netId != 0)
                         {
+                            Shipyard.SendBaseline(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
@@ -577,7 +589,6 @@ namespace SailwindCoop.Runtime
         /// "save the world while the clock may be stopped" path at once.
         /// </summary>
         private int _streamingSaveEpoch;
-        private int _gateExpiries, _oversizedPackets;
 
         /// <summary>Ceiling on how long one join may hold the queue. Generous: the inner routine can
         /// legitimately spend 15 s waiting for a save window plus 10 s for the write, then transfer.</summary>
@@ -809,6 +820,7 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("destroy");
             ResetJoinStreaming();
+            Shipyard?.Clear();
             Missions?.Clear();
             Sleep?.Clear();
             Shop?.Clear();
@@ -925,6 +937,7 @@ namespace SailwindCoop.Runtime
             ResetJoinStreaming();
             Net.Stop();
             _notifications?.Clear();
+            Shipyard.Clear();
             Missions.Clear();
             Sleep.Clear();
             Shop.Clear();

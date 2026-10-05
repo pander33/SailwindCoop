@@ -60,7 +60,7 @@ namespace ProtocolSmoke
 
             int populated = 0, truncated = 0;
             foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
-                t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(DirtRequestMsg) || t == typeof(DirtStateMsg) || t == typeof(OrbRequestMsg) || t == typeof(OrbStateMsg) || t == typeof(WindRequestMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t)))
+                t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(DirtRequestMsg) || t == typeof(DirtStateMsg) || t == typeof(OrbRequestMsg) || t == typeof(OrbStateMsg) || t == typeof(WindRequestMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t) || typeof(RefitBody).IsAssignableFrom(t)))
             {
                 foreach (ushort boat in new ushort[] { 1, 511, 65534 })
                 {
@@ -159,7 +159,7 @@ namespace ProtocolSmoke
                 for (int i = 0; i < 2; i++) array.SetValue(Sample(type.GetElementType()), i);
                 return array;
             }
-            if (type == typeof(ItemDetails) || type == typeof(CreatedItemState) || type == typeof(ControlEpoch) || type == typeof(ChartMark) || typeof(INetMessage).IsAssignableFrom(type))
+            if (type == typeof(ItemDetails) || type == typeof(CreatedItemState) || type == typeof(ControlEpoch) || type == typeof(ChartMark) || type == typeof(NetSailConfiguration) || typeof(INetMessage).IsAssignableFrom(type))
             {
                 var value = Activator.CreateInstance(type);
                 foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(value, Sample(field.FieldType));
@@ -286,7 +286,7 @@ namespace ProtocolSmoke
                 return true;
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
-                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is SleepAddress || a is INetMessage))
+                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

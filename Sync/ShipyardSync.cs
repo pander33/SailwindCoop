@@ -15,7 +15,7 @@ namespace SailwindCoop.Sync
     /// purchased via <c>LoadAsPurchased()</c> (sets extraSetting + hides the for-sale UI, no charge). Then both
     /// machines enumerate and sync the boat. No runtime spawning is involved.
     /// </summary>
-    public sealed class ShipyardSync
+    public sealed partial class ShipyardSync
     {
         public static ShipyardSync Instance { get; private set; }
 
@@ -112,7 +112,7 @@ namespace SailwindCoop.Sync
                 var so = __instance.GetComponent<SaveableObject>();
                 if (so != null) ShipyardSync.Instance.NotifyPurchase(so.sceneIndex);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ShipyardPatches] PostPurchase: " + e.Message); }
+            catch (Exception e) { ShipyardSync.Report("PostPurchase", e); }
         }
     }
 }

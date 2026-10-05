@@ -37,6 +37,7 @@ namespace SailwindCoop.Net
                 case MsgType.DirtRequest:
                 case MsgType.OrbRequest:
                 case MsgType.InstrumentRequest:
+                case MsgType.RefitRequest:
                 case MsgType.SleepRequest:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
@@ -76,6 +77,7 @@ namespace SailwindCoop.Net
                 case MsgType.DirtState:
                 case MsgType.OrbState:
                 case MsgType.InstrumentState:
+                case MsgType.RefitState:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.
