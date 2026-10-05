@@ -3,8 +3,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using SailwindCoop.Sync;
+using SailwindCoop.Net;
 using SailwindCoop.Runtime;
 using BepInEx.Logging;
+using System.Collections.Generic;
+using System.Linq;
 
 internal static class Program
 {
@@ -47,6 +50,152 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("boat configuration barrier holds future packets and discards old indices", () => {
+                var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<string>();
+                queue.Add(1, 2, "boat1 new rope"); queue.Add(2, 1, "boat2 unchanged"); queue.Add(1, 1, "boat1 old rope");
+                var ready = queue.TakeReady(book, id => id == 1);
+                Assert(ready.SequenceEqual(new[] { "boat2 unchanged" }), "preview blocked another hull");
+                Assert(book.Next(1) == 2 && book.Get(2) == 1, "generation changed another hull");
+                ready = queue.TakeReady(book, id => false);
+                Assert(ready.SequenceEqual(new[] { "boat1 new rope" }), "old index escaped or future packet lost");
+                Assert(queue.TakeReady(book, id => false).Count == 0, "packet applied twice");
+            });
+            Test("boat preview cancellation resumes same-generation requests in order", () => {
+                var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<int>();
+                queue.Add(3, 1, 10); queue.Add(3, 1, 11);
+                Assert(queue.TakeReady(book, id => true).Count == 0, "request applied to preview");
+                Assert(queue.TakeReady(book, id => false).SequenceEqual(new[] { 10, 11 }), "cancel lost causal order");
+                queue.Add(3, 2, 12); queue.Clear(); book.Clear();
+                Assert(queue.TakeReady(book, id => false).Count == 0 && book.Get(3) == 1, "session retained layout work");
+            });
+            Test("suspended hull keeps one unreliable snapshot per kind and every reliable packet", () => {
+                var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<string>();
+                for (int i = 0; i < 500; i++) queue.Add(6, 1, "control" + i, coalesce: 33);
+                queue.Add(6, 1, "event A");
+                for (int i = 0; i < 500; i++) queue.Add(6, 1, "anchor" + i, coalesce: 34);
+                queue.Add(6, 1, "event B");
+                queue.Add(6, 1, "control last", coalesce: 33);
+                queue.Add(7, 1, "other hull control", coalesce: 33);
+                queue.Add(6, 2, "next configuration control", coalesce: 33);
+                Assert(queue.Count == 6, "periodic snapshots accumulated: " + queue.Count);
+                Assert(queue.TakeReady(book, id => id == 6).SequenceEqual(new[] { "other hull control" }), "coalescing crossed hulls");
+                Assert(queue.TakeReady(book, id => false).SequenceEqual(new[] { "event A", "anchor499", "event B", "control last" }),
+                    "reliable packet dropped or snapshot left ahead of a later event");
+                Assert(queue.Count == 1, "future configuration snapshot was merged into the current one");
+            });
+            Test("boat generation wrap orders configurations independently per hull", () => {
+                var book = new BoatGenerationBook(); book.Set(4, uint.MaxValue);
+                Assert(book.Compare(4, 1) == GenerationOrder.Future, "wrap future");
+                Assert(book.Next(4) == 1 && book.Compare(4, uint.MaxValue) == GenerationOrder.Past, "wrap old configuration");
+                Assert(book.Compare(5, 1) == GenerationOrder.Current, "unrelated hull inherited revision");
+            });
+            Test("compound operation deduplicates effects and retains partial result", () => {
+                var ledger = new OperationLedger<List<string>>(); List<string> previous;
+                var result = new List<string>(); int effects = 0;
+                Assert(ledger.TryBegin(10, 7, result, out previous), "first operation rejected");
+                ExpectFailure(() => { effects++; result.Add("resource applied"); throw new InvalidOperationException("Unity fault before creation"); });
+                Assert(!ledger.TryBegin(10, 7, new List<string>(), out previous), "partial operation could run again");
+                Assert(effects == 1 && ReferenceEquals(previous, result) && previous.Count == 1, "actual partial result lost");
+                Assert(ledger.TryBegin(11, 7, new List<string>(), out previous), "different client operation collided");
+                ledger.Clear();
+                Assert(ledger.TryBegin(10, 7, new List<string>(), out previous), "new session reused stale result");
+            });
+            Test("item revision orders all metadata independently of pose tick", () => {
+                var gate = new ItemStateGate(); bool semantic, pose;
+                Assert(gate.Receive(9, 500, 0, 0, 10, out semantic, out pose) && semantic && pose, "initial full state rejected");
+                Assert(gate.Receive(10, 500, 0, 0, 10, out semantic, out pose) && semantic && pose, "same-tick result rejected");
+                Assert(!gate.Receive(9, 900, 0, 0, 10, out semantic, out pose), "old metadata won with newer pose tick");
+                Assert(gate.Receive(10, 501, 0, 0, 10, out semantic, out pose) && !semantic && pose, "same-revision pose stopped");
+                Assert(!gate.Receive(10, 499, 0, 0, 10, out semantic, out pose), "older pose admitted");
+                var wrap = new ItemStateGate();
+                Assert(wrap.Receive(uint.MaxValue, 1, 0, 0, 10, out semantic, out pose), "wrap baseline");
+                Assert(wrap.Receive(1, 1, 0, 0, 10, out semantic, out pose), "revision wrap rejected");
+            });
+            Test("unanswered request stops blocking host state after the timeout", () => {
+                var clock = ItemStateGate.Clock; long now = 1000; int expired = 0;
+                ItemStateGate.Clock = () => now; ItemStateGate.Expired = request => { if (request == 21) expired++; };
+                try
+                {
+                    var gate = new ItemStateGate(); bool semantic, pose;
+                    Assert(gate.Receive(1, 100, 0, 0, 10, out semantic, out pose), "baseline rejected");
+                    gate.Begin(21);
+                    now += ItemStateGate.PendingTimeoutMs - 1;
+                    Assert(!gate.Receive(2, 200, 0, 0, 10, out semantic, out pose) && gate.Pending, "pending released before the timeout");
+                    now += 1;
+                    Assert(gate.Receive(2, 300, 0, 0, 10, out semantic, out pose) && semantic && !gate.Pending, "host state still blocked after the timeout");
+                    Assert(expired == 1, "abandoned request not reported exactly once");
+                    gate.Begin(22); now += 10;
+                    Assert(gate.Receive(3, 400, 10, 22, 10, out semantic, out pose) && !gate.Pending, "acknowledgement inside the window rejected");
+                    Assert(expired == 1, "acknowledged request reported as abandoned");
+                }
+                finally { ItemStateGate.Clock = clock; ItemStateGate.Expired = null; }
+            });
+            Test("state stream is silent while nothing changes and ends every run reliably", () => {
+                var stream = new ChangeStream();
+                Assert(stream.Next(false) == StreamSend.Reliable, "first value not delivered reliably");
+                for (int i = 0; i < 100; i++) Assert(stream.Next(false) == StreamSend.None, "unchanged value sent");
+                Assert(stream.Next(true) == StreamSend.Unreliable && stream.Next(true) == StreamSend.Unreliable, "changing value not streamed");
+                Assert(stream.Next(false) == StreamSend.Reliable, "resting value after a run not delivered reliably");
+                Assert(stream.Next(false) == StreamSend.None, "resting value repeated");
+                stream.Sent(false);
+                Assert(stream.Next(false) == StreamSend.Reliable, "out-of-band unreliable send left without a reliable follow-up");
+                stream.Sent(true);
+                Assert(stream.Next(false) == StreamSend.None, "out-of-band reliable send repeated");
+                stream.Reset();
+                Assert(stream.Next(false) == StreamSend.Reliable && stream.Next(false) == StreamSend.None, "resync did not send the current value exactly once");
+            });
+            Test("request ids and revisions survive a one-sided boat context rebuild", () => {
+                // A rebuilt context draws from the same session counters, so the other side never sees a smaller number.
+                var hostOrder = new ItemRequestOrder(); var clientGate = new ItemStateGate(); bool semantic, pose;
+                uint before = SessionCounters.NextRequest();
+                Assert(hostOrder.Accept(10, before, false), "first request rejected");
+                uint afterRebuild = SessionCounters.NextRequest();
+                Assert(hostOrder.Accept(10, afterRebuild, false), "request after a client-side rebuild rejected as stale");
+                uint oldRevision = SessionCounters.NextRevision();
+                Assert(clientGate.Receive(oldRevision, 100, 0, 0, 10, out semantic, out pose), "state before rebuild rejected");
+                uint newRevision = SessionCounters.NextRevision();
+                Assert(clientGate.Receive(newRevision, 200, 0, 0, 10, out semantic, out pose) && semantic, "state after a host-side rebuild rejected as stale");
+            });
+            Test("item latest own request requires matching authenticated acknowledgement", () => {
+                var gate = new ItemStateGate(); bool semantic, pose;
+                gate.Begin(12); gate.Begin(13);
+                Assert(!gate.Receive(2, 500, 10, 12, 10, out semantic, out pose) && gate.Pending, "old ack released newer action");
+                Assert(!gate.Receive(2, 500, 11, 13, 10, out semantic, out pose) && gate.Pending, "another player ack released action");
+                Assert(!gate.Receive(3, 600, 0, 0, 10, out semantic, out pose), "periodic state rolled back prediction");
+                Assert(gate.Receive(2, 500, 10, 13, 10, out semantic, out pose) && !gate.Pending, "final ack lost");
+                gate.Begin(14);
+                Assert(gate.Receive(2, 500, 10, 14, 10, out semantic, out pose) && !gate.Pending, "no-op result couldn't acknowledge at same revision/tick");
+            });
+            Test("item request order rejects pre-drop pose without adding owner checks", () => {
+                var order = new ItemRequestOrder();
+                Assert(order.Accept(10, 3, false), "pickup");
+                Assert(order.Accept(10, 4, false), "drop");
+                Assert(!order.Accept(10, 3, true), "pre-drop held pose admitted");
+                Assert(!order.Accept(10, 4, false), "discrete request repeated");
+                Assert(order.Accept(11, 1, false), "different actor restricted");
+                Assert(order.Accept(10, 4, true), "current pose epoch rejected");
+                var wrap = new ItemRequestOrder();
+                Assert(wrap.Accept(10, uint.MaxValue, false) && wrap.Accept(10, 1, false), "request wrap rejected");
+            });
+            Test("operation origin nests, suppresses relay and restores after faults", () => {
+                Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "dirty initial origin");
+                using (InteractionContext.Begin(InteractionSource.LocalInput))
+                {
+                    Assert(InteractionContext.HasInput, "input missing");
+                    ExpectFailure(() => { using (InteractionContext.Begin(InteractionSource.RemoteApply)) {
+                        using (InteractionContext.Begin(InteractionSource.ActiveHold))
+                            Assert(InteractionContext.Suppressed && !InteractionContext.HasInput, "remote apply became input");
+                        throw new InvalidOperationException("apply fault");
+                    }});
+                    Assert(InteractionContext.HasInput, "fault leaked suppression");
+                    var baseline = InteractionContext.Begin(InteractionSource.Baseline);
+                    using (InteractionContext.Begin(InteractionSource.LocalInput))
+                        Assert(InteractionContext.Suppressed, "baseline became input");
+                    baseline.Dispose(); baseline.Dispose();
+                    Assert(InteractionContext.HasInput, "duplicate cleanup damaged parent");
+                }
+                Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "scope leaked");
+            });
             Test("anchor drop waits for its own latest reply", () => {
                 var gate = new AnchorStateGate();
                 Assert(gate.Receive(10, 0, 0, 7), "initial snapshot");
@@ -56,6 +205,41 @@ internal static class Program
                 Assert(!gate.Receive(12, 8, 2, 7), "another player unlocked drop");
                 Assert(gate.Receive(12, 7, 2, 7) && !gate.HasPending, "drop reply rejected after ignored snapshot");
                 Assert(gate.Receive(13, 0, 0, 7), "next snapshot rejected");
+            });
+            Test("document chunks replace only after complete identified revision", () => {
+                var chunks = new ChunkAccumulator<string>();
+                Assert(chunks.Add("map1/rev3", 2, 3, new[] { "C" }) == null, "partial document became visible");
+                Assert(chunks.Add("map1/rev3", 2, 3, new[] { "C" }) == null, "duplicate counted twice");
+                Assert(chunks.Add("map1/rev3", 0, 3, new[] { "A" }) == null, "missing middle accepted");
+                var complete = chunks.Add("map1/rev3", 1, 3, new[] { "B" });
+                Assert(string.Join("", complete) == "ABC", "out-of-order document assembled incorrectly");
+                Assert(chunks.Add("map1/rev4", 0, 2, new[] { "old" }) == null, "incomplete old document accepted");
+                Assert(chunks.Add("map1/rev5", 1, 2, new[] { "new2" }) == null, "mixed revisions completed");
+                Assert(string.Join("", chunks.Add("map1/rev5", 0, 2, new[] { "new1" })) == "new1new2", "older chunk leaked into newer revision");
+                ExpectFailure(() => chunks.Add("invalid", 2, 2, new string[0]));
+                chunks.Add("count", 0, 2, new string[0]);
+                ExpectFailure(() => chunks.Add("count", 1, 3, new string[0]));
+            });
+            Test("dirt chunks keep a pending stroke protected until the entire result arrives", () => {
+                var chunks = new ChunkAccumulator<byte>(); var gate = new ItemStateGate(); bool semantic, pose;
+                gate.Receive(3, 3, 0, 0, 10, out semantic, out pose); gate.Begin(8);
+                Assert(!gate.Receive(4, 4, 0, 0, 10, out semantic, out pose), "quiet daily dirt rolled back own stroke");
+                Assert(chunks.Add("scene7/rev5/actor10/request8", 1, 2, new byte[] { 3, 4 }) == null && gate.Pending, "partial texture acknowledged stroke");
+                var png = chunks.Add("scene7/rev5/actor10/request8", 0, 2, new byte[] { 1, 2 });
+                Assert(png.SequenceEqual(new byte[] { 1, 2, 3, 4 }), "texture bytes mixed/reordered");
+                Assert(gate.Receive(5, 5, 10, 8, 10, out semantic, out pose) && !gate.Pending, "complete host result did not release stroke");
+                Assert(!gate.Receive(4, 4, 10, 7, 10, out semantic, out pose), "late previous stroke replaced final texture");
+            });
+            Test("transform timeline replaces a same-tick final result including its first sample", () => {
+                var samples = new SnapshotBuffer<Tuple<long, string>>(s => s.Item1, 3);
+                samples.Push(Tuple.Create(100L, "before")); samples.Push(Tuple.Create(100L, "final"));
+                Assert(samples.Count == 1 && samples[0].Item2 == "final", "first same-tick result lost");
+                samples.Push(Tuple.Create(300L, "C")); samples.Push(Tuple.Create(200L, "B"));
+                Assert(samples[1].Item2 == "B" && samples[2].Item2 == "C", "late bracket order lost");
+                samples.Push(Tuple.Create(200L, "new B")); Assert(samples.Count == 3 && samples[1].Item2 == "new B", "duplicate bracket not replaced");
+                samples.Push(Tuple.Create(50L, "stale")); Assert(samples.Count == 3 && samples[0].Item1 == 100, "stale sample resurrected");
+                samples.Push(Tuple.Create(400L, "D")); Assert(samples.Count == 3 && samples[0].Item1 == 200, "buffer capacity not enforced");
+                samples.Clear(); Assert(samples.Count == 0, "disconnect retained samples");
             });
             Test("anchor state ordering survives equal ticks and revision wrap", () => {
                 var gate = new AnchorStateGate();

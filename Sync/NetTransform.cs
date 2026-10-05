@@ -25,8 +25,7 @@ namespace SailwindCoop.Sync
             public Vector3 RealVel;  // real-space velocity for extrapolation (may be zero)
         }
 
-        private readonly List<Snap> _buf = new List<Snap>(32);
-        private const int MaxBuffer = 32;
+        private readonly SnapshotBuffer<Snap> _buf = new SnapshotBuffer<Snap>(s => s.Tick, 32);
         private const float MaxExtrapolateMs = 250f;
 
         /// <summary>Interpolation delay in ms (config). Larger = smoother but more lag.</summary>
@@ -52,22 +51,7 @@ namespace SailwindCoop.Sync
         {
             var s = new Snap { Tick = tick, RealPos = realPos, Rot = rot, RealVel = realVel };
 
-            // Drop duplicates / stale.
-            if (_buf.Count > 0 && tick <= _buf[_buf.Count - 1].Tick)
-            {
-                // Late but newer than some — insert in sorted position; ignore if older than buffer.
-                if (tick <= _buf[0].Tick) return;
-                int i = _buf.Count - 1;
-                while (i >= 0 && _buf[i].Tick > tick) i--;
-                if (i >= 0 && _buf[i].Tick == tick) { _buf[i] = s; return; }
-                _buf.Insert(i + 1, s);
-            }
-            else
-            {
-                _buf.Add(s);
-            }
-
-            while (_buf.Count > MaxBuffer) _buf.RemoveAt(0);
+            _buf.Push(s);
         }
 
         /// <summary>

@@ -7,10 +7,20 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Compile Include="..\..\Net\BoatGenerationQueue.cs" Link="Net\BoatGenerationQueue.cs" />
+    <Compile Include="..\..\Net\BoatGenerationBook.cs" Link="Net\BoatGenerationBook.cs" />
     <Compile Include="..\..\Sync\AtomicSaveFile.cs" Link="AtomicSaveFile.cs" />
     <Compile Include="..\..\Runtime\PatchGuard.cs" Link="PatchGuard.cs" />
+    <Compile Include="..\..\Sync\InteractionContext.cs" Link="InteractionContext.cs" />
     <Compile Include="..\..\Sync\DeferredToggle.cs" Link="DeferredToggle.cs" />
     <Compile Include="..\..\Sync\PendingMooringState.cs" Link="PendingMooringState.cs" />
+    <Compile Include="..\..\Sync\OperationLedger.cs" Link="OperationLedger.cs" />
+    <Compile Include="..\..\Sync\ItemResultProgress.cs" Link="ItemResultProgress.cs" />
+    <Compile Include="..\..\Sync\ItemStateGate.cs" Link="ItemStateGate.cs" />
+    <Compile Include="..\..\Sync\SessionCounters.cs" Link="SessionCounters.cs" />
+    <Compile Include="..\..\Sync\ChangeStream.cs" Link="ChangeStream.cs" />
+    <Compile Include="..\..\Sync\ChunkAccumulator.cs" Link="ChunkAccumulator.cs" />
+    <Compile Include="..\..\Sync\SnapshotBuffer.cs" Link="SnapshotBuffer.cs" />
     <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
     <Reference Include="BepInEx"><HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath></Reference>
