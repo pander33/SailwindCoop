@@ -394,6 +394,41 @@ internal static class Program
                 Assert(gate.Receive(5, 5, 10, 8, 10, out semantic, out pose) && !gate.Pending, "complete host result did not release stroke");
                 Assert(!gate.Receive(4, 4, 10, 7, 10, out semantic, out pose), "late previous stroke replaced final texture");
             });
+            Test("wind orb drop rejects its preceding pose and wind epoch", () => {
+                var order = new ItemRequestOrder(); var gate = new ItemStateGate(); bool semantic, pose;
+                Assert(order.Accept(10, 1, false) && order.Accept(10, 1, true), "pickup/current wind rejected");
+                Assert(order.Accept(10, 2, false), "drop rejected");
+                Assert(!order.Accept(10, 1, true), "pre-drop wind could be reapplied");
+                Assert(order.Accept(11, 1, false), "another player's interaction restricted");
+                gate.Begin(2); Assert(!gate.Receive(4, 900, 10, 1, 10, out semantic, out pose), "late pickup rolled back drop");
+                Assert(gate.Receive(5, 900, 10, 2, 10, out semantic, out pose), "drop final reply rejected");
+            });
+            Test("installed orb and touch-wheel hooks match non-item identity and direct input path", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    Assert(types["WindTotemOrb"].BaseType.Name == "PickupableItem", "orb cannot route as ShipItem");
+                    foreach (string name in new[] { "totem", "orbParticles", "audio", "minPitch", "maxPitch", "particlesMinSize", "particlesMaxSize", "maxCarryDistance" })
+                        Assert(types["WindTotemOrb"].Fields.Any(f => f.Name == name), "orb binding changed: " + name);
+                    Assert(types["WindTotemOrb"].Methods.Single(m => m.Name == "Update").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "ForceNewWind"), "orb world effect moved");
+                    var touch = types["GPButtonSteeringWheel"].Methods.Single(m => m.Name == "ApplyRudderRotationFromWheel");
+                    Assert(touch.Parameters.Single().ParameterType.Name == "Single", "touch-wheel input hook changed");
+                    Assert(!touch.Body.Instructions.Any(i => i.Operand is FieldReference field && field.Name == "currentInput" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "touch-wheel adapter should be re-audited: game now updates currentInput itself");
+                }
+            });
+            Test("installed dirt hooks bind actual UV and the texture saved on its scene object", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    foreach (string name in new[] { "dirtMaterial", "saveable" }) Assert(types["CleanableObject"].Fields.Any(f => f.Name == name), "dirt binding changed: " + name);
+                    foreach (string name in new[] { "canvasTexture", "brushMaterial", "colorMaterial" }) Assert(types["MasterPainter"].Fields.Any(f => f.Name == name), "painter binding changed: " + name);
+                    var paint = types["MasterPainter"].Methods.Single(m => m.Name == "PaintObject");
+                    Assert(string.Join(",", paint.Parameters.Select(p => p.ParameterType.Name)) == "CleanableObject,Vector2,Texture", "UV hook signature changed");
+                    Assert(types["Cleaner"].Methods.Single(m => m.Name == "LateUpdate").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "PaintObject"), "stroke no longer comes from actual cleaner UV");
+                    Assert(types["CleanableObject"].Methods.Single(m => m.Name == "ApplyNewDirtTexture").Body.Instructions.Any(i => i.Operand is FieldReference field && field.Name == "extraTexture" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "applied dirt is not saved by SaveableObject");
+                    Assert(types["Shipyard"].Methods.Single(m => m.Name == "ConfirmOrder").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "CleanFully"), "confirmed cleaning domain entry changed");
+                }
+            });
             Test("transform timeline replaces a same-tick final result including its first sample", () => {
                 var samples = new SnapshotBuffer<Tuple<long, string>>(s => s.Item1, 3);
                 samples.Push(Tuple.Create(100L, "before")); samples.Push(Tuple.Create(100L, "final"));

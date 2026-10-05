@@ -16,7 +16,7 @@ namespace SailwindCoop.Sync
     /// The host's own orb use already works through vanilla + EnvironmentSync, so this sync
     /// only sends from the client side.
     /// </summary>
-    public sealed class WindTotemSync
+    public sealed partial class WindTotemSync
     {
         private readonly CoopNet _net;
         private GoPointer _gp;
@@ -31,10 +31,11 @@ namespace SailwindCoop.Sync
         public bool Active => _active;
         public Vector3 LastWind => _lastWind;
 
-        public WindTotemSync(CoopNet net) { _net = net; }
+        public WindTotemSync(CoopNet net) { _net = net; Instance = this; }
 
         public void Tick(float dt)
         {
+            TickOrbs(dt);
             if (_net.Role != Role.Client || _net.State != LinkState.Connected)
             {
                 _active = false;
@@ -56,12 +57,25 @@ namespace SailwindCoop.Sync
             Vector3 wind = ComputeOrbWind(orb);
             _lastWind = wind;
             _active = true;
-            _net.Broadcast(new WindRequestMsg { Wind = wind }, LiteNetLib.DeliveryMethod.Unreliable);
+            var carry = BindOrb(orb);
+            if (carry == null) return;
+            // An orb held still asks for the same wind: nothing to send.
+            var mode = _windStream.Next(!_haveSentWind || (wind - _sentWind).sqrMagnitude > 1e-8f);
+            if (mode == StreamSend.None) return;
+            _sentWind = wind; _haveSentWind = true;
+            _net.Broadcast(new WindRequestMsg { Wind = wind, OrbId = carry.Id, RequestId = carry.Request },
+                mode == StreamSend.Reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
+        private readonly ChangeStream _windStream = new ChangeStream();
+        private Vector3 _sentWind;
+        private bool _haveSentWind;
 
         public void OnWindRequest(WindRequestMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Host) return;
+            uint actor = _net.PlayerNetIdForPeer(fromPeer); if (actor == 0) return;
+            var carry = FindOrb(msg.OrbId);
+            if (carry == null || !carry.Order.Accept(actor, msg.RequestId, true)) return;
             var wind = global::Wind.instance;
             if (wind == null) return;
             // Apply authoritatively; EnvironmentSync.Tick will broadcast the new currentWind.
@@ -71,6 +85,7 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            ClearOrbs();
             _gp = null;
             _fHeldItem = null;
             _sendTimer = 0f;

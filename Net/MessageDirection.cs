@@ -34,6 +34,8 @@ namespace SailwindCoop.Net
                 case MsgType.WheelLockRequest:
                 case MsgType.MooringCarryRequest:
                 case MsgType.ChartRequest:
+                case MsgType.DirtRequest:
+                case MsgType.OrbRequest:
                 case MsgType.InstrumentRequest:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
@@ -70,6 +72,8 @@ namespace SailwindCoop.Net
                 case MsgType.ItemOperationResult:
                 case MsgType.MooringCarryState:
                 case MsgType.ChartState:
+                case MsgType.DirtState:
+                case MsgType.OrbState:
                 case MsgType.InstrumentState:
                     return MsgFlow.ToClient;
 

@@ -461,6 +461,7 @@ namespace SailwindCoop.Sync
             {
                 SendManifest(fromPeer);
                 ChartSync.Instance?.SendBaseline(fromPeer);
+                DirtSync.Instance?.SendBaseline(fromPeer);
                 return;
             }
 

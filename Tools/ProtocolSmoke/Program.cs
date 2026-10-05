@@ -59,7 +59,7 @@ namespace ProtocolSmoke
 
             int populated = 0, truncated = 0;
             foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
-                t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t)))
+                t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(DirtRequestMsg) || t == typeof(DirtStateMsg) || t == typeof(OrbRequestMsg) || t == typeof(OrbStateMsg) || t == typeof(WindRequestMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t)))
             {
                 foreach (ushort boat in new ushort[] { 1, 511, 65534 })
                 {
@@ -81,6 +81,7 @@ namespace ProtocolSmoke
                         if (msg is AnchorStateMsg anchorState) anchorState.Set = boat != 511;
                         if (msg is ItemStateMsg itemState) itemState.Amount = boat == 511 ? 0f : 1f;
                         if (msg is ItemRequestMsg itemRequest) { itemRequest.Action = ItemAction.State; itemRequest.Amount = boat == 511 ? 0f : 1f; }
+                        if (msg is DirtStateMsg dirt) { dirt.Chunk = 1; dirt.Chunks = 2; }
                         if (msg is ChartStateMsg chart) { chart.Chunk = 1; chart.Chunks = 2; }
                         var writer = Protocol.Write(msg);
                         var reader = new NetDataReader(writer.Data, 1, writer.Length);

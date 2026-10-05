@@ -83,6 +83,10 @@ namespace SailwindCoop.Net
         MooringCarryState = 93,
         ChartRequest = 94,
         ChartState = 95,
+        DirtRequest = 96,
+        DirtState = 97,
+        OrbRequest = 98,
+        OrbState = 99,
         InstrumentRequest = 100,
         InstrumentState = 101,
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
@@ -1514,11 +1518,13 @@ namespace SailwindCoop.Net
     public sealed class WindRequestMsg : INetMessage
     {
         public Vector3 Wind;
+        public string OrbId = "";
+        public uint RequestId;
 
         public MsgType Type => MsgType.WindRequest;
 
-        public void Serialize(NetDataWriter w) { w.PutVector3(Wind); }
-        public void Deserialize(NetDataReader r) { Wind = r.GetVector3(); }
+        public void Serialize(NetDataWriter w) { w.PutVector3(Wind); w.Put(OrbId); w.Put(RequestId); }
+        public void Deserialize(NetDataReader r) { Wind = r.GetVector3(); OrbId = r.GetString(); RequestId = r.GetUInt(); }
     }
 
     // ---------------------------------------------------------------------

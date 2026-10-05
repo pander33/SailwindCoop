@@ -30,6 +30,7 @@ namespace SailwindCoop.Runtime
         public LightSync Lights { get; private set; }
         public ItemSync Items { get; private set; }
         public ChartSync Charts { get; private set; }
+        public DirtSync Dirt { get; private set; }
         public InteractionSync Interactions { get; private set; }
         public WindTotemSync WindTotem { get; private set; }
         public ShopSync Shop { get; private set; }
@@ -140,6 +141,7 @@ namespace SailwindCoop.Runtime
             Lights = new LightSync(Net);
             Items = new ItemSync(Net);
             Charts = new ChartSync(Net);
+            Dirt = new DirtSync(Net);
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
             Shop = new ShopSync(Net);
@@ -171,6 +173,8 @@ namespace SailwindCoop.Runtime
             InputScopePatches.Apply(_harmony);
             ItemInstrumentPatches.Apply(_harmony);
             ChartPatches.Apply(_harmony);
+            DirtPatches.Apply(_harmony);
+            OrbCarryPatches.Apply(_harmony);
             InstrumentPosePatches.Apply(_harmony);
             AnchorPatches.Apply(_harmony);
             try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ItemOperationPatches.Apply(_harmony); ItemSimulationPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
@@ -211,6 +215,7 @@ namespace SailwindCoop.Runtime
                 Items.ClearRemoteActor(netId);
                 Anchor.ClearRemoteActor(netId);
                 Mooring.ClearRemoteActor(netId);
+                WindTotem.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
                 Pause.Release(netId);
@@ -298,6 +303,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Items.Tick", () => Items.Tick(_dt)),
                 new SyncStep("Items.ApplyRemote", () => Items.ApplyRemote()),
                 new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
+                new SyncStep("Dirt.Tick", () => Dirt.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
                 new SyncStep("Interactions.Tick", () => Interactions.Tick(_dt)),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
@@ -439,6 +445,14 @@ namespace SailwindCoop.Runtime
                     Items.OnInstrumentRequest((InstrumentRequestMsg)msg, fromPeer); break;
                 case MsgType.InstrumentState:
                     Items.OnInstrumentState((InstrumentStateMsg)msg, fromPeer); break;
+                case MsgType.OrbRequest:
+                    WindTotem.OnOrbRequest((OrbRequestMsg)msg, fromPeer); break;
+                case MsgType.OrbState:
+                    WindTotem.OnOrbState((OrbStateMsg)msg, fromPeer); break;
+                case MsgType.DirtRequest:
+                    Dirt.OnRequest((DirtRequestMsg)msg, fromPeer); break;
+                case MsgType.DirtState:
+                    Dirt.OnState((DirtStateMsg)msg, fromPeer); break;
                 case MsgType.ChartRequest:
                     Charts.OnRequest((ChartRequestMsg)msg, fromPeer); break;
                 case MsgType.ChartState:
@@ -501,7 +515,7 @@ namespace SailwindCoop.Runtime
                             case ResyncDomain.Anchor: Anchor.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Mooring: Mooring.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Damage: Damage.Resync(resync.BoatIndex); break;
-                            case ResyncDomain.World: Storms.Resync(); Items.ResyncInstruments(); break;
+                            case ResyncDomain.World: Storms.Resync(); WindTotem.ResyncOrbs(); Items.ResyncInstruments(); break;
                         }
                     }
                     break;
@@ -797,6 +811,7 @@ namespace SailwindCoop.Runtime
             Interactions?.Clear();
             Items?.Clear();
             Charts?.Clear();
+            Dirt?.Clear();
             Lights?.Clear();
             Damage?.Clear();
             Mooring?.Clear();
@@ -912,6 +927,7 @@ namespace SailwindCoop.Runtime
             Interactions.Clear();
             Items.Clear();
             Charts.Clear();
+            Dirt.Clear();
             Lights.Clear();
             Damage.Clear();
             Mooring.Clear();
