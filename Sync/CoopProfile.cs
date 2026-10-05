@@ -261,7 +261,7 @@ namespace SailwindCoop.Sync
             dst.tobaccoWhite = src.tobaccoWhite; dst.tobaccoGreen = src.tobaccoGreen;
             dst.tobaccoBlack = src.tobaccoBlack; dst.tobaccoBrown = src.tobaccoBrown;
 
-            if (src.savedMissions != null) dst.savedMissions = src.savedMissions;
+            // savedMissions stay the host's: the guest journal is only a mirror of the host journal.
             if (src.loggedMissions != null) dst.loggedMissions = src.loggedMissions;
             if (src.currencyDayLogs != null) dst.currencyDayLogs = src.currencyDayLogs;
         }

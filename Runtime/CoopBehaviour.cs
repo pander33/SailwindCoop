@@ -584,6 +584,7 @@ namespace SailwindCoop.Runtime
                             Shipyard.SendBaseline(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
+                            Missions.SendBaseline(fromPeer);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         }
                         Pause.Release(netId);

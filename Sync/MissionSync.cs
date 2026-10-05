@@ -23,11 +23,6 @@ namespace SailwindCoop.Sync
 
         private readonly CoopNet _net;
         private string _lastSig = null;     // host: last broadcast journal signature
-        private string _lastApplied = null; // client: last applied journal signature
-        private float _heartbeat;
-
-        /// <summary>Resend the journal this often so a freshly-joined client gets the current missions.</summary>
-        public float HeartbeatSeconds = 4f;
 
         public string MissionText { get; private set; } = "—";
 
@@ -40,14 +35,20 @@ namespace SailwindCoop.Sync
         public void Tick(float dt)
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
-            _heartbeat += dt;
             string sig = BuildSignature(out var entries);
-            bool beat = _heartbeat >= HeartbeatSeconds;
-            if (sig == _lastSig && !beat) return;
-            _heartbeat = 0f;
+            if (sig == _lastSig) return;
             _lastSig = sig;
             _net.Broadcast(new MissionJournalMsg { Missions = entries }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             MissionText = entries.Length + " missions (host)";
+        }
+
+        /// <summary>Host: the journal for one client whose world has just loaded. The broadcast in
+        /// <see cref="Tick"/> is change-only, and the load replaces whatever arrived before it.</summary>
+        public void SendBaseline(LiteNetLib.NetPeer peer)
+        {
+            if (_net.Role != Role.Host || peer == null) return;
+            BuildSignature(out var entries);
+            peer.Send(new MissionJournalMsg { Missions = entries }, LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
 
         // -----------------------------------------------------------------
@@ -81,7 +82,11 @@ namespace SailwindCoop.Sync
                         DeliveredGoods = d.deliveredGoods,
                         DueDay = d.dueDay,
                     });
-                    sb.Append(d.missionIndex).Append(':').Append(d.deliveredGoods).Append(':').Append(d.dueDay).Append('|');
+                    // Every sent field: a slot refilled between two ticks must not look unchanged.
+                    sb.Append(d.missionIndex).Append(':').Append(d.originPort).Append(':').Append(d.destinationPort).Append(':')
+                        .Append(d.goodPrefabIndex).Append(':').Append(d.goodCount).Append(':').Append(d.totalPrice).Append(':')
+                        .Append(d.insuranceLevel).Append(':').Append(d.distance).Append(':')
+                        .Append(d.deliveredGoods).Append(':').Append(d.dueDay).Append('|');
                 }
             }
             entries = list.ToArray();
@@ -95,12 +100,8 @@ namespace SailwindCoop.Sync
         public void OnMissionJournal(MissionJournalMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
-            var sb = new StringBuilder();
-            foreach (var e in msg.Missions)
-                sb.Append(e.MissionIndex).Append(':').Append(e.DeliveredGoods).Append(':').Append(e.DueDay).Append('|');
-            string sig = sb.ToString();
-            if (sig == _lastApplied) return;
-            _lastApplied = sig;
+            // Always applied: the host sends only a change or the post-load baseline, and a world load
+            // may have replaced the local journal since the previous one.
             ApplyJournal(msg.Missions);
             MissionText = msg.Missions.Length + " missions (mirror)";
         }
@@ -182,7 +183,6 @@ namespace SailwindCoop.Sync
                     e.GoodCount, e.TotalPrice, e.InsuranceLevel, e.Distance, 0, e.DueDay);
                 var mission = new Mission(data);
                 PlayerMissions.AcceptMission(mission);   // host vanilla: assigns slot, spawns goods, reduces demand
-                _heartbeat = HeartbeatSeconds;           // force a journal resend next Tick
                 Plugin.Logger.LogInfo("[MissionSync] in accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionAccept: " + ex.Message); }
@@ -197,7 +197,6 @@ namespace SailwindCoop.Sync
                 if (PlayerMissions.missions != null && idx >= 0 && idx < PlayerMissions.missions.Length && PlayerMissions.missions[idx] != null)
                 {
                     PlayerMissions.AbandonMission(idx);
-                    _heartbeat = HeartbeatSeconds;
                     Plugin.Logger.LogInfo("[MissionSync] in abandon slot=" + idx);
                 }
                 else Plugin.Logger.LogInfo("[MissionSync] in abandon: empty slot " + idx);
@@ -254,7 +253,6 @@ namespace SailwindCoop.Sync
                                   "\n( " + (mission.GetDeliveredCount() + 1) + " / " + mission.goodCount + " )";
                     good.Deliver();                          // reward reaches clients via PostDeliver
                     ItemSync.Instance?.HostRefreshNextTick(); // despawn on clients
-                    _heartbeat = HeartbeatSeconds;           // resend the journal next Tick
                     fromPeer?.Send(new MissionDeliverResultMsg { Delivered = true, Text = text },
                                    LiteNetLib.DeliveryMethod.ReliableOrdered);
                     Plugin.Logger.LogInfo("[MissionSync] in deliver ok item=" + msg.InstanceId + " port=" + msg.PortIndex);
@@ -340,8 +338,6 @@ namespace SailwindCoop.Sync
         public void Clear()
         {
             _lastSig = null;
-            _lastApplied = null;
-            _heartbeat = 0f;
             _lastDeliverId = 0;
             MissionText = "—";
         }
