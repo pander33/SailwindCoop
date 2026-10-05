@@ -152,6 +152,20 @@ namespace SailwindCoop.Runtime
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
+            // Both are otherwise silent: an unanswered request used to freeze its object for the session,
+            // and an oversized snapshot used to fail every send.
+            ItemStateGate.Expired = request =>
+            {
+                if (Net.Role == Role.Client && Plugin.Logger.ShouldReport(ref _gateExpiries))
+                    Plugin.Logger.LogWarning("[Coop] role=Client request #" + request + " got no host reply within " +
+                        ItemStateGate.PendingTimeoutMs + " ms; host state is accepted again (occurrence #" + _gateExpiries + ")");
+            };
+            PeerExt.Oversized = (type, bytes) =>
+            {
+                if (Plugin.Logger.ShouldReport(ref _oversizedPackets))
+                    Plugin.Logger.LogWarning("[Coop] role=" + Net.Role + " " + type + " is " + bytes +
+                        " bytes, above one unreliable datagram; sent reliably (occurrence #" + _oversizedPackets + ")");
+            };
             AnchorPatches.Apply(_harmony);
             try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
@@ -491,6 +505,7 @@ namespace SailwindCoop.Runtime
         /// "save the world while the clock may be stopped" path at once.
         /// </summary>
         private int _streamingSaveEpoch;
+        private int _gateExpiries, _oversizedPackets;
 
         /// <summary>Ceiling on how long one join may hold the queue. Generous: the inner routine can
         /// legitimately spend 15 s waiting for a save window plus 10 s for the write, then transfer.</summary>

@@ -232,6 +232,7 @@ namespace SailwindCoop.Net
 
         public void Stop()
         {
+            BoatGenerationBook.Session.Clear();
             if (_net != null)
             {
                 _net.Stop();
@@ -397,6 +398,7 @@ namespace SailwindCoop.Net
             // frame's tick, not just this packet — so nothing is allowed out of here.
             try
             {
+                ReceivingUnreliable = method == DeliveryMethod.Unreliable;
                 DispatchReceive(peer, reader);
             }
             catch (Exception e)
@@ -410,14 +412,46 @@ namespace SailwindCoop.Net
                 // the same way and still writes a bounded number of lines while logging is off.
                 Plugin.Logger.ReportError("[CoopNet] Receive handler failed", e, ref _receiveFailures);
             }
+            // Packets replayed later from a deferred queue are not "arriving unreliable".
+            finally { ReceivingUnreliable = false; }
         }
 
         private Runtime.CoopLog.Repeat _receiveFailures;
         private int _unknownTypeCount;
+        private int _misdirectedCount;
+
+        /// <summary>True while the packet being dispatched arrived Unreliable, i.e. its sender already
+        /// tolerates losing it. Deferred queues use it to keep only the newest such snapshot.</summary>
+        public bool ReceivingUnreliable { get; private set; }
 
         private void DispatchReceive(NetPeer peer, NetPacketReader reader)
         {
             MsgType type = Protocol.PeekType(reader);
+            bool handshaked;
+            if (Role == Role.Host)
+            {
+                if (!_sessions.TryGetValue(peer.Id, out var session)) return;
+                handshaked = session.HandshakeDone;
+            }
+            else if (Role == Role.Client)
+            {
+                if (peer != _hostPeer) return;
+                handshaked = State == LinkState.Connected;
+            }
+            else return;
+            if (!MessageDirection.Accept(type, Role == Role.Host, handshaked))
+            {
+                // Not routed through _log: that sink is silent with logging off, and a wrong row in
+                // MessageDirection would then look like a feature that simply does nothing.
+                // Except a joining client: the host's unreliable snapshots routinely overtake the
+                // reliable HelloAck, and dropping those is the expected outcome, not a fault.
+                bool joining = Role == Role.Client && !handshaked;
+                if (!joining && Plugin.Logger.ShouldReport(ref _misdirectedCount))
+                    Plugin.Logger.LogWarning("[CoopNet] role=" + Role + " dropped " + type + " from peer " + peer.Id +
+                         " handshaked=" + handshaked + " (occurrence #" + _misdirectedCount + ")");
+                return;
+            }
+
             INetMessage msg = Protocol.ReadBody(type, reader);
             if (msg == null)
             {

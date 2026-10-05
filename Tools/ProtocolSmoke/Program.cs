@@ -104,6 +104,7 @@ namespace ProtocolSmoke
                 }
             }
 
+            TestDirection(failures);
             if (failures.Count == 0)
             {
                 Console.WriteLine("Protocol smoke OK: " + messageTypes.Count + " message types, " + populated +
@@ -115,6 +116,38 @@ namespace ProtocolSmoke
             foreach (var failure in failures)
                 Console.Error.WriteLine(" - " + failure);
             return 1;
+        }
+
+        private static void TestDirection(List<string> failures)
+        {
+            foreach (MsgType type in Enum.GetValues(typeof(MsgType)))
+            {
+                MsgFlow flow = MessageDirection.Of(type);
+                if (type == MsgType.InteractRequest)
+                {
+                    if (flow != MsgFlow.None) failures.Add("MessageDirection: reserved InteractRequest must stay closed");
+                    continue;
+                }
+                if (flow == MsgFlow.None) { failures.Add("MessageDirection: " + type + " has no direction"); continue; }
+                // Nothing but the handshake itself may be read from a peer that has not finished it.
+                bool session = type == MsgType.Hello || type == MsgType.HelloAck || type == MsgType.Reject || type == MsgType.Disconnect;
+                if (!session && (MessageDirection.Accept(type, true, false) || MessageDirection.Accept(type, false, false)))
+                    failures.Add("MessageDirection: " + type + " accepted before handshake");
+                if (!session && flow == MsgFlow.ToHost && (!MessageDirection.Accept(type, true, true) || MessageDirection.Accept(type, false, true)))
+                    failures.Add("MessageDirection: " + type + " must reach only the host");
+                if (!session && flow == MsgFlow.ToClient && (MessageDirection.Accept(type, true, true) || !MessageDirection.Accept(type, false, true)))
+                    failures.Add("MessageDirection: " + type + " must reach only a client");
+                if (!session && flow == MsgFlow.Both && (!MessageDirection.Accept(type, true, true) || !MessageDirection.Accept(type, false, true)))
+                    failures.Add("MessageDirection: " + type + " must reach both roles");
+            }
+            if (!MessageDirection.Accept(MsgType.Hello, true, false) || MessageDirection.Accept(MsgType.Hello, true, true) ||
+                MessageDirection.Accept(MsgType.Hello, false, false))
+                failures.Add("MessageDirection: Hello is a single host-side handshake step");
+            if (MessageDirection.Accept(MsgType.HelloAck, true, true) || !MessageDirection.Accept(MsgType.HelloAck, false, false) ||
+                MessageDirection.Accept(MsgType.Reject, true, false) || !MessageDirection.Accept(MsgType.Reject, false, false))
+                failures.Add("MessageDirection: HelloAck/Reject are host replies");
+            if (MessageDirection.Accept((MsgType)250, true, true) || MessageDirection.Accept((MsgType)250, false, true))
+                failures.Add("MessageDirection: unknown type accepted");
         }
 
         private static object Sample(Type type)

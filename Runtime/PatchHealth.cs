@@ -22,6 +22,12 @@ namespace SailwindCoop.Runtime
 
         private static readonly Dictionary<string, Entry> Entries = new Dictionary<string, Entry>();
 
+        internal static void Report(string domain, PatchHookCatalog catalog)
+            => Report(domain, catalog.Ready, catalog.Total, catalog.Detail);
+
+        internal static PatchHealthState StateOf(string domain)
+            => Entries.TryGetValue(domain, out var entry) ? entry.State : PatchHealthState.Unknown;
+
         public static void Report(string domain, int ok, int total, string detail = null)
         {
             PatchHealthState state;

@@ -133,9 +133,21 @@ namespace SailwindCoop.Net
     /// <summary>Convenience send helpers over a LiteNetLib peer.</summary>
     public static class PeerExt
     {
+        /// <summary>Diagnostics: (type, bytes) of an Unreliable packet that did not fit one datagram.</summary>
+        public static System.Action<MsgType, int> Oversized;
+
         public static void Send(this NetPeer peer, INetMessage msg, DeliveryMethod method)
         {
-            peer.Send(Protocol.Write(msg), method);
+            var writer = Protocol.Write(msg);
+            // LiteNetLib throws on an Unreliable payload above the peer MTU and only fragments reliable
+            // channels. A snapshot that outgrew one datagram (a large hull's ControlState) is still
+            // delivered, in order, instead of failing every send.
+            if (method == DeliveryMethod.Unreliable && writer.Length > peer.GetMaxSinglePacketSize(method))
+            {
+                method = DeliveryMethod.ReliableOrdered;
+                try { Oversized?.Invoke(msg.Type, writer.Length); } catch { }
+            }
+            peer.Send(writer, method);
         }
     }
 }

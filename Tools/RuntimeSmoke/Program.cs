@@ -8,6 +8,9 @@ using SailwindCoop.Runtime;
 using BepInEx.Logging;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using HarmonyLib;
 
 internal static class Program
 {
@@ -195,6 +198,57 @@ internal static class Program
                     Assert(InteractionContext.HasInput, "duplicate cleanup damaged parent");
                 }
                 Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "scope leaked");
+            });
+            Test("Harmony input finalizer restores origin and preserves vanilla fault", () => {
+                var harmony = new Harmony("sailwind.runtime-smoke.input-scope");
+                try {
+                    harmony.Patch(typeof(InputFixture).GetMethod(nameof(InputFixture.Input)),
+                        prefix: new HarmonyMethod(typeof(Program).GetMethod(nameof(BeginFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)),
+                        postfix: new HarmonyMethod(typeof(Program).GetMethod(nameof(EndFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)),
+                        finalizer: new HarmonyMethod(typeof(Program).GetMethod(nameof(EndFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)));
+                    new InputFixture().Input(false);
+                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "normal call leaked");
+                    ExpectFailure(() => new InputFixture().Input(true));
+                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "original fault leaked");
+                } finally { harmony.UnpatchSelf(); }
+            });
+            Test("hook catalog rejects wrong overload and inherited empty fallback", () => {
+                var hooks = new PatchHookCatalog(); int installed = 0;
+                Assert(hooks.Install(typeof(HookFixture), "Action", Type.EmptyTypes, m => installed++), "no-arg missing");
+                Assert(hooks.Install(typeof(HookFixture), "Action", Type.EmptyTypes, m => installed++), "duplicate changed result");
+                Assert(!hooks.Install(typeof(HookFixture), "Action", new[] { typeof(object) }, m => installed++), "empty base overload counted");
+                PatchHealth.Report("smoke signatures", hooks);
+                Assert(installed == 1 && hooks.Installed == 1 && hooks.Total == 2 && hooks.Ready == 1, "duplicate/denominator drift");
+                Assert(PatchHealth.StateOf("smoke signatures") == PatchHealthState.Partial &&
+                    hooks.Detail.Contains("HookFixture.Action(Object)"), "missing signature hidden");
+            });
+            Test("hook installation failure and pending relay stay visible", () => {
+                var hooks = new PatchHookCatalog();
+                Assert(!hooks.Install(typeof(HookFixture), "Action", Type.EmptyTypes,
+                    m => { throw new InvalidOperationException("installation fault"); }), "failure counted ready");
+                hooks.Inspect(typeof(SleepEntryFixture), "SleepEntryFixture", "OnAltActivate", Type.EmptyTypes, "T10: request pending");
+                PatchHealth.Report("smoke coverage", hooks);
+                Assert(hooks.Ready == 0 && hooks.Total == 2 && hooks.Detail.Contains("Failed HookFixture.Action()") &&
+                    hooks.Detail.Contains("Pending SleepEntryFixture.OnAltActivate()"), "failure/pending conflated");
+                Assert(PatchHealth.StateOf("smoke coverage") != PatchHealthState.Ok, "false green coverage");
+            });
+            Test("no-arg sleep prefix blocks before pointer overload without blocking pickup", () => {
+                var harmony = new Harmony("sailwind.runtime-smoke.sleep-entry");
+                try
+                {
+                    var hooks = new PatchHookCatalog();
+                    hooks.Install(typeof(SleepEntryFixture), "OnAltActivate", Type.EmptyTypes,
+                        m => harmony.Patch(m, prefix: new HarmonyMethod(typeof(Program).GetMethod(
+                            nameof(BlockFixtureSleep), BindingFlags.Static | BindingFlags.NonPublic))));
+                    Assert(hooks.Ready == 1, hooks.Detail);
+                    var bed = new SleepEntryFixture();
+                    _fixtureClient = true;
+                    bed.Pickup(); bed.OnAltActivate(); bed.OnAltActivate(new object());
+                    Assert(bed.SleepEntries == 0 && bed.Pickups == 1, "sleep ran before pointer guard / pickup blocked");
+                    _fixtureClient = false; bed.OnAltActivate();
+                    Assert(bed.SleepEntries == 1, "host/offline sleep blocked");
+                }
+                finally { _fixtureClient = false; harmony.UnpatchSelf(); }
             });
             Test("anchor drop waits for its own latest reply", () => {
                 var gate = new AnchorStateGate();
@@ -428,6 +482,29 @@ internal static class Program
         Console.WriteLine("Runtime smoke: " + _passed + " passed, " + _failed + " failed (.NET Framework; Unity Mono still needs in-game verification)");
         return _failed == 0 ? 0 : 1;
     }
+    private class HookBase { public virtual void Action(object pointer) { } }
+    private sealed class InputFixture
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void Input(bool fail)
+        {
+            Assert(InteractionContext.HasInput, "prefix didn't set source");
+            if (fail) throw new InvalidOperationException("vanilla input fault");
+        }
+    }
+    private static void BeginFixtureInput(out InteractionContext.Scope __state)
+        => __state = InteractionContext.Begin(InteractionSource.LocalInput);
+    private static void EndFixtureInput(InteractionContext.Scope __state) => __state?.Dispose();
+    private sealed class HookFixture : HookBase { public void Action() { } }
+    private sealed class SleepEntryFixture
+    {
+        internal int SleepEntries, Pickups;
+        [MethodImpl(MethodImplOptions.NoInlining)] public void OnAltActivate() { SleepEntries++; }
+        [MethodImpl(MethodImplOptions.NoInlining)] public void OnAltActivate(object pointer) { }
+        public void Pickup() { Pickups++; }
+    }
+    private static bool _fixtureClient;
+    private static bool BlockFixtureSleep() => PatchGuard.Prefix(() => !_fixtureClient, e => { });
     private static void Child(string stage, string path)
     {
         var info = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,

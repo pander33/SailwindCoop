@@ -15,6 +15,7 @@
   <ItemGroup>
     <Compile Include="..\..\Net\Messages.cs" Link="Net\Messages.cs" />
     <Compile Include="..\..\Net\Protocol.cs" Link="Net\Protocol.cs" />
+    <Compile Include="..\..\Net\MessageDirection.cs" Link="Net\MessageDirection.cs" />
   </ItemGroup>
 
   <ItemGroup>
