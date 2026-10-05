@@ -122,7 +122,8 @@ namespace ProtocolSmoke
                     EntranceCommitted = true, Entrance = new SleepAddress { Source = SleepSource.Onsen, Path = "island/onsen[1]" } },
                 new SleepRequestMsg { RequestId = 104, CycleActor = 0x12345678, CycleId = 91, Phase = SleepPhase.Sleeping,
                     Address = new SleepAddress { Source = SleepSource.ItemBed, InstanceId = 55, PrefabIndex = 12, Timeskip = true } },
-                new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage }
+                new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage },
+                new HouseDoorMsg { Door = 0x2A03, Open = true }
             })
                 CheckPopulatedMessage(msg, failures, ref populated, ref truncated);
 

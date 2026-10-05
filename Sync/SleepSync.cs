@@ -76,7 +76,8 @@ namespace SailwindCoop.Sync
 				Submit(new SleepRequestMsg { RequestId = _localCycle, Phase = SleepPhase.Begin, Address = address });
 			}
 
-			address.Timeskip = GameState.sleepingInTavern || CurrentBoatMoored();
+			// Same three cases as native FallAsleep; ashore (a house bed, game 0.39) there is no boat.
+			address.Timeskip = GameState.sleepingInTavern || CurrentBoatMoored() || GameState.currentBoat == null;
 			_nativeActor = true;
 			GameState.sleeping = true;
 			GameState.sleepingInTavern = address.Source == SleepSource.Tavern;

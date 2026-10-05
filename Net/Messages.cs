@@ -93,6 +93,7 @@ namespace SailwindCoop.Net
         RefitState = 103,
         SleepRequest = 104,     // client -> host : addressed absolute shared-sleep transition
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
+        HouseDoor = 106,        // client -> host : requested target; host -> clients : island house door target
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
 
@@ -1786,6 +1787,18 @@ namespace SailwindCoop.Net
     }
 
     public enum ResyncDomain : byte { Controls, Anchor, Mooring, Damage, World }
+
+    /// <summary>ReliableOrdered. Absolute open/closed target of one island house door. A client sends
+    /// it to the host after a real click; the host sends it to every client. Door = scene index of
+    /// the door's SaveableObject (high byte) and its ordinal among that object's doors (low byte).</summary>
+    public sealed class HouseDoorMsg : INetMessage
+    {
+        public ushort Door;
+        public bool Open;
+        public MsgType Type => MsgType.HouseDoor;
+        public void Serialize(NetDataWriter writer) { writer.Put(Door); writer.Put(Open); }
+        public void Deserialize(NetDataReader reader) { Door = reader.GetUShort(); Open = reader.GetBool(); }
+    }
 
     /// <summary>Client -> host, ReliableOrdered. Host state streams are sent only when their value
     /// changes, so a receiver that just bound a boat (join, hull rebuild) asks for the current value

@@ -70,6 +70,7 @@ namespace SailwindCoop.Sync
         {
             var hooks = new PatchHookCatalog();
             Install(harmony, hooks, typeof(ShipItemKnife), "CutFood", new[] { typeof(FoodState) });
+            Install(harmony, hooks, typeof(ShipItemTobaccoPack), "CutPack", Type.EmptyTypes);
             Install(harmony, hooks, typeof(ShipItemElixir), "OnAltActivate", Type.EmptyTypes);
             Install(harmony, hooks, typeof(ShipItemRandomElixir), "OnAltActivate", Type.EmptyTypes);
             Install(harmony, hooks, typeof(ShipItemOakum), "OnAltActivate", Type.EmptyTypes);
@@ -113,13 +114,30 @@ namespace SailwindCoop.Sync
                         !InteractionContext.HasInput && !completion && !InteractionContext.Suppressed) { run = false; return; }
                 }
                 state = ItemOperationCapture.Begin(__originalMethod.DeclaringType.Name + "." + name,
-                    __originalMethod.DeclaringType == typeof(ShipItemKnife), completion);
+                    __originalMethod.DeclaringType == typeof(ShipItemKnife) ||
+                    __originalMethod.DeclaringType == typeof(ShipItemTobaccoPack), completion);
             }, Report);
             __state = state;
             return run;
         }
         private static void FinishOperation(ItemOperationCapture.Scope __state, MethodBase __originalMethod)
-            => PatchGuard.Run(() => { if (__state != null && __originalMethod.Name == "FinishCast") ItemOperationCapture.TotemEffect(); __state?.Dispose(); }, Report);
+            => PatchGuard.Run(() => {
+                if (__state != null && __originalMethod.Name == "FinishCast") ItemOperationCapture.TotemEffect();
+                if (__state != null && __originalMethod.Name == "CutPack") RegisterCreated(__state);
+                __state?.Dispose();
+            }, Report);
+        // CutPack, unlike CutFood, leaves its tobacco without an instance id; the item layer
+        // addresses items by that id, so assign it before the operation snapshot is taken.
+        private static void RegisterCreated(ItemOperationCapture.Scope scope)
+        {
+            if (scope.Original == null) return;
+            foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            {
+                if (item == null || scope.Original.Contains(item.GetInstanceID())) continue;
+                var saveable = item.GetComponent<SaveablePrefab>();
+                if (saveable != null && saveable.instanceId == 0 && item.sold) saveable.RegisterToSave();
+            }
+        }
         private static void PreDestroy(ShipItem __instance) => PatchGuard.Run(() => ItemOperationCapture.Consumed(__instance), Report);
         private static void PostRainbow() => PatchGuard.Run(ItemOperationCapture.RainbowEffect, Report);
     }

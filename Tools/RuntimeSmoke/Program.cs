@@ -263,7 +263,7 @@ internal static class Program
                 }
                 finally { _fixtureClient = false; harmony.UnpatchSelf(); }
             });
-            Test("installed game matches all 93 types and 182 declared input signatures", VerifyGameInputCatalog);
+            Test("installed game matches all 95 types and 184 declared input signatures", VerifyGameInputCatalog);
             Test("installed game sleep and item actions use the catalogued overloads", VerifyGameActionEntries);
             Test("installed game recipe/component fields match typed adapters", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
@@ -754,7 +754,7 @@ internal static class Program
                 }
             }
             Assert(actual.SetEquals(InteractionActionCatalog.Types), "type inventory differs from installed game");
-            Assert(actual.Count == 93 && InteractionActionCatalog.Inputs.Length == 182, "audited baseline changed");
+            Assert(actual.Count == 95 && InteractionActionCatalog.Inputs.Length == 184, "audited baseline changed");
             foreach (var input in InteractionActionCatalog.Inputs)
                 Assert(Declares(types[input.TypeName], input), input.TypeName + "." + input.Method + " signature absent");
         }
@@ -765,7 +765,7 @@ internal static class Program
         using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
         {
             var types = game.MainModule.Types.ToDictionary(t => t.FullName);
-            Assert(ItemActionCatalog.Routes.Length == 29 &&
+            Assert(ItemActionCatalog.Routes.Length == 30 &&
                 ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltHeld" && r.Input.Parameters.Length == 0) == 9 &&
                 ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltActivate" && r.Input.Parameters.Length == 0) == 19,
                 "held/alt catalog incomplete");

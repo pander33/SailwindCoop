@@ -33,6 +33,7 @@ namespace SailwindCoop.Runtime
         public DirtSync Dirt { get; private set; }
         public InteractionSync Interactions { get; private set; }
         public WindTotemSync WindTotem { get; private set; }
+        public HouseDoorSync HouseDoors { get; private set; }
         public ShopSync Shop { get; private set; }
         public WeatherStormSync Storms { get; private set; }
         public SleepSync Sleep { get; private set; }
@@ -144,6 +145,7 @@ namespace SailwindCoop.Runtime
             Dirt = new DirtSync(Net);
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
+            HouseDoors = new HouseDoorSync(Net);
             Shop = new ShopSync(Net);
             Storms = new WeatherStormSync(Net);
             Sleep = new SleepSync(Net);
@@ -181,6 +183,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Dirt textures", () => DirtPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shipyard refit", () => ShipyardRefitPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Wind orb carry", () => OrbCarryPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("House doors", () => HouseDoorPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Instrument poses", () => InstrumentPosePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Anchor", () => AnchorPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Interactions", () => InteractionPatches.Apply(_harmony), patchFault);
@@ -325,6 +328,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
                 new SyncStep("Dirt.Tick", () => Dirt.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
+                new SyncStep("HouseDoors.Tick", () => HouseDoors.Tick(_dt)),
                 new SyncStep("Interactions.Tick", () => Interactions.Tick(_dt)),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
                 new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
@@ -470,6 +474,8 @@ namespace SailwindCoop.Runtime
                     Items.OnInstrumentState((InstrumentStateMsg)msg, fromPeer); break;
                 case MsgType.OrbRequest:
                     WindTotem.OnOrbRequest((OrbRequestMsg)msg, fromPeer); break;
+                case MsgType.HouseDoor:
+                    HouseDoors.OnHouseDoor((HouseDoorMsg)msg, fromPeer); break;
                 case MsgType.OrbState:
                     WindTotem.OnOrbState((OrbStateMsg)msg, fromPeer); break;
                 case MsgType.DirtRequest:
@@ -585,6 +591,7 @@ namespace SailwindCoop.Runtime
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
+                            HouseDoors.SendBaseline(fromPeer);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         }
                         Pause.Release(netId);
@@ -976,6 +983,7 @@ namespace SailwindCoop.Runtime
             Sleep.Clear();
             Shop.Clear();
             WindTotem.Clear();
+            HouseDoors.Clear();
             Interactions.Clear();
             Items.Clear();
             Charts.Clear();

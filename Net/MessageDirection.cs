@@ -89,6 +89,7 @@ namespace SailwindCoop.Net
                 case MsgType.BoatPurchase:
                 case MsgType.AvatarChange:
                 case MsgType.RodState:
+                case MsgType.HouseDoor:
                     return MsgFlow.Both;
 
                 default:

@@ -36,6 +36,7 @@ namespace SailwindCoop.Sync
             "GPButtonDayLogDay",
             "GPButtonDockMooring",
             "GPButtonExtraMenus",
+            "GPButtonHouseDoor",
             "GPButtonInterface",
             "GPButtonInventorySlot",
             "GPButtonKeybinding",
@@ -102,6 +103,7 @@ namespace SailwindCoop.Sync
             "ShipItemStoveFuel",
             "ShipItemTea",
             "ShipItemTobacco",
+            "ShipItemTobaccoPack",
             "ShipItemTotem",
             "ShipyardButton",
             "ShipyardDocuments",
@@ -151,6 +153,7 @@ namespace SailwindCoop.Sync
             new Input("GPButtonDayLogDay", "OnActivate"),
             new Input("GPButtonDockMooring", "OnItemClick", "PickupableItem"),
             new Input("GPButtonExtraMenus", "OnActivate"),
+            new Input("GPButtonHouseDoor", "OnActivate"),
             new Input("GPButtonInterface", "OnActivate"),
             new Input("GPButtonInventorySlot", "OnActivate"),
             new Input("GPButtonInventorySlot", "OnActivate", "GoPointer"),
@@ -281,6 +284,7 @@ namespace SailwindCoop.Sync
             new Input("ShipItemStove", "OnItemClick", "PickupableItem"),
             new Input("ShipItemStove", "ExtraLateUpdate"),
             new Input("ShipItemTea", "OnItemClick", "PickupableItem"),
+            new Input("ShipItemTobaccoPack", "OnAltActivate", "GoPointer"),
             new Input("ShipItemTotem", "OnAltHeld"),
             new Input("ShipItemTotem", "ExtraLateUpdate"),
             new Input("ShipyardButton", "ExtraLateUpdate"),
@@ -344,6 +348,7 @@ namespace SailwindCoop.Sync
             new Route(new InteractionActionCatalog.Input("ShipItemSoup", "OnAltActivate"), "Shop", "Only unsold shop branch; recipe/drink is T5"),
             new Route(new InteractionActionCatalog.Input("ShipItemSoup", "OnAltHeld"), "Item results", "Compound soup use/recipe"),
             new Route(new InteractionActionCatalog.Input("ShipItemSpyglass", "OnAltActivate"), "Local", "Observer root pose; actor camera/zoom"),
+            new Route(new InteractionActionCatalog.Input("ShipItemTobaccoPack", "OnAltActivate", "GoPointer"), "Item results", "CutPack compound lifecycle; created tobacco gets ids"),
             new Route(new InteractionActionCatalog.Input("ShipItemTotem", "OnAltHeld"), "Item results", "FinishCast shared effect/resource")
         };
         internal static PatchHookCatalog Inspect(Assembly game)

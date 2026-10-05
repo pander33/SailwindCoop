@@ -64,6 +64,9 @@ namespace SailwindCoop.Sync
                 "ShipyardButton", "ShipyardDocuments", "GPButtonPurchaseBoat",
                 // player movement only; the resulting player pose is already local/player-sync
                 "BoatLadder", "GPButtonRatlines",
+                // island house door: the click stays local; the resulting open/closed target is
+                // carried by HouseDoorSync, not by generic button replay.
+                "GPButtonHouseDoor",
             };
 
         // PickupableItems that are actually shared ship mechanisms handled by a dedicated sync
