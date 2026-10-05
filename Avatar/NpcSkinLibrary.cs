@@ -71,13 +71,15 @@ namespace SailwindCoop.Avatar
 			int before = _skins.Count;
 			try
 			{
-				var found = UnityEngine.Object.FindObjectsOfType<CharacterCustomizer>();
+                var found = Resources.FindObjectsOfTypeAll<CharacterCustomizer>();
 				foreach (var cc in found)
 				{
-					if (cc == null || cc.gameObject == null) continue;
-					// Some NPCs are baked static "combiner" bodies without a live skeleton
-					// (e.g. AlAnkh) — useless both as template and as a parts key.
-					if (!HasLiveSkinnedBody(cc.gameObject)) continue;
+                    if (cc == null || cc.gameObject == null || !cc.gameObject.scene.IsValid()) continue;
+                    if (!HasLiveSkinnedBody(cc.gameObject))
+                    {
+                        Plugin.Logger?.LogInfo("[NpcSkins] Skipped '" + cc.gameObject.name + "': no enabled skinned mesh with bones");
+                        continue;
+                    }
 					CacheMaterial(cc.mat);
 					EnsureTemplate(cc);
 
@@ -160,9 +162,13 @@ namespace SailwindCoop.Avatar
 		private static string BuildKey(CharacterCustomizer cc)
 		{
 			var parts = new List<string>();
-			foreach (var smr in cc.GetComponentsInChildren<SkinnedMeshRenderer>(false))
+            foreach (var smr in cc.GetComponentsInChildren<SkinnedMeshRenderer>(true))
 			{
-				if (smr.gameObject.activeSelf) parts.Add(smr.gameObject.name);
+                if (!smr.enabled || smr.sharedMesh == null || smr.bones.Length == 0) continue;
+                bool activePart = true;
+                for (var t = smr.transform; t != cc.transform && t != null; t = t.parent)
+                    if (!t.gameObject.activeSelf) { activePart = false; break; }
+                if (activePart) parts.Add(smr.gameObject.name);
 			}
 			if (parts.Count == 0) return null;
 			parts.Sort(StringComparer.OrdinalIgnoreCase);
@@ -217,15 +223,12 @@ namespace SailwindCoop.Avatar
 		}
 
 		/// <summary>
-		/// Живое ли это модульное тело: есть включённый SkinnedMeshRenderer с мешем и нигде в
-		/// иерархии нет «combiner» (запечённый статичный NPC без рабочего скелета).
+        /// Есть ли skinned-меш с костями; имя вспомогательного узла не определяет пригодность rig.
 		/// </summary>
 		private static bool HasLiveSkinnedBody(GameObject go)
 		{
-			foreach (var t in go.GetComponentsInChildren<Transform>(true))
-				if (t.name.ToLowerInvariant().Contains("combiner")) return false;
-			foreach (var smr in go.GetComponentsInChildren<SkinnedMeshRenderer>(true))
-				if (smr.enabled && smr.sharedMesh != null) return true;
+            foreach (var smr in go.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                if (smr.enabled && smr.sharedMesh != null && smr.bones.Length > 0) return true;
 			return false;
 		}
 

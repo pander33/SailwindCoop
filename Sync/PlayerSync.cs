@@ -29,6 +29,7 @@ namespace SailwindCoop.Sync
             public float AnimTurn;
             public float AnimCrouch;
             public float AnimTargetSpeed;
+            public float NpcTargetSpeedMps;
             public float AnimTargetTurn;
             public float AnimTargetCrouch;
             public bool AnimMoving;
@@ -89,22 +90,41 @@ namespace SailwindCoop.Sync
         {
             /// <summary>Желаемая скорость походки, м/с (0 = стоим). Задаёт PlayerSync каждый кадр.</summary>
             public float TargetSpeedMps;
+            public float TargetCrouch;
+            public float TargetTurn;
+            public float TargetPitch;
+            public float TargetYaw;
             public bool Ready { get; private set; }
 
             private float _speed;
             private float _phase;
+            private float _crouch, _turn, _pitch, _yaw;
+            private Transform _neck, _head;
+            private Quaternion _qNeck, _qHead;
+            private float _crouchDepthY;
+            public float CrouchOffsetY => -_crouchDepthY * (1f - Mathf.Cos(60f * Mathf.Deg2Rad * _crouch));
             private Transform _spine, _legL, _legR, _kneeL, _kneeR, _armL, _armR, _elbowL, _elbowR;
             private Quaternion _qSpine, _qLegL, _qLegR, _qKneeL, _qKneeR, _qArmL, _qArmR, _qElbowL, _qElbowR;
 
             public void Setup()
             {
                 _spine = Find(transform, "Spine_01");
+                _neck = Find(transform, "Neck");
+                _head = Find(transform, "Head");
                 _legL = Find(transform, "UpperLeg_L"); _legR = Find(transform, "UpperLeg_R");
                 _kneeL = Find(transform, "LowerLeg_L"); _kneeR = Find(transform, "LowerLeg_R");
                 _armL = Find(transform, "Shoulder_L"); _armR = Find(transform, "Shoulder_R");
                 _elbowL = Find(transform, "Elbow_L"); _elbowR = Find(transform, "Elbow_R");
+                if (_legL != null && _legR != null && _kneeL != null && _kneeR != null)
+                {
+                    float thighLength = (Vector3.Distance(_legL.position, _kneeL.position) +
+                        Vector3.Distance(_legR.position, _kneeR.position)) * 0.5f;
+                    _crouchDepthY = transform.parent.InverseTransformVector(transform.up * (2f * thighLength)).magnitude;
+                }
 
                 if (_spine != null) _qSpine = _spine.localRotation;
+                if (_neck != null) _qNeck = _neck.localRotation;
+                if (_head != null) _qHead = _head.localRotation;
                 if (_legL != null) _qLegL = _legL.localRotation;
                 if (_legR != null) _qLegR = _legR.localRotation;
                 if (_kneeL != null) _qKneeL = _kneeL.localRotation;
@@ -133,21 +153,58 @@ namespace SailwindCoop.Sync
 
                 float dt = Mathf.Max(Time.deltaTime, 1e-4f);
                 _speed = Mathf.Lerp(_speed, TargetSpeedMps, 1f - Mathf.Exp(-8f * dt));
+                float poseBlend = 1f - Mathf.Exp(-10f * dt);
+                _crouch = Mathf.Lerp(_crouch, TargetCrouch, poseBlend);
+                _turn = Mathf.Lerp(_turn, TargetTurn, poseBlend);
+                _pitch = Mathf.Lerp(_pitch, TargetPitch, poseBlend);
+                _yaw = Mathf.Lerp(_yaw, TargetYaw, poseBlend);
                 float blend = Mathf.Clamp01(_speed / WalkFullSpeed);
-                _phase = Mathf.Repeat(_phase + _speed * StrideRadPerM * dt, 2f * Mathf.PI);
+                // Ограничиваем каденс бега; реальная скорость остаётся независимой от хода лодки.
+                _phase = Mathf.Repeat(_phase + Mathf.Min(_speed, 3.5f) * StrideRadPerM * dt, 2f * Mathf.PI);
+                float stride = blend * Mathf.Lerp(1f, 0.55f, _crouch);
 
                 float s = Mathf.Sin(_phase);
                 float sOpp = Mathf.Sin(_phase + Mathf.PI);
 
-                Swing(_legL, _qLegL, Vector3.up, LegAmp * blend * s);
-                Swing(_legR, _qLegR, Vector3.up, LegAmp * blend * sOpp);
-                Swing(_kneeL, _qKneeL, Vector3.back, KneeAmp * blend * Mathf.Max(0f, Mathf.Sin(_phase + KneePhase)));
-                Swing(_kneeR, _qKneeR, Vector3.back, KneeAmp * blend * Mathf.Max(0f, Mathf.Sin(_phase + Mathf.PI + KneePhase)));
+                Swing(_legL, _qLegL, Vector3.up, 0f);
+                Swing(_legR, _qLegR, Vector3.up, 0f);
+                _legL.Rotate(transform.right, LegAmp * stride * s, Space.World);
+                _legR.Rotate(transform.right, LegAmp * stride * sOpp, Space.World);
+                Swing(_kneeL, _qKneeL, Vector3.back, 0f);
+                Swing(_kneeR, _qKneeR, Vector3.back, 0f);
+                if (_kneeL != null) _kneeL.Rotate(transform.right, KneeAmp * stride * Mathf.Max(0f, Mathf.Sin(_phase + KneePhase)), Space.World);
+                if (_kneeR != null) _kneeR.Rotate(transform.right, KneeAmp * stride * Mathf.Max(0f, Mathf.Sin(_phase + Mathf.PI + KneePhase)), Space.World);
+                // Сгибаем в сагиттальной плоскости модели, независимо от локальных осей Synty.
+                _legL.Rotate(transform.right, -60f * _crouch, Space.World);
+                _legR.Rotate(transform.right, -60f * _crouch, Space.World);
+                if (_kneeL != null) _kneeL.Rotate(transform.right, 120f * _crouch, Space.World);
+                if (_kneeR != null) _kneeR.Rotate(transform.right, 120f * _crouch, Space.World);
                 Swing(_armL, _qArmL, Vector3.down, ArmAmp * blend * sOpp);
                 Swing(_armR, _qArmR, Vector3.down, ArmAmp * blend * s);
                 Swing(_elbowL, _qElbowL, Vector3.down, ElbowAmp * blend * (0.5f + 0.5f * sOpp));
                 Swing(_elbowR, _qElbowR, Vector3.down, ElbowAmp * blend * (0.5f + 0.5f * s));
                 Swing(_spine, _qSpine, Vector3.forward, Mathf.Sin(Time.time * BreatheHz * 2f * Mathf.PI) * BreatheAmp);
+                // Оси модели, а не локальные оси костей: у Synty они различаются.
+                if (_spine != null)
+                {
+                    _spine.Rotate(transform.right, 15f * _crouch - _pitch * 0.25f, Space.World);
+                    _spine.Rotate(transform.up, _turn * 8f + _yaw * 0.2f, Space.World);
+                }
+                Swing(_neck, _qNeck, Vector3.up, 0f);
+                if (_neck != null)
+                {
+                    bool inheritsLean = _spine != null && _neck.IsChildOf(_spine);
+                    _neck.Rotate(transform.right, -_pitch * 0.35f - (inheritsLean ? 15f * _crouch : 0f), Space.World);
+                    _neck.Rotate(transform.up, _yaw * 0.4f, Space.World);
+                }
+                Swing(_head, _qHead, Vector3.up, 0f);
+                if (_head != null)
+                {
+                    bool inheritsLean = _spine != null && _head.IsChildOf(_spine);
+                    bool inheritsCorrection = _neck != null && _head.IsChildOf(_neck) && _spine != null && _neck.IsChildOf(_spine);
+                    _head.Rotate(transform.right, -_pitch * 0.4f - (inheritsLean && !inheritsCorrection ? 15f * _crouch : 0f), Space.World);
+                    _head.Rotate(transform.up, _yaw * 0.4f, Space.World);
+                }
             }
 
             private static void Swing(Transform t, Quaternion bind, Vector3 axis, float deg)
@@ -172,10 +229,11 @@ namespace SailwindCoop.Sync
         private sealed class AvatarVisualOffsetDriver : MonoBehaviour
         {
             public float OffsetY;
+            public NpcLocomotionDriver NpcLoco;
 
             private void LateUpdate()
             {
-                transform.localPosition = new Vector3(0f, OffsetY, 0f);
+                transform.localPosition = new Vector3(0f, OffsetY + (NpcLoco != null ? NpcLoco.CrouchOffsetY : 0f), 0f);
                 transform.localRotation = Quaternion.identity;
             }
         }
@@ -316,7 +374,15 @@ namespace SailwindCoop.Sync
                         bestDist = d;
                     }
                 }
-                if (best == null || best.Animator == null) return "—";
+                if (best == null) return "—";
+                if (best.NpcLoco != null)
+                    return "NPC " + (best.NpcLoco.Ready ? "ready" : "missing leg bones") +
+                           ", Speed " + best.NpcTargetSpeedMps.ToString("0.00") + " m/s" +
+                           ", Turn " + best.AnimTargetTurn.ToString("0.00") +
+                           ", Crouch " + best.AnimTargetCrouch.ToString("0.0") +
+                           ", Look " + best.NpcLoco.TargetPitch.ToString("0.0") + "/" +
+                           best.NpcLoco.TargetYaw.ToString("0.0");
+                if (best.Animator == null) return "—";
                 return "Speed " + best.AnimSpeed.ToString("0.00") +
                        " -> " + best.AnimTargetSpeed.ToString("0.0") +
                        ", Turn " + best.AnimTurn.ToString("0.00") +
@@ -961,7 +1027,14 @@ namespace SailwindCoop.Sync
 
             if (a.NpcFitPending) FitNpcBody(a);
             if (a.NpcLoco != null)
-                a.NpcLoco.TargetSpeedMps = a.AnimMoving ? 1.4f : 0f;
+            {
+                a.NpcLoco.TargetSpeedMps = a.NpcTargetSpeedMps;
+                a.NpcLoco.TargetCrouch = a.AnimTargetCrouch;
+                a.NpcLoco.TargetTurn = a.AnimTargetTurn;
+                Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
+                a.NpcLoco.TargetPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg, -35f, 45f);
+                a.NpcLoco.TargetYaw = Mathf.Clamp(Mathf.Atan2(localLook.x, localLook.z) * Mathf.Rad2Deg, -60f, 60f);
+            }
 
             if (a.Head != null && !a.HeadDrivenByAnimator)
             {
@@ -1031,6 +1104,7 @@ namespace SailwindCoop.Sync
                 if (speed > 0.18f) a.AnimMoving = true;
             }
             a.AnimTargetSpeed = a.AnimMoving ? 3f : 0f;
+            a.NpcTargetSpeedMps = a.AnimMoving ? Mathf.Clamp(speed, 0f, 6f) : 0f;
             a.AnimTargetCrouch = msg.Crouch ? 1f : 0f;
 
             // Поворот — та же история, что и скорость: разность передаваемых Rot в кадре корпуса
@@ -1290,10 +1364,9 @@ namespace SailwindCoop.Sync
 
         /// <summary>
         /// Аватар из NPC-скина. Модель — клон игрового NPC (кости в естественной позе),
-        /// без Animator: ходьба не анимируется, но голова следит за взглядом через
-        /// обычный не-аниматорный путь (HeadDrivenByAnimator=false). AvatarPoseDriver
-        /// сюда НЕ ставим: без Animator, переписывающего кости каждый кадр, его
-        /// аддитивный поворот в LateUpdate накапливался бы бесконечно.
+        /// без Animator: походку, приседание и взгляд ведёт NpcLocomotionDriver.
+        /// Он восстанавливает исходные повороты костей каждый кадр, поэтому поза
+        /// не накапливается. Сетевой корень и вертикальная подгонка остаются отдельными.
         /// </summary>
         private RemoteAvatar TryCreateNpcAvatar(uint netId, string key)
         {
@@ -1318,6 +1391,7 @@ namespace SailwindCoop.Sync
 
             var loco = model.AddComponent<NpcLocomotionDriver>();
             loco.Setup();
+            offsetDriver.NpcLoco = loco;
 
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Created NPC skin avatar NetId=" + netId +

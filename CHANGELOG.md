@@ -2,49 +2,73 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.2.1] - 2026-10-05
 
 ### Changed
 
-- Boat controls, anchors, mooring, pumps, damage actions and deck interactions now carry a stable boat
-  address and a layout signature. Each owned boat keeps independent state and restores its original
-  client physics on disconnect. Protocol is now **63**; all players need this build.
-- Host fully trusts connected client actions and broadcasts the result. Only the sender handshake,
-  matching PlayerState NetId, object/index bounds/null checks and packet format checks remain.
-  Do not add gameplay eligibility or numeric request checks. Remote pump holds expire without renewal.
-- Owned boats near a guest remain active on the host even when its own player is beyond the horizon
-  activation range, so their authoritative controls and physics can continue running.
-- Character profiles and received world saves use atomic replacement with backups. A readable profile
-  backup is recovered automatically; unreadable profiles and mismatched save versions abort the join.
-- Interaction Harmony callbacks contain exceptions, including failures inside diagnostic reporting.
-- Truncated packets are rejected even when LiteNetLib's backing buffer contains additional bytes.
+- NPC avatar gait follows movement speed relative to the deck or ground, with smoother
+  transitions and a limited running cadence.
+- NPC avatars now use procedural crouch, look and turn poses. Crouching bends the legs
+  more deeply and smoothly lowers the visual model along Y without moving the network root.
 
-- Mouse and sticky winch/wheel grabs and quick-release controls are supported. Host snapshots
-  do not overwrite the rope being operated locally.
-- Anchors bind through their rope joint after the game reparents them. Guest pickup, held pose,
-  payout and drop now travel through the host; local holds and pending drops resist stale snapshots.
-  Remote anchor physics stays slaved, while free host anchors retain vanilla physics. In-game
-  validation of this carrying fix is pending.
-- Fold/unfold of maps and other foldable items now updates remote meshes, details and collider
-  sizes through absolute setters. Loaded folded meshes remain folded in initial snapshots; local
-  holds resist old echoes. Fold state is sent only when the shape changes. In-game validation pending.
-- Hatches send event targets only after interaction and retry them after an active animation.
-  A separate one-time snapshot provides the initial state for a joining client or new hull.
-- Initial/periodic states and item poses/echoes leave last-action diagnostics untouched. Mooring
-  distinguishes interaction replies from snapshots; initial item manifests go only to the joining
-  peer. Anchor physics polling no longer announces an invented player action.
+### Fixed
 
-- Mooring state acknowledges the latest local request and waits until the guest releases its rope
-  or length adjuster. Unchanged snapshots leave logs and last-action diagnostics untouched.
-  Missing docks are reported; client targets wait for loading, and unavailable host states acknowledge
-  requests without fabricating an unmoor. This dock failure path still needs in-game reproduction.
-- Fleet diagnostics display the actual state of each boat; control count mismatches report each part.
-- Joining from an already loaded world reports the existing error before overwriting the co-op slot.
+- Leg movement uses model-space axes instead of assuming the NPC bones' local axes.
+- NPC skin discovery includes inactive NPCs in loaded scenes and checks for skinned meshes
+  with bones instead of rejecting every hierarchy containing a node named `combiner`.
 
-Validation: Release build, protocol smoke and 23 filesystem/patch/hatch/mooring scenarios pass on Windows
-.NET Framework. Multi-boat gameplay and `File.Replace` under Unity Mono still need in-game verification.
-An intermediate runtime run failed the existing File.Replace recovery scenario; a subsequent run
-passed all 23 cases. The intermittent failure remains unexplained.
+### Network
+
+- Wire protocol remains `80`. These animation changes add no fields or messages to player
+  synchronization; bone poses and crouch height are calculated locally.
+
+## [0.2.0] - 2026-10-05
+
+### Changed
+
+- **Everyone must update.** The network protocol moved from `57` to `80`; `0.1.6` and `0.2.0`
+  refuse to connect to each other.
+- **Sailwind 0.39 is now required.** The mod uses classes unavailable in older game builds.
+- Every owned boat has independent controls, anchors, mooring lines, pumps, hatches and hull damage.
+  Boats stay active on the host while any crewmate is nearby, even when the host is far away.
+- The host's mission journal is mirrored by guests without mixing in missions from their profiles.
+- Controls, anchors, mooring lines, hull damage, storms, items, instruments and missions are sent
+  only when they change. Joining players request the current values once.
+
+### Added
+
+- Guests can pick up, carry, pay out and drop anchors; everyone sees the anchor in its carrier's hands.
+- Guests can start shared sleep for the whole crew.
+- Guest shipyard orders for sails, parts, cleaning and repair reach the host and every crewmate.
+  The ordering player pays once; local shipyard previews stay out of the shared world and save.
+- Food preservation, spoilage, cooking progress, soup and kettle contents, fuel and stove slots
+  travel with items. Consumption and use of food, drinks, knives, elixirs, oakum, oil and candles
+  take effect for everyone at the same moment.
+- Pocket watch lids, quadrants, scroll pages, chip log lines and fishing rod state are visible
+  to other players, including the line, bobber, rod bend and hooked fish.
+- Chart drawings are shared, survive late joins and persist in the host's world save.
+  Folding and unfolding maps and furniture is shared.
+- Hull scrubbing removes the same dirt for everyone, stroke by stroke.
+- Wind totem orbs are visible in another player's hands; guest casts change weather for the crew.
+- Sailwind 0.39 tobacco packs can be cut by guests, house doors are shared with late arrivals,
+  and sleeping in house beds skips time as in single player.
+
+### Stability
+
+- Failed game hook groups disable only the affected feature and name it in an on-screen notice.
+- Character profiles and received world saves use atomic writes with backups. Readable backups
+  are recovered; unreadable profiles and incompatible save versions stop the join with a message.
+- Packets are accepted only from handshaken peers and in the expected direction. Snapshots too
+  large for one datagram are delivered reliably.
+- Unanswered requests are abandoned after five seconds instead of blocking the object indefinitely.
+- Lamps retain their identity when item lists are reordered; late packets cannot resurrect destroyed items.
+- Fixed guest winches failing on every control update due to an inactive steering wheel check.
+- Fixed guests being unable to release mooring ropes or length coils and pick them up after dropping.
+
+### Reporting problems
+
+Enable **F8 → Logging** before reproducing a problem and attach `BepInEx/LogOutput.log`
+plus an **Export report** file.
 
 ## [0.1.6] - 2026-09-22
 
