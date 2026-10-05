@@ -61,6 +61,8 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client) SendCarryRequest(carry, held ? MooringCarryAction.Pickup : MooringCarryAction.Drop);
             else if (_net.Role == Role.Host) SendCarryState(carry, true);
             Remember("out " + (held ? "pickup" : "drop") + " #" + carry.Index + (carry.Part == 0 ? " rope" : " adjuster"));
+            Plugin.Logger.LogInfo("[MooringSync] Local carry " + (held ? "pickup" : "drop") + " boat=" + _boatId + " rope #" + carry.Index +
+                (carry.Part == 0 ? " end" : " coil") + " (role " + _net.Role + ")");
         }
         private void CaptureCarry(Carry carry, MooringCarryBody msg)
         {
@@ -162,12 +164,21 @@ namespace SailwindCoop.Sync
                 {
                     if (msg.Held && msg.Part == 0 && _bm.ropes[msg.Index].IsMoored()) _bm.ropes[msg.Index].Unmoor();
                     SlaveCarry(carry); carry.Pose.Apply(carry.Item.transform, _net.Clock.ServerTick);
-                    if (msg.Action != MooringCarryAction.Pose || previousFromDock != carry.FromDock) UpdateCarryVisual(carry, previous);
+                    // A drop runs the game's own return sequence, which reads the rope attachment and
+                    // resets the visual itself when it ends. Resetting the visual first clears that
+                    // attachment: the sequence then throws on its first step and the part stays where
+                    // it was dropped, with its collider off, for the rest of the session.
                     if (!msg.Held)
                     { RestoreCarry(carry); carry.Item.OnDrop(); }
+                    else if (msg.Action != MooringCarryAction.Pose || previousFromDock != carry.FromDock) UpdateCarryVisual(carry, previous);
                 }
             }
-            if (msg.Action != MooringCarryAction.Pose) SendCarryState(carry, true);
+            if (msg.Action != MooringCarryAction.Pose)
+            {
+                Plugin.Logger.LogInfo("[MooringSync] Host carry " + msg.Action + " boat=" + _boatId + " rope #" + msg.Index +
+                    (msg.Part == 0 ? " end" : " coil") + " player=" + actor + " request=" + msg.RequestId);
+                SendCarryState(carry, true);
+            }
         }
         public void OnCarryState(MooringCarryStateMsg msg, NetPeer peer)
         {
@@ -207,11 +218,24 @@ namespace SailwindCoop.Sync
             carry.Slaved = true; carry.PreviousLayer = carry.Item.gameObject.layer;
             var body = carry.Item.GetComponent<Rigidbody>(); if (body != null) { carry.PreviousKinematic = body.isKinematic; body.isKinematic = true; }
             carry.Item.StopAllCoroutines();
+            // The stopped coroutine is the game's own throw/return sequence. It switches the part's
+            // collider off at its start and back on only at its end, so a sequence cut short (the
+            // host's reply to a drop arrives well inside it) left the part impossible to point at.
+            if (carry.Item is PickupableBoatMooringRope)
+            {
+                ItemComponents.Set(carry.Item, "throwing", false);
+                var collider = carry.Item.GetComponent<Collider>(); if (collider != null) collider.enabled = true;
+            }
+            else if (carry.Item is MooringRopeLengthAdjuster) ItemComponents.Set(carry.Item, "returnSequencePlaying", false);
         }
         private static void RestoreCarry(Carry carry)
         {
             if (!carry.Slaved || carry.Item == null) return;
-            carry.Slaved = false; carry.Item.gameObject.layer = carry.PreviousLayer;
+            carry.Slaved = false;
+            // GoPointer.PickUpItem has already moved a locally held part to the ignore-raycast layer.
+            // Putting the old layer back makes the pointer hit the part in the hand, and a click then
+            // lands on the part itself instead of dropping it.
+            if (carry.Item.held == null) carry.Item.gameObject.layer = carry.PreviousLayer;
             var body = carry.Item.GetComponent<Rigidbody>(); if (body != null) body.isKinematic = carry.PreviousKinematic;
             carry.Pose.Clear();
         }
