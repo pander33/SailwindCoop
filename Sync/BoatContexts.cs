@@ -81,6 +81,12 @@ namespace SailwindCoop.Sync
             _entries.Clear();
             _nextScan = 0f;
         }
+
+        public void Invalidate(ushort id)
+        {
+            if (_entries.TryGetValue(id, out var entry)) { _clear(entry.Context); _entries.Remove(id); }
+            _nextScan = 0f;
+        }
     }
 
     internal static class BoatLayout

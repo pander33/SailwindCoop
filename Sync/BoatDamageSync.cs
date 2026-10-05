@@ -33,7 +33,8 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<uint, float> _pumpSeen = new Dictionary<uint, float>();
 
         private float _sendTimer;
-        private long _lastStateTick;
+        private uint _revision;
+        private readonly ItemStateGate _stateGate = new ItemStateGate();
         private string _lastPump = "—";
         private long _lastPumpTick;
         private string _lastRepair = "—";
@@ -97,6 +98,7 @@ namespace SailwindCoop.Sync
                 ApplyRemotePumps(dt);
                 SendSnapshot(dt);
             }
+            else if (_net.Role == Role.Client) AskResync();
         }
 
         /// <summary>Host: update one remote actor's held-pump state from a HoldRequest.</summary>
@@ -120,11 +122,11 @@ namespace SailwindCoop.Sync
                 _heldPumpsByActor[actorNetId] = set;
             }
 
-            if (down) set.Add(index);
-            else set.Remove(index);
+            bool changed = down ? set.Add(index) : set.Remove(index);
             _pumpSeen[actorNetId] = Time.unscaledTime;
             if (set.Count == 0) _heldPumpsByActor.Remove(actorNetId);
 
+            if (!changed) return;
             RememberPump((down ? "in down" : "in up") + " #" + index + " p" + actorNetId);
             Plugin.Logger.LogInfo("[BoatDamageSync] Pump #" + index + " from player " + actorNetId + ": " + (down ? "held" : "released"));
         }
@@ -147,31 +149,32 @@ namespace SailwindCoop.Sync
                 return;
             }
             if (_net.Role != Role.Client) return;
-            if (msg.Tick < _lastStateTick || !BoatAuthority.Finite(msg.WaterLevel) || !BoatAuthority.Finite(msg.HullDamage) ||
-                !BoatAuthority.Finite(msg.Oakum) || !BoatAuthority.Finite(msg.WaterIntakeChunk)) return;
-            _lastStateTick = msg.Tick;
+            bool changed, pose;
+            if (!_stateGate.Receive(msg.Revision, msg.Tick, 0, 0, 0, out changed, out pose)) return;
             RefreshBoat();
             if (_damage == null) return;
 
-            _damage.waterLevel = Mathf.Clamp01(msg.WaterLevel);
-            _damage.hullDamage = Mathf.Clamp01(msg.HullDamage);
-            _damage.oakum = Mathf.Max(0f, msg.Oakum);
-            _damage.waterIntakeChunk = Mathf.Max(0f, msg.WaterIntakeChunk);
+            _damage.waterLevel = msg.WaterLevel;
+            _damage.hullDamage = msg.HullDamage;
+            _damage.oakum = msg.Oakum;
+            _damage.waterIntakeChunk = msg.WaterIntakeChunk;
             _damage.sunk = msg.Sunk;
         }
 
         public void NotifyLocalDamageAction(DamageAction action, float amount, BoatDamage damage)
         {
+            if (InteractionContext.Suppressed) return;
             if (_fleet != null)
             {
                 foreach (var c in _fleet.Values) if (c._damage == damage && damage != null)
                     { c.NotifyLocalDamageAction(action, amount, damage); break; }
                 return;
             }
+            var request = new DamageRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Action = action, Amount = amount };
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (amount <= 0.00001f) return;
 
-            _net.Broadcast(new DamageRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Action = action, Amount = amount },
+            _net.Broadcast(request,
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             RememberRepair("out " + action + " +" + amount.ToString("0.000"));
         }
@@ -190,26 +193,33 @@ namespace SailwindCoop.Sync
             RefreshBoat();
             if (_damage == null) return;
 
-            float amount = Mathf.Max(0f, msg.Amount);
-            if (amount <= 0f) return;
-
             if (msg.Action == DamageAction.AddOakum)
             {
-                float need = Mathf.Max(0f, _damage.hullDamage * _damage.waterUnitsCapacity - _damage.oakum);
-                float applied = Mathf.Min(amount, need);
-                if (applied > 0f) _damage.oakum += applied;
-                RememberRepair("in oakum +" + applied.ToString("0.000"));
+                _damage.oakum += msg.Amount;
+                RememberRepair("in oakum +" + msg.Amount.ToString("0.000"));
             }
             else if (msg.Action == DamageAction.BailWater)
             {
-                float before = _damage.waterLevel;
-                _damage.waterLevel = Mathf.Clamp01(_damage.waterLevel - amount);
-                RememberRepair("in water -" + (before - _damage.waterLevel).ToString("0.000"));
+                // Not a judgement of the request: a delta computed against the guest's older water level
+                // would otherwise leave the host's hull below empty.
+                _damage.waterLevel = Mathf.Max(0f, _damage.waterLevel - msg.Amount);
+                RememberRepair("in water -" + msg.Amount.ToString("0.000"));
             }
 
             BroadcastSnapshot();
         }
 
+        private readonly ChangeStream _stream = new ChangeStream();
+        private float _sentWater = float.NaN, _sentHull = float.NaN, _sentOakum = float.NaN, _sentIntake = float.NaN;
+        private bool _sentSunk, _resyncAsked;
+        /// <summary>Host: a client just bound this hull and has no state for it yet.</summary>
+        public void Resync(ushort boat) { var context = _fleet?.Get(boat); if (context != null) context._stream.Reset(); }
+        private void AskResync()
+        {
+            if (_resyncAsked || !GameState.playing || GameState.currentlyLoading) return;
+            _resyncAsked = true;
+            _net.Broadcast(new ResyncRequestMsg { BoatIndex = _boatId, Domain = ResyncDomain.Damage }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
         private void SendSnapshot(float dt)
         {
             if (_damage == null) return;
@@ -219,23 +229,33 @@ namespace SailwindCoop.Sync
             if (_sendTimer < interval) return;
             _sendTimer = 0f;
 
-            BroadcastSnapshot();
+            // A dry, undamaged hull at rest sends nothing.
+            bool changed = !_damage.waterLevel.Equals(_sentWater) || !_damage.hullDamage.Equals(_sentHull) ||
+                !_damage.oakum.Equals(_sentOakum) || !_damage.waterIntakeChunk.Equals(_sentIntake) || _damage.sunk != _sentSunk;
+            var mode = _stream.Next(changed);
+            if (mode != StreamSend.None) BroadcastSnapshot(mode == StreamSend.Reliable, periodic: true);
         }
 
-        private void BroadcastSnapshot()
+        internal BoatDamageStateMsg OperationState(ushort boatId)
         {
-            if (_damage == null) return;
-
-            _net.Broadcast(new BoatDamageStateMsg
-            {
-                BoatIndex = _boatId, LayoutHash = _layoutHash,
-                Tick = _net.Clock.ServerTick,
-                WaterLevel = _damage.waterLevel,
-                HullDamage = _damage.hullDamage,
-                Oakum = _damage.oakum,
-                WaterIntakeChunk = _damage.waterIntakeChunk,
-                Sunk = _damage.sunk,
-            }, LiteNetLib.DeliveryMethod.Unreliable);
+            if (_fleet != null) return _fleet.Get(boatId)?.OperationState(boatId);
+            RefreshBoat();
+            if (_damage == null) return null;
+            _revision = SessionCounters.NextRevision();
+            return new BoatDamageStateMsg {
+                BoatIndex = _boatId, LayoutHash = _layoutHash, Generation = BoatGenerationBook.Session.Get(_boatId), Revision = _revision, Tick = _net.Clock.ServerTick,
+                WaterLevel = _damage.waterLevel, HullDamage = _damage.hullDamage, Oakum = _damage.oakum,
+                WaterIntakeChunk = _damage.waterIntakeChunk, Sunk = _damage.sunk
+            };
+        }
+        private void BroadcastSnapshot(bool reliable = false, bool periodic = false)
+        {
+            var state = OperationState(_boatId);
+            if (state == null) return;
+            if (!periodic) _stream.Sent(reliable);
+            _sentWater = state.WaterLevel; _sentHull = state.HullDamage; _sentOakum = state.Oakum;
+            _sentIntake = state.WaterIntakeChunk; _sentSunk = state.Sunk;
+            _net.Broadcast(state, reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
 
         private void ApplyRemotePumps(float dt)
@@ -321,11 +341,15 @@ namespace SailwindCoop.Sync
             _lastRepairTick = _net.Clock.ServerTick;
         }
 
+        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
+
         public void Clear()
         {
             if (_fleet != null) { _fleet.Clear(); return; }
             _cachedBoat = null;
             _damage = null;
+            _stateGate.Clear();
+            _revision = 0;
             _pumps = System.Array.Empty<BilgePump>();
             _heldPumpsByActor.Clear();
             _pumpSeen.Clear();
@@ -344,6 +368,7 @@ namespace SailwindCoop.Sync
     /// </summary>
     public static class BoatDamagePatches
     {
+        private static void WarnPatch(string text) { try { Plugin.Logger?.LogWarning(text); } catch { } }
         public static void Apply(Harmony harmony)
         {
             bool hull = TryPatch(harmony, typeof(HullDamageButton), "OnItemClick", new[] { typeof(PickupableItem) },
@@ -365,7 +390,7 @@ namespace SailwindCoop.Sync
                 var mi = type.GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, args, null);
                 if (mi == null)
                 {
-                    Plugin.Logger.LogWarning("[BoatDamagePatches] Not found " + type.Name + "." + method);
+                    WarnPatch("[BoatDamagePatches] Not found " + type.Name + "." + method);
                     return false;
                 }
                 var prefix = new HarmonyMethod(typeof(BoatDamagePatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));
@@ -375,7 +400,7 @@ namespace SailwindCoop.Sync
             }
             catch (System.Exception e)
             {
-                Plugin.Logger.LogWarning("[BoatDamagePatches] " + type.Name + "." + method + ": " + e.Message);
+                WarnPatch("[BoatDamagePatches] " + type.Name + "." + method + ": " + e.Message);
                 return false;
             }
         }
@@ -393,7 +418,7 @@ namespace SailwindCoop.Sync
                 if (delta > 0.00001f)
                     BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta, GetHullDamage(__instance));
             }
-            catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostHullOakum: " + e.Message); }
+            catch (System.Exception e) { WarnPatch("[BoatDamagePatches] PostHullOakum: " + e.Message); }
         }
 
         private struct WaterBailState
@@ -441,7 +466,7 @@ namespace SailwindCoop.Sync
                                           " health " + __state.Health.ToString("0.##") + "->" +
                                           (bottle != null ? bottle.health.ToString("0.##") : "?"));
             }
-            catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostWaterBail: " + e.Message); }
+            catch (System.Exception e) { WarnPatch("[BoatDamagePatches] PostWaterBail: " + e.Message); }
         }
 
         private static void PreOakumAlt(ShipItemOakum __instance, out float __state)
@@ -457,7 +482,7 @@ namespace SailwindCoop.Sync
                 if (delta > 0.00001f)
                     BoatDamageSync.Instance?.NotifyLocalDamageAction(DamageAction.AddOakum, delta, CurrentBoatDamage());
             }
-            catch (System.Exception e) { Plugin.Logger.LogWarning("[BoatDamagePatches] PostOakumAlt: " + e.Message); }
+            catch (System.Exception e) { WarnPatch("[BoatDamagePatches] PostOakumAlt: " + e.Message); }
         }
 
         private static BoatDamage GetHullDamage(HullDamageButton button)

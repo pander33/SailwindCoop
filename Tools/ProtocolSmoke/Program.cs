@@ -104,6 +104,8 @@ namespace ProtocolSmoke
                 }
             }
 
+            TestOversizedCounts(failures);
+            CheckPopulatedMessage(new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage }, failures, ref populated, ref truncated);
             TestDirection(failures);
             if (failures.Count == 0)
             {
@@ -168,7 +170,54 @@ namespace ProtocolSmoke
                 for (int i = 0; i < 2; i++) array.SetValue(Sample(type.GetElementType()), i);
                 return array;
             }
+            if (type == typeof(ControlEpoch))
+            {
+                var value = Activator.CreateInstance(type);
+                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(value, Sample(field.FieldType));
+                return value;
+            }
             throw new Exception("no sample for " + type.Name);
+        }
+
+        /// <summary>A count field larger than the remaining payload must be refused before the
+        /// array is allocated, not after reading stale pooled bytes.</summary>
+        private static void TestOversizedCounts(List<string> failures)
+        {
+            var control = new NetDataWriter();
+            control.Put((ushort)1); control.Put(0u); control.Put(0u); control.Put(0L); control.Put(false);
+            control.Put(ushort.MaxValue);
+            if (Protocol.ReadBody(MsgType.ControlState, new NetDataReader(control.Data, 0, control.Length)) != null)
+                failures.Add("ControlStateMsg: oversized wheel count accepted");
+            var waves = new NetDataWriter();
+            waves.Put((byte)1); waves.Put(ushort.MaxValue);
+            if (Protocol.ReadBody(MsgType.WavePhases, new NetDataReader(waves.Data, 0, waves.Length)) != null)
+                failures.Add("WavePhasesMsg: oversized phase count accepted");
+        }
+
+        private static void CheckPopulatedMessage(INetMessage msg, List<string> failures, ref int populated, ref int truncated)
+        {
+            try
+            {
+                var writer = Protocol.Write(msg);
+                var reader = new NetDataReader(writer.Data, 1, writer.Length);
+                var clone = Protocol.ReadBody(msg.Type, reader);
+                foreach (var field in msg.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
+                    if (!Equal(field.GetValue(msg), field.GetValue(clone))) throw new Exception("round-trip mismatch: " + field.Name);
+                if (reader.AvailableBytes != 0) throw new Exception("unconsumed payload");
+                populated++;
+                for (int length = 0; length < writer.Length - 1; length++)
+                {
+					byte[] cut = new byte[length];
+					Buffer.BlockCopy(writer.Data, 1, cut, 0, length);
+					if (Protocol.ReadBody(msg.Type, new NetDataReader(cut)) != null)
+						throw new Exception("accepted truncated copied payload " + length);
+					truncated++;
+                    if (Protocol.ReadBody(msg.Type, new NetDataReader(writer.Data, 1, length + 1)) != null)
+                        throw new Exception("accepted truncated pooled payload " + length);
+                    truncated++;
+                }
+            }
+            catch (Exception e) { failures.Add(msg.GetType().Name + " populated: " + e.Message); }
         }
 
         private static bool Equal(object a, object b)
@@ -179,6 +228,8 @@ namespace ProtocolSmoke
                 for (int i = 0; i < aa.Length; i++) if (!Equal(aa.GetValue(i), bb.GetValue(i))) return false;
                 return true;
             }
+            if (a is ControlEpoch && b is ControlEpoch)
+                return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }
     }

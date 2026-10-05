@@ -83,17 +83,27 @@ namespace SailwindCoop.Sync
         {
             if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
             if (!Connected || _anchor == null) return;
+            if (_net.Role == Role.Client) AskResync();
             if (LocalHeld) RestoreSlaved();
             _sendTimer += dt;
             if (_sendTimer < 1f / Mathf.Max(1f, SnapshotHz)) return;
             _sendTimer = 0f;
-            if (_net.Role == Role.Host) SendState();
+            if (_net.Role == Role.Host)
+            {
+                // A stowed or dug-in anchor at rest sends nothing.
+                var state = CaptureState();
+                var mode = _stream.Next(Changed(_sentState, state));
+                if (mode == StreamSend.None) return;
+                _sentState = state;
+                _net.Broadcast(state, mode == StreamSend.Reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable);
+            }
             else if (_net.Role == Role.Client && LocalHeld) SendRequest(true, false);
         }
 
         // Called only from actual GoPointer pickup/drop hooks, never from polling or snapshots.
         public void NotifyPickup(Anchor anchor)
         {
+            if (InteractionContext.Suppressed) return;
             if (_fleet != null) { ForAnchor(anchor)?.NotifyPickup(anchor); return; }
             if (!Connected || anchor != _anchor || !LocalHeld) return;
             RestoreSlaved();
@@ -108,6 +118,7 @@ namespace SailwindCoop.Sync
 
         public void NotifyDrop(Anchor anchor)
         {
+            if (InteractionContext.Suppressed) return;
             if (_fleet != null) { ForAnchor(anchor)?.NotifyDrop(anchor); return; }
             if (!Connected || anchor != _anchor) return;
             _holder = 0;
@@ -154,7 +165,7 @@ namespace SailwindCoop.Sync
                 _gate.Begin(request);
             }
             bool onDeck = held && GameState.currentBoat == _boat;
-            _net.Broadcast(new AnchorRequestMsg
+            var message = new AnchorRequestMsg
             {
                 BoatIndex = _boatId, LayoutHash = _layoutHash, RequestId = request, Held = held,
                 Frame = onDeck ? CoordFrame.Boat : CoordFrame.World,
@@ -162,8 +173,14 @@ namespace SailwindCoop.Sync
                 Rot = onDeck ? Quaternion.Inverse(_boat.rotation) * _anchor.transform.rotation : _anchor.transform.rotation,
                 Vel = !held && _body != null ? _body.velocity : Vector3.zero,
                 RopeLength = _rope.currentLength,
-            }, DeliveryMethod.ReliableOrdered);
+            };
+            // The held-pose pass repeats nothing: an anchor carried without moving sends no packet.
+            if (!transition && _sentRequest != null && _sentRequest.Frame == message.Frame && _sentRequest.RopeLength.Equals(message.RopeLength) &&
+                (_sentRequest.Pos - message.Pos).sqrMagnitude <= 1e-6f && Quaternion.Angle(_sentRequest.Rot, message.Rot) <= 0.1f) return;
+            _sentRequest = message;
+            _net.Broadcast(message, DeliveryMethod.ReliableOrdered);
         }
+        private AnchorRequestMsg _sentRequest;
 
         public void OnAnchorRequest(AnchorRequestMsg msg, NetPeer peer)
         {
@@ -221,12 +238,29 @@ namespace SailwindCoop.Sync
                 BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = tick,
                 Frame = world ? CoordFrame.World : CoordFrame.Boat, Pos = pos,
                 Rot = world ? _anchor.transform.rotation : Quaternion.Inverse(_boat.rotation) * _anchor.transform.rotation,
-                Vel = vel, Set = _anchor.IsSet(), HolderNetId = holder, RopeLength = _rope.currentLength, Revision = unchecked(++_revision),
+                Vel = vel, Set = _anchor.IsSet(), HolderNetId = holder, RopeLength = _rope.currentLength, Revision = _revision = SessionCounters.NextRevision(),
             };
         }
 
         private void SendState(bool reliable = false)
-            => _net.Broadcast(CaptureState(), reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable);
+        {
+            var state = CaptureState(); _sentState = state; _stream.Sent(reliable);
+            _net.Broadcast(state, reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable);
+        }
+        private readonly ChangeStream _stream = new ChangeStream();
+        private AnchorStateMsg _sentState;
+        private bool _resyncAsked;
+        /// <summary>Host: a client just bound this hull and has no state for it yet.</summary>
+        public void Resync(ushort boat) { var context = _fleet?.Get(boat); if (context != null) context._stream.Reset(); }
+        private void AskResync()
+        {
+            if (_resyncAsked || !GameState.playing || GameState.currentlyLoading) return;
+            _resyncAsked = true;
+            _net.Broadcast(new ResyncRequestMsg { BoatIndex = _boatId, Domain = ResyncDomain.Anchor }, DeliveryMethod.ReliableOrdered);
+        }
+        private static bool Changed(AnchorStateMsg a, AnchorStateMsg b)
+            => a == null || a.Frame != b.Frame || a.Set != b.Set || a.HolderNetId != b.HolderNetId || !a.RopeLength.Equals(b.RopeLength) ||
+               (a.Pos - b.Pos).sqrMagnitude > 1e-4f || Quaternion.Angle(a.Rot, b.Rot) > 0.1f;
 
         public void OnAnchorState(AnchorStateMsg msg, NetPeer peer)
         {
@@ -305,6 +339,8 @@ namespace SailwindCoop.Sync
             if (_body != null) _body.isKinematic = _anchor.IsSet();
             if (Connected && _anchor != null) SendState(reliable: true);
         }
+
+        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
 
         public void Clear()
         {

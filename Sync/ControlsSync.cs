@@ -25,8 +25,9 @@ namespace SailwindCoop.Sync
     /// rotations are slerped each frame for smoothness between the ~12 Hz snapshots.
     /// Stage 2 (shared control) will instead route client adjustments as ownership requests.
     /// </summary>
-    public sealed class ControlsSync
+    public sealed partial class ControlsSync
     {
+        public static ControlsSync Instance { get; private set; }
         private struct Node
         {
             public Transform T;     // the moving transform whose local rotation we sync
@@ -68,15 +69,10 @@ namespace SailwindCoop.Sync
         private bool _haveTargets;
         private readonly List<KeyValuePair<Rigidbody, bool>> _kinematicSaved = new List<KeyValuePair<Rigidbody, bool>>();
 
-        // Stage 2 — shared control. Per rope: last value seen from the host, the time
-        // (ServerTick ms) until which the local player "owns" it after touching it, and
-        // the last value we forwarded as a request.
+        // Per-rope capture and acknowledged input; held/pending protection has no timeout.
         private float[] _hostLen = System.Array.Empty<float>();
-        private long[] _localUntil = System.Array.Empty<long>();
         private float[] _lastSentLen = System.Array.Empty<float>();
         private float _reqTimer;
-        private const float LocalHoldMs = 600f;   // keep ownership this long after the last local change
-        private const float LenEps = 1e-5f;
 
         private int _lastReqIndex = -1;
         private float _lastReqLength;
@@ -134,6 +130,7 @@ namespace SailwindCoop.Sync
         public ControlsSync(CoopNet net)
         {
             _net = net;
+            Instance = this;
 
             _fleet = new BoatContexts<ControlsSync>((boat, id) => new ControlsSync(net, boat, id), c => c.Clear(),
                 boat => BoatLayout.Stamp(boat.GetComponentsInChildren<RopeController>(true), boat.GetComponentsInChildren<HingeJoint>(true), boat.GetComponentsInChildren<GPButtonSteeringWheel>(true)));
@@ -181,19 +178,27 @@ namespace SailwindCoop.Sync
             RefreshNodes();
             if (_ropes.Length == 0 && _nodes.Length == 0) return;
 
+            _replyTimer += Time.unscaledDeltaTime;
+            if (_replyOwed && _replyTimer >= ReplyInterval)
+            {
+                _replyOwed = false; _replyTimer = 0f; _sendTimer = 0f;
+                SendState(null, false, true);
+                return;
+            }
+
             float interval = 1f / Mathf.Max(1f, ControlHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
             _sendTimer = 0f;
 
-            SendState(null, false);
+            SendState(null, false, periodic: true);
         }
 
         // -----------------------------------------------------------------
         // Client: receive
         // -----------------------------------------------------------------
 
-        private void SendState(LiteNetLib.NetPeer peer, bool reconcile)
+        private void SendState(LiteNetLib.NetPeer peer, bool reconcile, bool reliable = false, bool periodic = false)
         {
             var inputs = new float[_wheels.Length];
             for (int i = 0; i < inputs.Length; i++) inputs[i] = _wheels[i] != null ? _wheels[i].currentInput : 0f;
@@ -205,9 +210,23 @@ namespace SailwindCoop.Sync
             for (int i = 0; i < _nodes.Length; i++)
                 rots[i] = _nodes[i].T != null ? _nodes[i].T.localRotation : Quaternion.identity;
 
-            var state = new ControlStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = _net.Clock.ServerTick, Reconcile = reconcile, WheelInputs = inputs, Lengths = lens, Rotations = rots };
-            if (peer == null) _net.Broadcast(state, LiteNetLib.DeliveryMethod.Unreliable);
-            else peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            var locks = new bool[_wheels.Length];
+            var ropeEpochs = new ControlEpoch[_ropes.Length]; var wheelEpochs = new ControlEpoch[_wheels.Length];
+            for (int i = 0; i < ropeEpochs.Length; i++) ropeEpochs[i] = _ropeTracks[i].Capture(lens[i]);
+            for (int i = 0; i < wheelEpochs.Length; i++) { locks[i] = _wheels[i] != null && Locked(_wheels[i]); wheelEpochs[i] = _wheelTracks[i].Capture(inputs[i], locks[i]); }
+            var state = new ControlStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = _net.Clock.ServerTick, Reconcile = reconcile, WheelInputs = inputs, Lengths = lens, Rotations = rots,
+                WheelLocks = locks, RopeEpochs = ropeEpochs, WheelEpochs = wheelEpochs };
+            if (peer != null) { peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered); return; }
+            if (periodic)
+            {
+                // Nothing moved and nothing was acknowledged since the last packet: stay silent.
+                var mode = _stream.Next(Differs(_sentState, state));
+                if (mode == StreamSend.None) return;
+                reliable = mode == StreamSend.Reliable;
+            }
+            else _stream.Sent(reliable);
+            _sentState = state;
+            _net.Broadcast(state, reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
 
         public void OnControlState(ControlStateMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -223,47 +242,36 @@ namespace SailwindCoop.Sync
 
             RefreshNodes();
 
-            if (msg.Tick < _lastStateTick) return;
-            _lastStateTick = msg.Tick;
+            bool freshPose = msg.Tick >= _lastStateTick;
+            if (freshPose) _lastStateTick = msg.Tick;
             var held = HeldButton();
             // Each part applies on its own: a count mismatch in one must not stop the others.
-            bool ropesMatch = msg.Lengths.Length == _ropes.Length;
-            bool wheelsMatch = msg.WheelInputs.Length == _wheels.Length;
+            bool ropesMatch = msg.Lengths.Length == _ropes.Length && msg.RopeEpochs.Length == _ropes.Length;
+            bool wheelsMatch = msg.WheelInputs.Length == _wheels.Length && msg.WheelLocks.Length == _wheels.Length && msg.WheelEpochs.Length == _wheels.Length;
             if (wheelsMatch)
             {
                 for (int i = 0; i < _wheels.Length; i++)
-                    if (_wheels[i] != null && (msg.Reconcile || held != _wheels[i]))
-                        _wheels[i].currentInput = msg.WheelInputs[i];
+                    if (_wheels[i] != null && !_wheelDirty[i] && _wheelTracks[i].Receive(msg.WheelEpochs[i], msg.Tick, _net.MyNetId) && !WheelHeld(_wheels[i]))
+                        ApplyWheel(_wheels[i], msg.WheelInputs[i], msg.WheelLocks[i]);
             }
             else WarnMismatch("wheels", msg.WheelInputs.Length, _wheels.Length);
-            if (msg.Reconcile)
-            {
-                if (ropesMatch)
-                {
-                    System.Array.Clear(_localUntil, 0, _localUntil.Length);
-                    System.Array.Copy(msg.Lengths, _lastSentLen, _lastSentLen.Length);
-                }
-                if (wheelsMatch) System.Array.Copy(msg.WheelInputs, _steerLastSent, _steerLastSent.Length);
-            }
 
-            // Rope lengths apply straight away (reef/furl/anchor track length directly),
-            // EXCEPT ropes the local player is currently operating — those we own for a
-            // short window so the host's echo doesn't snap our adjustment back (Stage 2).
+            // Held controls and unsent/pending input retain local state until the latest acknowledgement.
             if (_ropes.Length > 0 || msg.Lengths.Length > 0)
             {
-                if (msg.Lengths.Length != _ropes.Length)
+                if (!ropesMatch)
                 {
                     WarnMismatch("ropes", msg.Lengths.Length, _ropes.Length);
                 }
                 else
                 {
-                    long now = _net.Clock.ServerTick;
                     for (int i = 0; i < _ropes.Length; i++)
                     {
                         var rc = _ropes[i];
                         if (rc == null) continue;
+                        if (_ropeDirty[i] || !_ropeTracks[i].Receive(msg.RopeEpochs[i], msg.Tick, _net.MyNetId)) continue;
                         _hostLen[i] = msg.Lengths[i];
-                        if (!IsLocalRopeHeld(rc, held) && now >= _localUntil[i] && rc.currentLength != msg.Lengths[i])
+                        if (!IsLocalRopeHeld(rc, held) && !rc.currentLength.Equals(msg.Lengths[i]))
                         {
                             rc.currentLength = msg.Lengths[i];
                             rc.changed = true;   // let the controller's Update re-apply
@@ -273,7 +281,7 @@ namespace SailwindCoop.Sync
             }
 
             // Node rotations are buffered and slerped in ApplyClient for smoothness.
-            if (_nodes.Length > 0 || msg.Rotations.Length > 0)
+            if (freshPose && (_nodes.Length > 0 || msg.Rotations.Length > 0))
             {
                 if (msg.Rotations.Length != _nodes.Length)
                 {
@@ -298,6 +306,7 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyClient(dt); return; }
             if (_net.Role != Role.Client) return;
 
+            AskResync();
             ForwardLocalRopeChanges(dt);
 
             // Steering: forward the wheel's input to the host while the local player turns it.
@@ -331,16 +340,15 @@ namespace SailwindCoop.Sync
             if (_steerTimer < interval) return;
             _steerTimer = 0f;
 
-            var wheel = heldBtn as GPButtonSteeringWheel;
-            if (wheel == null) return;
-            int idx = System.Array.IndexOf(_wheels, wheel);
-            if (idx < 0) return;
-
-            float input = wheel.currentInput;
-
-            _net.Broadcast(new SteerRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Input = input },
-                           LiteNetLib.DeliveryMethod.ReliableOrdered);
-            if (idx < _steerLastSent.Length) _steerLastSent[idx] = input;
+            for (int idx = 0; idx < _wheels.Length; idx++)
+            {
+                var wheel = _wheels[idx];
+                if (wheel == null || !_wheelDirty[idx]) continue;
+                float input = _wheelInput[idx];
+                _net.Broadcast(new SteerRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx,
+                    Input = input, RequestId = Request(_wheelTracks[idx]) }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                _steerLastSent[idx] = input; _wheelDirty[idx] = false;
+            }
         }
 
         /// <summary>Host: apply a client's wheel input — set it and re-run the rudder rotation.</summary>
@@ -360,14 +368,13 @@ namespace SailwindCoop.Sync
             if (i < 0 || i >= _wheels.Length) return;
             var wheel = _wheels[i];
             if (wheel == null) return;
-
-            wheel.currentInput = msg.Input;
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (actor == 0 || !_wheelTracks[i].Requests.Accept(actor, msg.RequestId, false)) return;
             try
             {
-                if (_miApplyRudder == null)
-                    _miApplyRudder = typeof(GPButtonSteeringWheel).GetMethod(
-                        "ApplyRudderRotation", BindingFlags.NonPublic | BindingFlags.Instance);
-                _miApplyRudder?.Invoke(wheel, null);
+                ApplyWheel(wheel, msg.Input, Locked(wheel));
+                _wheelTracks[i].Acknowledge(actor, msg.RequestId);
+                _replyOwed = true;
             }
             catch (System.Exception e)
             {
@@ -396,26 +403,21 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>
-        /// Stage 2 — when the local player operates a winch, its <c>RopeController</c>
-        /// changes <c>currentLength</c> locally (the only writer besides the host). We
-        /// detect the divergence from the host's last value, take ownership of that rope
-        /// for a short window, and forward the new length to the host as a request. The
-        /// host applies it authoritatively and the result flows back via ControlState.
+        /// Actual grabbed input or a DeltaToLength hook marks a rope dirty. A dirty final
+        /// value remains queued after quick-release; unrelated world divergence is not input.
         /// </summary>
         private void ForwardLocalRopeChanges(float dt)
         {
             if (_ropes.Length == 0 || _hostLen.Length != _ropes.Length) return;
 
-            long now = _net.Clock.ServerTick;
-
             var held = HeldButton();
-            // Restore the original divergence path, including quick-release without a grab.
+            // A grab protects the local node; an unheld divergence is never evidence of input.
             for (int i = 0; i < _ropes.Length; i++)
             {
                 var rc = _ropes[i];
                 if (rc == null) continue;
-                if (IsLocalRopeHeld(rc, held) || Mathf.Abs(rc.currentLength - _hostLen[i]) > LenEps)
-                    _localUntil[i] = now + (long)LocalHoldMs;
+                if (IsLocalRopeHeld(rc, held))
+                    if (!rc.currentLength.Equals(_lastSentLen[i])) _ropeDirty[i] = true;
             }
 
             // Throttle the request stream; reliable delivery guarantees the final value lands.
@@ -428,10 +430,10 @@ namespace SailwindCoop.Sync
             {
                 var rc = _ropes[i];
                 if (rc == null) continue;
-                if (IsLocalRopeHeld(rc, held) ||
-                    (now < _localUntil[i] && Mathf.Abs(rc.currentLength - _lastSentLen[i]) > LenEps))
+                if (_ropeDirty[i])
                 {
-                    var req = new ControlRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)i, Length = rc.currentLength };
+                    var req = new ControlRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)i,
+                        Length = rc.currentLength, RequestId = Request(_ropeTracks[i]) };
                     var winch = FindWinchForRope(rc);
                     if (winch != null)
                     {
@@ -440,8 +442,10 @@ namespace SailwindCoop.Sync
                     }
 
                     _net.Broadcast(req, LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    RememberControlRequest(i, rc.currentLength, req.HasWinchRotation, incoming: false);
+                    if (!rc.currentLength.Equals(_lastSentLen[i]))
+                        RememberControlRequest(i, rc.currentLength, req.HasWinchRotation, incoming: false);
                     _lastSentLen[i] = rc.currentLength;
+                    _ropeDirty[i] = false;
                 }
             }
         }
@@ -466,12 +470,13 @@ namespace SailwindCoop.Sync
             if (i < 0 || i >= _ropes.Length) return;
             var rc = _ropes[i];
             if (rc == null) return;
-
-            RememberControlRequest(i, msg.Length, msg.HasWinchRotation, incoming: true);
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (actor == 0 || !_ropeTracks[i].Requests.Accept(actor, msg.RequestId, false)) return;
 
             // F3: the host applies client input and broadcasts the resulting state.
-            if (rc.currentLength != msg.Length)
+            if (!rc.currentLength.Equals(msg.Length))
             {
+                RememberControlRequest(i, msg.Length, msg.HasWinchRotation, incoming: true);
                 rc.currentLength = msg.Length;
                 rc.changed = true;
             }
@@ -482,11 +487,27 @@ namespace SailwindCoop.Sync
                 if (winch != null)
                     winch.transform.localRotation = msg.WinchRotation;
             }
+            _ropeTracks[i].Acknowledge(actor, msg.RequestId);
+            _replyOwed = true;
         }
 
         // -----------------------------------------------------------------
         // Helpers
         // -----------------------------------------------------------------
+
+        internal void NotifyLocalWinchChanged(GPButtonRopeWinch winch)
+        {
+            if (InteractionContext.Suppressed || _net.Role != Role.Client || _net.State != LinkState.Connected) return;
+            if (_fleet != null)
+            {
+                foreach (var context in _fleet.Values)
+                    if (System.Array.IndexOf(context._winches, winch) >= 0) { context.NotifyLocalWinchChanged(winch); return; }
+                return;
+            }
+            RefreshNodes();
+            int index = winch == null ? -1 : System.Array.IndexOf(_ropes, winch.rope);
+            if (index >= 0) _ropeDirty[index] = true;
+        }
 
         private void RefreshNodes()
         {
@@ -515,8 +536,8 @@ namespace SailwindCoop.Sync
                 _wheels = System.Array.Empty<GPButtonSteeringWheel>();
                 _nodes = System.Array.Empty<Node>();
                 _hostLen = System.Array.Empty<float>();
-                _localUntil = System.Array.Empty<long>();
                 _lastSentLen = System.Array.Empty<float>();
+                ResetControlTracks();
                 return;
             }
 
@@ -534,7 +555,6 @@ namespace SailwindCoop.Sync
 
             // Stage 2 bookkeeping, seeded from current values so we don't false-trigger.
             _hostLen = new float[_ropes.Length];
-            _localUntil = new long[_ropes.Length];
             _lastSentLen = new float[_ropes.Length];
             for (int i = 0; i < _ropes.Length; i++)
             {
@@ -552,6 +572,7 @@ namespace SailwindCoop.Sync
                 nodes.Add(new Node { T = h.transform, Rb = h.GetComponent<Rigidbody>() });
             _nodes = nodes.ToArray();
             _layoutHash = BoatLayout.Hash(boat, _ropes, boat.GetComponentsInChildren<HingeJoint>(true), _wheels);
+            ResetControlTracks();
 
             Plugin.Logger.LogInfo("[ControlsSync] Boat changed: ropes=" + _ropes.Length +
                                   ", nodes=" + _nodes.Length + ", wheels=" + _wheels.Length +
@@ -587,6 +608,8 @@ namespace SailwindCoop.Sync
         private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held)
         {
             if (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false)) return true;
+            var winch = FindWinchForRope(rope);
+            if (winch != null && Grabbed(winch.rotHandle)) return true;
             if (held == null) return false;
             return FindWinchForRope(rope) == held ||
                 (rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat));
@@ -612,6 +635,8 @@ namespace SailwindCoop.Sync
             _lastReqTick = _net.Clock.ServerTick;
         }
 
+        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
+
         public void Clear()
         {
             if (_fleet != null) { _fleet.Clear(); return; }
@@ -628,8 +653,8 @@ namespace SailwindCoop.Sync
             _nodes = System.Array.Empty<Node>();
             _targetRots = System.Array.Empty<Quaternion>();
             _hostLen = System.Array.Empty<float>();
-            _localUntil = System.Array.Empty<long>();
             _lastSentLen = System.Array.Empty<float>();
+            ResetControlTracks();
             _haveTargets = false;
             _sendTimer = 0f;
             _reqTimer = 0f;

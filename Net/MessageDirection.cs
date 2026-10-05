@@ -30,6 +30,8 @@ namespace SailwindCoop.Net
                 case MsgType.MissionAbandon:
                 case MsgType.MissionDeliver:
                 case MsgType.ClientWorldLoaded:
+                case MsgType.WheelLockRequest:
+                case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
                     return MsgFlow.ToHost;
 

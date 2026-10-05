@@ -76,6 +76,8 @@ namespace SailwindCoop.Net
         MissionDeliver = 85,    // client -> host : mission good carried by the client reached a port
         MissionDeliverResult = 86, // host -> client : delivery result for the UI
         HatchSnapshot = 87,     // host -> client : initial hatch state, never an interaction event
+        WheelLockRequest = 91,
+        ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
 
@@ -496,8 +498,12 @@ namespace SailwindCoop.Net
     /// it sits at a world seabed point the boat swings around → <see cref="CoordFrame.World"/>
     /// (origin-stable real space). The host picks the frame; the client switches converters on change.</para>
     /// </summary>
-    public sealed class AnchorStateMsg : INetMessage
+    public sealed class AnchorStateMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public long Tick;
@@ -515,7 +521,7 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Tick);
             w.Put((byte)Frame);
             w.PutVector3(Pos);
@@ -527,7 +533,7 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Tick = r.GetLong();
             Frame = (CoordFrame)r.GetByte();
             Pos = r.GetVector3();
@@ -540,8 +546,12 @@ namespace SailwindCoop.Net
 
     /// <summary>Boat-local hand pose on the owning deck, real-space on shore and on drop. ReliableOrdered
     /// keeps an older held pose from resurrecting a hold after its drop. Values are trusted.</summary>
-    public sealed class AnchorRequestMsg : INetMessage
+    public sealed class AnchorRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash, RequestId;
         public bool Held;
@@ -552,12 +562,12 @@ namespace SailwindCoop.Net
         public MsgType Type => MsgType.AnchorRequest;
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash); w.Put(RequestId); w.Put(Held); w.Put((byte)Frame);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(RequestId); w.Put(Held); w.Put((byte)Frame);
             w.PutVector3(Pos); w.PutQuaternion(Rot); w.PutVector3(Vel); w.Put(RopeLength);
         }
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); RequestId = r.GetUInt(); Held = r.GetBool(); Frame = (CoordFrame)r.GetByte();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); RequestId = r.GetUInt(); Held = r.GetBool(); Frame = (CoordFrame)r.GetByte();
             Pos = r.GetVector3(); Rot = r.GetQuaternion(); Vel = r.GetVector3(); RopeLength = r.GetFloat();
         }
     }
@@ -583,8 +593,32 @@ namespace SailwindCoop.Net
     /// Identity-by-index is safe because both machines load the same boat; a count
     /// mismatch on either array is detected and that part is skipped.
     /// </summary>
-    public sealed class ControlStateMsg : INetMessage
+    public sealed class ControlEpoch
     {
+        public uint Revision, Requester, RequestId;
+        public void Serialize(NetDataWriter w) { w.Put(Revision); w.Put(Requester); w.Put(RequestId); }
+        public void Deserialize(NetDataReader r) { Revision = r.GetUInt(); Requester = r.GetUInt(); RequestId = r.GetUInt(); }
+        internal static void Write(NetDataWriter w, ControlEpoch[] values)
+        {
+            w.Put((ushort)values.Length);
+            foreach (var value in values) value.Serialize(w);
+        }
+        internal static ControlEpoch[] Read(NetDataReader r)
+        {
+            int count = r.GetUShort();
+            if (count > r.AvailableBytes / 12) throw new System.FormatException("Truncated control epochs");
+            var values = new ControlEpoch[count];
+            for (int i = 0; i < count; i++) { values[i] = new ControlEpoch(); values[i].Deserialize(r); }
+            return values;
+        }
+    }
+
+    public sealed class ControlStateMsg : INetMessage, IBoatLayoutMessage
+    {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public bool Reconcile;
@@ -592,12 +626,15 @@ namespace SailwindCoop.Net
         public long Tick;
         public float[] Lengths = System.Array.Empty<float>();
         public Quaternion[] Rotations = System.Array.Empty<Quaternion>();
+        public bool[] WheelLocks = System.Array.Empty<bool>();
+        public ControlEpoch[] RopeEpochs = System.Array.Empty<ControlEpoch>();
+        public ControlEpoch[] WheelEpochs = System.Array.Empty<ControlEpoch>();
 
         public MsgType Type => MsgType.ControlState;
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Tick);
             w.Put(Reconcile);
             w.Put((ushort)WheelInputs.Length);
@@ -606,21 +643,33 @@ namespace SailwindCoop.Net
             for (int i = 0; i < Lengths.Length; i++) w.Put(Lengths[i]);
             w.Put((ushort)Rotations.Length);
             for (int i = 0; i < Rotations.Length; i++) w.PutQuaternion(Rotations[i]);
+            w.Put((ushort)WheelLocks.Length);
+            foreach (var locked in WheelLocks) w.Put(locked);
+            ControlEpoch.Write(w, RopeEpochs); ControlEpoch.Write(w, WheelEpochs);
         }
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Tick = r.GetLong();
             Reconcile = r.GetBool();
-            WheelInputs = new float[r.GetUShort()];
+            int wheels = r.GetUShort();
+            if (wheels > r.AvailableBytes / 4) throw new System.FormatException("Truncated wheel inputs");
+            WheelInputs = new float[wheels];
             for (int i = 0; i < WheelInputs.Length; i++) WheelInputs[i] = r.GetFloat();
             int n = r.GetUShort();
+            if (n > r.AvailableBytes / 4) throw new System.FormatException("Truncated rope lengths");
             Lengths = new float[n];
             for (int i = 0; i < n; i++) Lengths[i] = r.GetFloat();
             int m = r.GetUShort();
+            if (m > r.AvailableBytes / 16) throw new System.FormatException("Truncated node rotations");
             Rotations = new Quaternion[m];
             for (int i = 0; i < m; i++) Rotations[i] = r.GetQuaternion();
+            int locks = r.GetUShort();
+            if (locks > r.AvailableBytes) throw new System.FormatException("Truncated wheel locks");
+            WheelLocks = new bool[locks];
+            for (int i = 0; i < locks; i++) WheelLocks[i] = r.GetBool();
+            RopeEpochs = ControlEpoch.Read(r); WheelEpochs = ControlEpoch.Read(r);
         }
     }
 
@@ -637,11 +686,16 @@ namespace SailwindCoop.Net
     /// release is guaranteed to land. The optional winch rotation is cosmetic host-side
     /// feedback so the host sees the client's hand turning the handle.
     /// </summary>
-    public sealed class ControlRequestMsg : INetMessage
+    public sealed class ControlRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
+        public uint RequestId;
         public float Length;
         public bool HasWinchRotation;
         public Quaternion WinchRotation;
@@ -650,8 +704,9 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put(Index);
+            w.Put(RequestId);
             w.Put(Length);
             w.Put(HasWinchRotation);
             if (HasWinchRotation) w.PutQuaternion(WinchRotation);
@@ -659,8 +714,9 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Index = r.GetUShort();
+            RequestId = r.GetUInt();
             Length = r.GetFloat();
             HasWinchRotation = r.GetBool();
             WinchRotation = HasWinchRotation ? r.GetQuaternion() : Quaternion.identity;
@@ -674,17 +730,38 @@ namespace SailwindCoop.Net
     /// the rudder rotation, so the host's boat actually turns and BoatSync carries the new
     /// heading back to everyone. Index = position in the boat's steering-wheel enumeration.
     /// </summary>
-    public sealed class SteerRequestMsg : INetMessage
+    public sealed class SteerRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
+        public uint RequestId;
         public float Input;
 
         public MsgType Type => MsgType.SteerRequest;
 
-        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put(Input); }
-        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Input = r.GetFloat(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put(RequestId); w.Put(Input); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); RequestId = r.GetUInt(); Input = r.GetFloat(); }
+    }
+
+    public sealed class WheelLockRequestMsg : INetMessage, IBoatLayoutMessage
+    {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
+        public ushort BoatIndex = ushort.MaxValue;
+        public uint LayoutHash, RequestId;
+        public ushort Index;
+        public bool Locked;
+        public float Input;
+        public MsgType Type => MsgType.WheelLockRequest;
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put(RequestId); w.Put(Locked); w.Put(Input); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); RequestId = r.GetUInt(); Locked = r.GetBool(); Input = r.GetFloat(); }
     }
 
     /// <summary>Mooring action on one rope.</summary>
@@ -750,10 +827,15 @@ namespace SailwindCoop.Net
     /// Host-authoritative boat damage state. The host owns flooding/sinking and bilge pump
     /// effects; clients mirror these scalar fields so water visuals and drag/sink state converge.
     /// </summary>
-    public sealed class BoatDamageStateMsg : INetMessage
+    public sealed class BoatDamageStateMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
+        public uint Revision;
         public long Tick;
         public float WaterLevel;
         public float HullDamage;
@@ -765,7 +847,8 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
+            w.Put(Revision);
             w.Put(Tick);
             w.Put(WaterLevel);
             w.Put(HullDamage);
@@ -776,7 +859,8 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
+            Revision = r.GetUInt();
             Tick = r.GetLong();
             WaterLevel = r.GetFloat();
             HullDamage = r.GetFloat();
@@ -882,8 +966,12 @@ namespace SailwindCoop.Net
     /// applies vanilla local item logic and forwards only the authoritative scalar delta.
     /// Host clamps the result against its own <c>BoatDamage</c>.
     /// </summary>
-    public sealed class DamageRequestMsg : INetMessage
+    public sealed class DamageRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public DamageAction Action;
@@ -893,14 +981,14 @@ namespace SailwindCoop.Net
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash);
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
             w.Put((byte)Action);
             w.Put(Amount);
         }
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt();
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
             Action = (DamageAction)r.GetByte();
             Amount = r.GetFloat();
         }
@@ -1498,6 +1586,24 @@ namespace SailwindCoop.Net
         }
     }
 
+    public enum ResyncDomain : byte { Controls, Anchor, Mooring, Damage, World }
+
+    /// <summary>Client -> host, ReliableOrdered. Host state streams are sent only when their value
+    /// changes, so a receiver that just bound a boat (join, hull rebuild) asks for the current value
+    /// once. World covers storms, wind-totem orbs and instrument children.</summary>
+    public sealed class ResyncRequestMsg : INetMessage
+    {
+        public ushort BoatIndex = ushort.MaxValue;
+        public ResyncDomain Domain;
+        public MsgType Type => MsgType.ResyncRequest;
+        public void Serialize(NetDataWriter writer) { writer.Put(BoatIndex); writer.Put((byte)Domain); }
+        public void Deserialize(NetDataReader reader)
+        {
+            BoatIndex = reader.GetUShort(); Domain = (ResyncDomain)reader.GetByte();
+            if (Domain > ResyncDomain.World) throw new System.IO.InvalidDataException("Unknown resync domain");
+        }
+    }
+
     /// <summary>Host → client: the host is sleeping (true) or awake (false). Drives the client's shared
     /// blackout + control lock while the host authoritatively warps time (P4.2).</summary>
     public sealed class SleepStateMsg : INetMessage
@@ -2043,6 +2149,7 @@ namespace SailwindCoop.Net
             for (int s = 0; s < n; s++)
             {
                 int len = r.GetUShort();
+                if (len > r.AvailableBytes / 4) throw new System.FormatException("Truncated wave phases");
                 var a = new float[len];
                 for (int i = 0; i < len; i++) a[i] = r.GetFloat();
                 Sets[s] = a;

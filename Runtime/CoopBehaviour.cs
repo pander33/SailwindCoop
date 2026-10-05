@@ -166,6 +166,7 @@ namespace SailwindCoop.Runtime
                     Plugin.Logger.LogWarning("[Coop] role=" + Net.Role + " " + type + " is " + bytes +
                         " bytes, above one unreliable datagram; sent reliably (occurrence #" + _oversizedPackets + ")");
             };
+            InputScopePatches.Apply(_harmony);
             AnchorPatches.Apply(_harmony);
             try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
             catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
@@ -299,7 +300,7 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Menu toggle failed", e, ref _menuFailures);
             }
 
-            try { Net.PollEvents(); }
+            try { using (InteractionContext.Begin(InteractionSource.RemoteApply)) Net.PollEvents(); }
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Net.PollEvents failed", e, ref _pollFailures);
@@ -404,6 +405,8 @@ namespace SailwindCoop.Runtime
                 case MsgType.LightRequest:
                     Lights.OnLightRequest((LightRequestMsg)msg, fromPeer);
                     break;
+                case MsgType.WheelLockRequest:
+                    Controls.OnWheelLockRequest((WheelLockRequestMsg)msg, fromPeer); break;
                 case MsgType.ItemState:
                     Items.OnItemState((ItemStateMsg)msg, fromPeer);
                     break;
@@ -451,6 +454,18 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.MissionAbandon:
                     Missions.OnMissionAbandon((MissionAbandonMsg)msg, fromPeer);
+                    break;
+                case MsgType.ResyncRequest:
+                    if (Net.Role == Role.Host && Net.PlayerNetIdForPeer(fromPeer) != 0)
+                    {
+                        var resync = (ResyncRequestMsg)msg;
+                        switch (resync.Domain)
+                        {
+                            case ResyncDomain.Controls: Controls.Resync(resync.BoatIndex); break;
+                            case ResyncDomain.Anchor: Anchor.Resync(resync.BoatIndex); break;
+                            case ResyncDomain.Damage: Damage.Resync(resync.BoatIndex); break;
+                        }
+                    }
                     break;
                 case MsgType.MissionDeliver:
                     Missions.OnMissionDeliver((MissionDeliverMsg)msg, fromPeer);

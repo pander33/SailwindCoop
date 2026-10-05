@@ -11,6 +11,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
+using Mono.Cecil;
 
 internal static class Program
 {
@@ -249,6 +250,30 @@ internal static class Program
                     Assert(bed.SleepEntries == 1, "host/offline sleep blocked");
                 }
                 finally { _fixtureClient = false; harmony.UnpatchSelf(); }
+            });
+            Test("released control waits for final acknowledgement independently of newer node pose", () => {
+                var rope = new ItemStateGate(); var wheel = new ItemStateGate(); bool semantic, pose;
+                Assert(rope.Receive(4, 100, 0, 0, 10, out semantic, out pose), "rope baseline");
+                Assert(wheel.Receive(7, 100, 0, 0, 10, out semantic, out pose), "wheel baseline");
+                rope.Begin(21); wheel.Begin(22); // input already released; no timeout may clear these.
+                Assert(!rope.Receive(4, 900, 0, 0, 10, out semantic, out pose), "newer snapshot rolled back released rope");
+                Assert(!wheel.Receive(7, 900, 0, 0, 10, out semantic, out pose), "newer snapshot unlocked wheel");
+                Assert(rope.Receive(5, 110, 10, 21, 10, out semantic, out pose), "rope ack lost behind unrelated newer node tick");
+                Assert(wheel.Receive(8, 110, 10, 22, 10, out semantic, out pose), "wheel lock ack lost behind newer node tick");
+                Assert(!wheel.Receive(7, 950, 0, 0, 10, out semantic, out pose), "old wheel input undid acknowledged lock");
+                wheel.Begin(23);
+                Assert(wheel.Receive(8, 110, 10, 23, 10, out semantic, out pose) && !wheel.Pending, "no-op final ack stranded control");
+            });
+            Test("installed steering wheel lock/input hooks match actual declared methods", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var wheel = game.MainModule.Types.Single(t => t.Name == "GPButtonSteeringWheel");
+                    Assert(wheel.Fields.Any(f => f.Name == "locked" && f.FieldType.FullName == "System.Boolean"), "absolute lock field changed");
+                    foreach (string method in new[] { "Lock", "Unlock", "ExtraLateUpdate", "ApplyRudderRotation" })
+                        Assert(wheel.Methods.Any(m => m.Name == method && m.Parameters.Count == 0 && !m.IsStatic), method + " hook signature changed");
+                    Assert(wheel.Methods.Single(m => m.Name == "Lock").Body.Instructions.Any(i =>
+                        i.Operand is MethodReference target && target.Name == "UnStickyClick"), "fixture no longer exercises release-before-lock path");
+                }
             });
             Test("anchor drop waits for its own latest reply", () => {
                 var gate = new AnchorStateGate();
@@ -505,6 +530,13 @@ internal static class Program
     }
     private static bool _fixtureClient;
     private static bool BlockFixtureSleep() => PatchGuard.Prefix(() => !_fixtureClient, e => { });
+
+    private static string GameAssemblyPath()
+    {
+        var metadata = (AssemblyMetadataAttribute)Assembly.GetExecutingAssembly().GetCustomAttributes(
+            typeof(AssemblyMetadataAttribute), false).First(a => ((AssemblyMetadataAttribute)a).Key == "GameDir");
+        return Path.Combine(metadata.Value, "Sailwind_Data", "Managed", "Assembly-CSharp.dll");
+    }
     private static void Child(string stage, string path)
     {
         var info = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,
