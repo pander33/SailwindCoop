@@ -260,14 +260,16 @@ namespace SailwindCoop.Runtime
             else if (_net.Role == Role.Host)
                 GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value + "; clients: " + _net.PeerCount, _muted);
             else
-                GUILayout.Label("Load a world, then host a session or join a host.", _muted);
+                GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
+                    : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
+                    : "Load a world, then host a session or join a host.", _muted);
         }
 
         private void DrawActions()
         {
             GUILayout.BeginHorizontal();
             bool busy = _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking;
-            GUI.enabled = !busy;
+            GUI.enabled = !busy && PatchHealth.Blocker == null;
             if (GUILayout.Button("Host", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
                 StartHost();
             if (GUILayout.Button("Join", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))

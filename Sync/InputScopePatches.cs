@@ -10,9 +10,11 @@ namespace SailwindCoop.Sync
         internal static void Apply(Harmony harmony)
         {
             var hooks = new PatchHookCatalog();
-            hooks.Install(typeof(GoPointer), "LateUpdate", Type.EmptyTypes, m => harmony.Patch(m,
+            bool scope = hooks.Install(typeof(GoPointer), "LateUpdate", Type.EmptyTypes, m => harmony.Patch(m,
                 prefix: Callback(nameof(PreInput)), postfix: Callback(nameof(FinishInput)),
                 finalizer: Callback(nameof(FinishInput))));
+            // Every forwarded interaction requires this scope; without it a session would look alive and sync nothing.
+            if (!scope) PatchHealth.Block("Input origin (GoPointer.LateUpdate hook is absent)");
             hooks.Install(typeof(GPButtonRopeWinch), "DeltaToLength", Type.EmptyTypes, m => harmony.Patch(m,
                 prefix: Callback(nameof(PreLength)), postfix: Callback(nameof(PostLength))));
             foreach (string method in new[] { "Lock", "Unlock" })

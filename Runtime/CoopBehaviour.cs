@@ -172,16 +172,31 @@ namespace SailwindCoop.Runtime
                     Plugin.Logger.LogWarning("[Coop] role=" + Net.Role + " " + type + " is " + bytes +
                         " bytes, above one unreliable datagram; sent reliably (occurrence #" + _oversizedPackets + ")");
             };
-            InputScopePatches.Apply(_harmony);
-            ItemInstrumentPatches.Apply(_harmony);
-            ChartPatches.Apply(_harmony);
-            DirtPatches.Apply(_harmony);
-            ShipyardRefitPatches.Apply(_harmony);
-            OrbCarryPatches.Apply(_harmony);
-            InstrumentPosePatches.Apply(_harmony);
-            AnchorPatches.Apply(_harmony);
-            try { InteractionPatches.Apply(_harmony); MooringPatches.Apply(_harmony); BoatDamagePatches.Apply(_harmony); LightPatches.Apply(_harmony); ItemPatches.Apply(_harmony); ItemOperationPatches.Apply(_harmony); ItemSimulationPatches.Apply(_harmony); ShopPatches.Apply(_harmony); SavePatches.Apply(_harmony); SleepPatches.Apply(_harmony); MissionPatches.Apply(_harmony); ShipyardPatches.Apply(_harmony); NpcBoatPatches.Apply(_harmony); BoatActivityPatches.Apply(_harmony); }
-            catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Failed to apply Harmony patches: " + e); }
+            // One set per call: a game update that removes a type faults only the set that names it.
+            // Domain names match the ones each set reports itself.
+            System.Action<string> patchFault = text => Plugin.Logger.LogError("[Coop] role=initializing " + text);
+            PatchHealth.Install("Input origin", () => InputScopePatches.Apply(_harmony), patchFault, required: true);
+            PatchHealth.Install("Special item visuals", () => ItemInstrumentPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Charts", () => ChartPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Dirt textures", () => DirtPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Shipyard refit", () => ShipyardRefitPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Wind orb carry", () => OrbCarryPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Instrument poses", () => InstrumentPosePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Anchor", () => AnchorPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Interactions", () => InteractionPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Mooring", () => MooringPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Damage", () => BoatDamagePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Lights", () => LightPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Items", () => ItemPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Item results", () => ItemOperationPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Item simulation", () => ItemSimulationPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Shop", () => ShopPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Missions", () => MissionPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("NpcBoat", () => NpcBoatPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("BoatActivity", () => BoatActivityPatches.Apply(_harmony), patchFault);
 
             PatchGuard.Run(() => {
                 var signatures = InteractionActionCatalog.Inspect(typeof(GoPointerButton).Assembly);
@@ -890,24 +905,42 @@ namespace SailwindCoop.Runtime
             if (_debugPanel != null) _debugPanel.Visible = false;
         }
 
+        private static bool SessionBlocked()
+        {
+            if (PatchHealth.Blocker == null) return false;
+            Plugin.Logger.LogError("[Coop] role=None session refused: required patch set absent: " + PatchHealth.Blocker);
+            Notice("Co-op is unavailable with this game version: " + PatchHealth.Blocker + ". See BepInEx/LogOutput.log.");
+            return true;
+        }
+
+        private static void NoticeFaultedPatchSets()
+        {
+            if (PatchHealth.FaultedSets != null)
+                Notice("Not synced in this session (patch failed): " + PatchHealth.FaultedSets + ". See BepInEx/LogOutput.log.");
+        }
+
         public void StartHostSession(int port)
         {
+            if (SessionBlocked()) return;
             Plugin.Logger.LogInfo("[Coop] Starting host via UI");
             TeardownSession("start-host", saveClientProfile: true);
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
             Net.StartHost(port);
+            NoticeFaultedPatchSets();
         }
 
         public void StartClientSession(string ip, int port)
         {
+            if (SessionBlocked()) return;
             Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
             TeardownSession("start-client", saveClientProfile: true);
             ClearNotice();
             _clientProfileSavedOnShutdown = false;
             _clientCoopWorldLoaded = false;
             Net.StartClient(ip, port);
+            NoticeFaultedPatchSets();
         }
 
         public void ReconnectSession(string ip, int port)

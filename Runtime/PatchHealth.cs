@@ -22,6 +22,36 @@ namespace SailwindCoop.Runtime
 
         private static readonly Dictionary<string, Entry> Entries = new Dictionary<string, Entry>();
 
+        private static readonly List<string> Faulted = new List<string>();
+
+        /// <summary>Why a session must not start: a patch set every other domain depends on is absent.</summary>
+        public static string Blocker { get; private set; }
+
+        /// <summary>Patch sets that threw while installing, or null. Their domains do not sync.</summary>
+        public static string FaultedSets => Faulted.Count == 0 ? null : string.Join(", ", Faulted.ToArray());
+
+        internal static void Block(string reason)
+        {
+            if (Blocker == null && !string.IsNullOrEmpty(reason)) Blocker = reason;
+        }
+
+        /// <summary>Install one patch set. Its fault stays in its own domain instead of ending
+        /// initialization or skipping the sets after it; <paramref name="required"/> sets block sessions.</summary>
+        internal static bool Install(string domain, Action apply, Action<string> log, bool required = false)
+        {
+            try { apply(); return true; }
+            catch (Exception error)
+            {
+                string reason = error.GetType().Name + ": " + error.Message;
+                Set(domain, PatchHealthState.Failed, reason);
+                if (!Faulted.Contains(domain)) Faulted.Add(domain);
+                if (required) Block(domain + " (" + reason + ")");
+                try { log?.Invoke("patch set '" + domain + "' failed" + (required ? " (required)" : "") + ": " + error); }
+                catch { } // Diagnostics must never interrupt the remaining sets.
+                return false;
+            }
+        }
+
         internal static void Report(string domain, PatchHookCatalog catalog)
             => Report(domain, catalog.Ready, catalog.Total, catalog.Detail);
 

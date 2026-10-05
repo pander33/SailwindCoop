@@ -224,6 +224,17 @@ internal static class Program
                 Assert(PatchHealth.StateOf("smoke signatures") == PatchHealthState.Partial &&
                     hooks.Detail.Contains("HookFixture.Action(Object)"), "missing signature hidden");
             });
+            Test("a faulted patch set stays in its domain and only a required one blocks sessions", () => {
+                int ran = 0; string logged = null;
+                Assert(!PatchHealth.Install("smoke set A", () => { throw new TypeLoadException("removed type"); },
+                    text => { logged = text; throw new Exception("logger fault"); }), "fault reported as installed");
+                Assert(PatchHealth.Install("smoke set B", () => ran++, null) && ran == 1, "set after a faulted one skipped");
+                Assert(PatchHealth.StateOf("smoke set A") == PatchHealthState.Failed && logged.Contains("smoke set A") &&
+                    PatchHealth.FaultedSets == "smoke set A", "fault hidden: " + PatchHealth.FaultedSets);
+                Assert(PatchHealth.Blocker == null, "optional set blocked sessions");
+                PatchHealth.Install("smoke base", () => { throw new MissingMethodException("GoPointer", "LateUpdate"); }, null, required: true);
+                Assert(PatchHealth.Blocker != null && PatchHealth.Blocker.Contains("smoke base"), "required fault did not block");
+            });
             Test("hook installation failure and pending relay stay visible", () => {
                 var hooks = new PatchHookCatalog();
                 Assert(!hooks.Install(typeof(HookFixture), "Action", Type.EmptyTypes,
