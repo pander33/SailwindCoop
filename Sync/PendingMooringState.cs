@@ -14,8 +14,9 @@ namespace SailwindCoop.Sync
             _state = null; // A state received before this request cannot undo its local effect.
         }
 
-        public bool Receive(uint requester, uint requestId, uint localPlayer, T state)
+        public bool Receive(uint requester, uint requestId, uint localPlayer, T state, bool waitingTarget = false)
         {
+            if (waitingTarget) return false; // Target loading never completes the local request.
             if (_pendingRequest != 0)
             {
                 if (requester != localPlayer || requestId != _pendingRequest) return false;

@@ -161,6 +161,7 @@ namespace ProtocolSmoke
             if (type == typeof(long)) return 9876543210L;
             if (type == typeof(float)) return 0.375f;
             if (type == typeof(bool)) return true;
+            if (type == typeof(string)) return "Island/dock[1]/bollard[2]";
             if (type == typeof(UnityEngine.Vector3)) return new UnityEngine.Vector3(12.5f, -8.25f, 100.75f);
             if (type == typeof(UnityEngine.Quaternion)) return new UnityEngine.Quaternion(0f, 0.6f, 0f, 0.8f);
             if (type.IsEnum) { var values = Enum.GetValues(type); return values.GetValue(values.Length - 1); }

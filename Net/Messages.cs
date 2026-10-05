@@ -77,6 +77,8 @@ namespace SailwindCoop.Net
         MissionDeliverResult = 86, // host -> client : delivery result for the UI
         HatchSnapshot = 87,     // host -> client : initial hatch state, never an interaction event
         WheelLockRequest = 91,
+        MooringCarryRequest = 92,
+        MooringCarryState = 93,
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
     }
@@ -783,8 +785,12 @@ namespace SailwindCoop.Net
     /// NetId and request number; unsolicited states use zero for both, so the host stays the
     /// authority (the only spring that holds the authoritative boat is the host's).</para>
     /// </summary>
-    public sealed class MooringStateMsg : INetMessage
+    public sealed class MooringStateMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
@@ -795,16 +801,22 @@ namespace SailwindCoop.Net
         public uint RequestId;      // zero for snapshots/local host events
         public bool StateAvailable = true; // false acknowledges a request without inventing a missing dock
         public bool IsInteraction; // true only for a local action or a response to a client request
+        public string DockId = "";
+        public MooringOutcome Outcome;
 
         public MsgType Type => MsgType.MooringState;
 
-        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequesterNetId); w.Put(RequestId); w.Put(StateAvailable); w.Put(IsInteraction); }
-        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt(); StateAvailable = r.GetBool(); IsInteraction = r.GetBool(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequesterNetId); w.Put(RequestId); w.Put(StateAvailable); w.Put(IsInteraction); w.Put(DockId); w.Put((byte)Outcome); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt(); StateAvailable = r.GetBool(); IsInteraction = r.GetBool(); DockId = r.GetString(); Outcome = (MooringOutcome)r.GetByte(); }
     }
 
     /// <summary>Client -> host mooring action (see <see cref="MooringStateMsg"/>). Host applies + relays.</summary>
-    public sealed class MooringRequestMsg : INetMessage
+    public sealed class MooringRequestMsg : INetMessage, IBoatLayoutMessage
     {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
         public ushort Index;
@@ -812,12 +824,48 @@ namespace SailwindCoop.Net
         public Vector3 DockReal;
         public float LengthSq;
         public uint RequestId;
+        public string DockId = "";
 
         public MsgType Type => MsgType.MooringRequest;
 
-        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequestId); }
-        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequestId = r.GetUInt(); }
+        public void Serialize(NetDataWriter w) { w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put((byte)Kind); w.PutVector3(DockReal); w.Put(LengthSq); w.Put(RequestId); w.Put(DockId); }
+        public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); Kind = (MooringKind)r.GetByte(); DockReal = r.GetVector3(); LengthSq = r.GetFloat(); RequestId = r.GetUInt(); DockId = r.GetString(); }
     }
+
+    public enum MooringOutcome : byte { Applied, WaitingForDock, MissingObject }
+    public enum MooringCarryAction : byte { Pickup, Pose, Drop }
+    public abstract class MooringCarryBody : INetMessage, IBoatLayoutMessage
+    {
+        public uint Generation;
+        ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
+        uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
+
+        public ushort BoatIndex = ushort.MaxValue, Index;
+        public uint LayoutHash, HolderNetId, Revision, Requester, RequestId;
+        public byte Part; // 0 rope endpoint, 1 length adjuster
+        public MooringCarryAction Action;
+        public bool Held, FromDock, LinkPending;
+        public CoordFrame Frame;
+        public long Tick;
+        public Vector3 Pos, Vel;
+        public Quaternion Rot;
+        public abstract MsgType Type { get; }
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(Index); w.Put(Part); w.Put((byte)Action); w.Put(Held); w.Put(FromDock); w.Put(LinkPending);
+            w.Put(HolderNetId); w.Put(Revision); w.Put(Requester); w.Put(RequestId); w.Put((byte)Frame); w.Put(Tick);
+            w.PutVector3(Pos); w.PutQuaternion(Rot); w.PutVector3(Vel);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); Part = r.GetByte(); Action = (MooringCarryAction)r.GetByte();
+            Held = r.GetBool(); FromDock = r.GetBool(); LinkPending = r.GetBool(); HolderNetId = r.GetUInt(); Revision = r.GetUInt();
+            Requester = r.GetUInt(); RequestId = r.GetUInt(); Frame = (CoordFrame)r.GetByte(); Tick = r.GetLong();
+            Pos = r.GetVector3(); Rot = r.GetQuaternion(); Vel = r.GetVector3();
+        }
+    }
+    public sealed class MooringCarryRequestMsg : MooringCarryBody { public override MsgType Type => MsgType.MooringCarryRequest; }
+    public sealed class MooringCarryStateMsg : MooringCarryBody { public override MsgType Type => MsgType.MooringCarryState; }
 
     // ---------------------------------------------------------------------
     // Boat damage / bilge water (Stage 2) — host -> client snapshot

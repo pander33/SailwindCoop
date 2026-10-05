@@ -21,7 +21,7 @@ namespace SailwindCoop.Sync
     /// mooring is cosmetic (its boat is a kinematic puppet) — only the host's spring holds the
     /// authoritative boat — but unmooring on the client must reach the host so the boat can sail.</para>
     /// </summary>
-    public sealed class MooringSync
+    public sealed partial class MooringSync
     {
         public static MooringSync Instance { get; private set; }
 
@@ -89,6 +89,9 @@ namespace SailwindCoop.Sync
         public void Tick(float dt)
         {
             if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
+            if (_net.Role == Role.Client) AskResync();
+            TickCarry(dt);
+            RetryDockRequests();
             if (_net.Role == Role.Client && _net.State == LinkState.Connected)
                 foreach (var entry in _clientStates) ApplyClientState(entry.Key, entry.Value);
             if (_net.Role == Role.Host && _net.State == LinkState.Connected && _bm != null)
@@ -97,7 +100,7 @@ namespace SailwindCoop.Sync
                 if (_snapshotTimer >= 1f)
                 {
                     _snapshotTimer = 0f;
-                    for (int i = 0; _bm.ropes != null && i < _bm.ropes.Length; i++) SendRopeState((ushort)i);
+                    for (int i = 0; _bm.ropes != null && i < _bm.ropes.Length; i++) SendRopeState((ushort)i, periodic: true);
                 }
             }
             // Keep the bound hull's stable rope map; moving onto another deck does not rebind it.
@@ -141,7 +144,7 @@ namespace SailwindCoop.Sync
         {
             Vector3 dockReal = dock != null && CoordSpace.Ready
                 ? CoordSpace.LocalToReal(dock.transform.position) : Vector3.zero;
-            NotifyLocal(rope, MooringKind.Moor, dockReal, rope != null ? rope.currentRopeLengthSquared : 0f);
+            NotifyLocal(rope, MooringKind.Moor, dockReal, rope != null ? rope.currentRopeLengthSquared : 0f, DockIdentity(dock));
         }
 
         public void NotifyLocalLength(PickupableBoatMooringRope rope)
@@ -150,7 +153,7 @@ namespace SailwindCoop.Sync
             NotifyLocal(rope, MooringKind.Length, Vector3.zero, rope.currentRopeLengthSquared);
         }
 
-        private void NotifyLocal(PickupableBoatMooringRope rope, MooringKind kind, Vector3 dockReal, float lengthSq)
+        private void NotifyLocal(PickupableBoatMooringRope rope, MooringKind kind, Vector3 dockReal, float lengthSq, string dockId = "")
         {
             // A Harmony postfix MUST NOT throw into the game's interaction flow (that would leave
             // the rope half-handled — "stuck in the air"). Swallow everything.
@@ -159,10 +162,10 @@ namespace SailwindCoop.Sync
                 if (_fleet != null)
                 {
                     foreach (var c in _fleet.Values)
-                        if (c._ropeIndex.ContainsKey(rope)) { c.NotifyLocal(rope, kind, dockReal, lengthSq); break; }
+                        if (c._ropeIndex.ContainsKey(rope)) { c.NotifyLocal(rope, kind, dockReal, lengthSq, dockId); break; }
                     return;
                 }
-                if (_applying) return;                                   // we triggered this applying a remote action
+                if (_applying || InteractionContext.Suppressed) return;                                   // we triggered this applying a remote action
                 if (_net.State != LinkState.Connected) return;
                 if (_net.Role == Role.Client &&
                     (GameState.currentlyLoading || GameState.justStarted || Time.time < _suppressLocalUntil))
@@ -174,15 +177,25 @@ namespace SailwindCoop.Sync
                     return;
                 }
 
+                if (!InteractionContext.HasInput)
+                {
+                    // Physics and world initialization update state without claiming a player action.
+                    if (_net.Role == Role.Host) SendRopeState((ushort)idx);
+                    return;
+                }
                 if (_net.Role == Role.Host)
-                    _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, LengthSq = lengthSq, IsInteraction = true },
+                {
+                    if (_dockRequests.TryGetValue((ushort)idx, out var waiting))
+                    { _dockRequests.Remove((ushort)idx); SendMissingObject(waiting.Request, waiting.Actor); }
+                    _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, DockId = dockId, LengthSq = lengthSq, IsInteraction = true },
                                    LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
                 else if (_net.Role == Role.Client)
                 {
                     uint requestId = unchecked(++_nextRequestId);
                     if (requestId == 0) requestId = unchecked(++_nextRequestId);
                     ClientState((ushort)idx).BeginRequest(requestId);
-                    _net.Broadcast(new MooringRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, LengthSq = lengthSq, RequestId = requestId },
+                    _net.Broadcast(new MooringRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, DockReal = dockReal, DockId = dockId, LengthSq = lengthSq, RequestId = requestId },
                                    LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
 
@@ -210,10 +223,13 @@ namespace SailwindCoop.Sync
                 return;
             }
             if (_net.Role != Role.Client) return;
+            if (msg.Outcome == MooringOutcome.MissingObject)
+                Plugin.Logger.LogWarning("[MooringSync] Missing object boat=" + _boatId + " rope=" + msg.Index + " request=" + msg.RequestId);
             var ropes = _bm != null ? _bm.ropes : null;
             if (ropes == null || msg.Index >= ropes.Length || ropes[msg.Index] == null) return;
             var state = ClientState(msg.Index);
-            if (!state.Receive(msg.RequesterNetId, msg.RequestId, _net.MyNetId, msg.StateAvailable ? msg : null)) return;
+            if (!state.Receive(msg.RequesterNetId, msg.RequestId, _net.MyNetId, msg.StateAvailable ? msg : null,
+                waitingTarget: msg.Outcome == MooringOutcome.WaitingForDock)) return;
             ApplyClientState(msg.Index, state);
         }
 
@@ -232,17 +248,24 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[MooringSync] Host received request " + msg.Kind + " boat=" + _boatId +
                 " rope #" + msg.Index + " player=" + _net.PlayerNetIdForPeer(fromPeer) + " request=" + msg.RequestId);
             var ropes = _bm != null ? _bm.ropes : null;
-            if (ropes == null || msg.Index >= ropes.Length || ropes[msg.Index] == null) return;
-            Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in request", applyMoorLength: false);
-            SendRopeState(msg.Index, _net.PlayerNetIdForPeer(fromPeer), msg.RequestId);
+            uint actor = _net.PlayerNetIdForPeer(fromPeer);
+            if (ropes == null || msg.Index >= ropes.Length || ropes[msg.Index] == null)
+            { SendMissingObject(msg, actor); return; }
+            _dockRequests.Remove(msg.Index);
+            if (!Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in request", applyMoorLength: false, dockId: msg.DockId))
+            { _dockRequests[msg.Index] = new DeferredDock { Request = msg, Actor = actor }; SendWaitingDock(msg, actor); return; }
+            SendRopeState(msg.Index, actor, msg.RequestId);
             // The acknowledgement and snapshots share ReliableOrdered, including to the requester.
         }
 
-        private void SendRopeState(ushort index, uint requester = 0, uint requestId = 0)
+        // Last rope state sent per index: the once-a-second pass repeats nothing that is already known.
+        private readonly Dictionary<ushort, string> _ropeSent = new Dictionary<ushort, string>();
+        private void SendRopeState(ushort index, uint requester = 0, uint requestId = 0, bool periodic = false)
         {
             if (_bm == null || _bm.ropes == null || index >= _bm.ropes.Length) return;
             var rope = _bm.ropes[index];
             if (rope == null) return;
+            if (_dockRequests.TryGetValue(index, out var waiting)) { if (!periodic) SendWaitingDock(waiting.Request, waiting.Actor); return; }
             var dock = DockFor(rope);
             bool moored = rope.IsMoored();
             if (moored && dock == null && CoordSpace.Ready) dock = FindDockNear(CoordSpace.LocalToReal(rope.transform.position));
@@ -258,7 +281,10 @@ namespace SailwindCoop.Sync
                 Kind = moored ? MooringKind.Moor : MooringKind.Unmoor,
                 DockReal = moored && available ? CoordSpace.LocalToReal(dock.transform.position) : Vector3.zero,
                 LengthSq = rope.currentRopeLengthSquared, RequesterNetId = requester, RequestId = requestId,
-                StateAvailable = available, IsInteraction = requester != 0 };
+                StateAvailable = available, IsInteraction = requester != 0, DockId = DockIdentity(dock) };
+            string signature = (byte)state.Kind + "|" + state.DockId + "|" + state.LengthSq.ToString("R") + "|" + available;
+            if (periodic && _ropeSent.TryGetValue(index, out var sent) && sent == signature) return;
+            _ropeSent[index] = signature;
             _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
 
@@ -274,11 +300,11 @@ namespace SailwindCoop.Sync
             var ropes = _bm != null ? _bm.ropes : null;
             if (ropes == null || index >= ropes.Length || ropes[index] == null) return;
             var rope = ropes[index];
-            bool held = IsLocallyHeld(rope);
-            state.TryApply(held, msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in", recordInteraction: msg.IsInteraction));
+            bool held = IsLocallyHeld(rope) || CarryPending(index);
+            state.TryApply(held, msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in", recordInteraction: msg.IsInteraction, dockId: msg.DockId));
         }
 
-        private bool Apply(ushort index, MooringKind kind, Vector3 dockReal, float lengthSq, string tag, bool applyMoorLength = true, bool recordInteraction = true)
+        private bool Apply(ushort index, MooringKind kind, Vector3 dockReal, float lengthSq, string tag, bool applyMoorLength = true, bool recordInteraction = true, string dockId = "")
         {
             var ropes = _bm != null ? _bm.ropes : null;
             if (ropes == null || index >= ropes.Length) { RefetchBoat(); ropes = _bm != null ? _bm.ropes : null; }
@@ -301,13 +327,13 @@ namespace SailwindCoop.Sync
                 }
                 else if (kind == MooringKind.Moor)
                 {
-                    var dock = FindDockNear(dockReal);
+                    var dock = FindDock(dockId, dockReal);
                     if (dock == null)
                     {
                         if (_missingApplyDock.Add(index))
                             Plugin.Logger.LogWarning("[MooringSync] " + _net.Role + " cannot apply Moor boat=" + _boatId +
                                 " rope #" + index + " dockReal=" + dockReal + ": no loaded dock within 3 m" +
-                                (_net.Role == Role.Client ? "; state deferred" : "; broadcasting actual outcome"));
+                                "; target deferred, dockId=" + dockId);
                         return false;
                     }
                     _missingApplyDock.Remove(index);
@@ -352,7 +378,7 @@ namespace SailwindCoop.Sync
         {
             rope.currentRopeLengthSquared = lengthSq;
             var spring = GetMooredSpring(rope);
-            if (spring != null) spring.maxDistance = Mathf.Sqrt(Mathf.Max(0f, lengthSq));
+            if (spring != null) spring.maxDistance = Mathf.Sqrt(Mathf.Max(0f, lengthSq)); // Sqrt of a negative is NaN in the joint
         }
 
         // -----------------------------------------------------------------
@@ -448,9 +474,11 @@ namespace SailwindCoop.Sync
             _lastActionTick = _net.Clock.ServerTick;
         }
 
+        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
+
         public void Clear()
         {
-            if (_fleet != null) { _fleet.Clear(); return; }
+            if (_fleet != null) { MooringPatches.ClearIntents(); _fleet.Clear(); return; }
             _cachedBoat = null;
             _bm = null;
             _ropeIndex.Clear();
@@ -462,54 +490,75 @@ namespace SailwindCoop.Sync
             _lastAction = "—";
             _lastActionTick = 0L;
             _suppressLocalUntil = 0f;
+            ClearCarry(); _dockRequests.Clear();
         }
     }
 
-    /// <summary>
-    /// Harmony postfixes on the mooring rope's state-changing methods, so every unmoor/moor —
-    /// however it was triggered (pickup, dock trigger, UnmoorAllRopes) — is forwarded.
-    /// </summary>
+    /// <summary>Capture changed results and preserve the input origin of delayed dock throws.</summary>
     public static class MooringPatches
     {
+        private static readonly HashSet<PickupableBoatMooringRope> _dropIntents = new HashSet<PickupableBoatMooringRope>();
+        internal static void ClearIntents() => _dropIntents.Clear();
+        internal static void MarkDrop(PickupableBoatMooringRope rope)
+        {
+            if (rope != null && InteractionContext.HasInput && !InteractionContext.Suppressed) _dropIntents.Add(rope);
+        }
+        internal static void ForgetPickup(PickupableBoatMooringRope rope)
+        { if (rope != null) _dropIntents.Remove(rope); }
         public static void Apply(Harmony harmony)
         {
-            var t = typeof(PickupableBoatMooringRope);
-            bool a = TryPatch(harmony, t, "Unmoor", Type.EmptyTypes, nameof(PostUnmoor));
-            bool b = TryPatch(harmony, t, "MoorTo", new[] { typeof(GPButtonDockMooring) }, nameof(PostMoorTo));
-            bool c = TryPatch(harmony, t, "ChangeRopeLength", new[] { typeof(float) }, nameof(PostChangeLength));
-            Plugin.Logger.LogInfo("[MooringPatches] Mooring patches: Unmoor=" + a + ", MoorTo=" + b + ", ChangeRopeLength=" + c);
-            SailwindCoop.Runtime.PatchHealth.Report("Mooring", (a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0), 3);
+            MooringCarryPatches.Apply(harmony);
+            var hooks = new SailwindCoop.Runtime.PatchHookCatalog();
+            Install(harmony, hooks, "Unmoor", Type.EmptyTypes, nameof(PreState), nameof(PostUnmoor));
+            Install(harmony, hooks, "MoorTo", new[] { typeof(GPButtonDockMooring) }, nameof(PreState), nameof(PostMoorTo));
+            Install(harmony, hooks, "ChangeRopeLength", new[] { typeof(float) }, nameof(PreState), nameof(PostChangeLength));
+            Install(harmony, hooks, "ThrowRopeTo", new[] { typeof(GPButtonDockMooring) }, nameof(PreThrow), null);
+            SailwindCoop.Runtime.PatchHealth.Report("Mooring", hooks);
+            Plugin.Logger.LogInfo("[MooringPatches] " + hooks.Detail);
         }
-
-        private static bool TryPatch(Harmony harmony, Type t, string method, Type[] args, string postfixName)
+        private static void Install(Harmony harmony, SailwindCoop.Runtime.PatchHookCatalog hooks,
+            string name, Type[] args, string prefix, string postfix)
+            => hooks.Install(typeof(PickupableBoatMooringRope), name, args, m => harmony.Patch(m,
+                prefix: Callback(prefix), postfix: postfix == null ? null : Callback(postfix)));
+        private static HarmonyMethod Callback(string name) => new HarmonyMethod(typeof(MooringPatches).GetMethod(name,
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static));
+        private static void Report(Exception e) { try { Plugin.Logger?.LogWarning("[MooringPatches] " + e); } catch { } }
+        private struct RopeBefore { internal bool Captured, Moored; internal Transform Parent; internal float Length; }
+        private static void PreState(PickupableBoatMooringRope __instance, out RopeBefore __state)
         {
-            try
-            {
-                var mi = t.GetMethod(method, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, args, null);
-                if (mi == null) { Plugin.Logger.LogWarning("[MooringPatches] Not found " + method); return false; }
-                var postfix = new HarmonyMethod(typeof(MooringPatches).GetMethod(postfixName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic));
-                harmony.Patch(mi, postfix: postfix);
-                return true;
-            }
-            catch (Exception e) { Plugin.Logger.LogWarning("[MooringPatches] " + method + ": " + e.Message); return false; }
+            var state = new RopeBefore();
+            SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__instance == null) return;
+                state.Captured = true; state.Moored = __instance.IsMoored();
+                state.Parent = __instance.transform.parent; state.Length = __instance.currentRopeLengthSquared;
+            }, Report);
+            __state = state;
         }
-
-        // Postfixes never throw into the game flow.
-        private static void PostUnmoor(PickupableBoatMooringRope __instance)
-        {
-            try { MooringSync.Instance?.NotifyLocalUnmoor(__instance); } catch (Exception e) { Plugin.Logger.LogWarning("[MooringPatches] PostUnmoor: " + e.Message); }
-        }
-
-        private static void PostMoorTo(PickupableBoatMooringRope __instance, GPButtonDockMooring mooring)
-        {
-            try { MooringSync.Instance?.NotifyLocalMoor(__instance, mooring); } catch (Exception e) { Plugin.Logger.LogWarning("[MooringPatches] PostMoorTo: " + e.Message); }
-        }
-
-        // Only forward when the length actually changed (ChangeRopeLength returns false at limits).
-        private static void PostChangeLength(PickupableBoatMooringRope __instance, bool __result)
-        {
-            if (!__result) return;
-            try { MooringSync.Instance?.NotifyLocalLength(__instance); } catch (Exception e) { Plugin.Logger.LogWarning("[MooringPatches] PostChangeLength: " + e.Message); }
-        }
+        private static void PreThrow(PickupableBoatMooringRope __instance)
+            => SailwindCoop.Runtime.PatchGuard.Run(() => MarkDrop(__instance), Report);
+        private static void PostUnmoor(PickupableBoatMooringRope __instance, RopeBefore __state)
+            => SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__instance == null || !__state.Captured || !__state.Moored || __instance.IsMoored()) return;
+                _dropIntents.Remove(__instance);
+                MooringSync.Instance?.NotifyLocalUnmoor(__instance);
+            }, Report);
+        private static void PostMoorTo(PickupableBoatMooringRope __instance, GPButtonDockMooring mooring, RopeBefore __state)
+            => SailwindCoop.Runtime.PatchGuard.Run(() => {
+                if (__instance == null || !__state.Captured || !__instance.IsMoored() ||
+                    (__state.Moored && __state.Parent == __instance.transform.parent &&
+                     __state.Length.Equals(__instance.currentRopeLengthSquared))) return;
+                if (_dropIntents.Remove(__instance))
+                {
+                    using (InteractionContext.Begin(InteractionSource.LocalInput))
+                        MooringSync.Instance?.NotifyLocalMoor(__instance, mooring);
+                }
+                else MooringSync.Instance?.NotifyLocalMoor(__instance, mooring);
+            }, Report);
+        private static void PostChangeLength(PickupableBoatMooringRope __instance, RopeBefore __state)
+            => SailwindCoop.Runtime.PatchGuard.Run(() => {
+                // The original returns false even when it changed the length to zero.
+                if (__instance != null && __state.Captured && !__state.Length.Equals(__instance.currentRopeLengthSquared))
+                    MooringSync.Instance?.NotifyLocalLength(__instance);
+            }, Report);
     }
 }

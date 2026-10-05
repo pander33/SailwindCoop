@@ -192,6 +192,7 @@ namespace SailwindCoop.Runtime
                 Players.RemoveRemote(netId);
                 Items.ClearRemoteActor(netId);
                 Anchor.ClearRemoteActor(netId);
+                Mooring.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
                 Pause.Release(netId);
@@ -407,6 +408,10 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.WheelLockRequest:
                     Controls.OnWheelLockRequest((WheelLockRequestMsg)msg, fromPeer); break;
+                case MsgType.MooringCarryRequest:
+                    Mooring.OnCarryRequest((MooringCarryRequestMsg)msg, fromPeer); break;
+                case MsgType.MooringCarryState:
+                    Mooring.OnCarryState((MooringCarryStateMsg)msg, fromPeer); break;
                 case MsgType.ItemState:
                     Items.OnItemState((ItemStateMsg)msg, fromPeer);
                     break;
@@ -463,6 +468,7 @@ namespace SailwindCoop.Runtime
                         {
                             case ResyncDomain.Controls: Controls.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Anchor: Anchor.Resync(resync.BoatIndex); break;
+                            case ResyncDomain.Mooring: Mooring.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Damage: Damage.Resync(resync.BoatIndex); break;
                         }
                     }

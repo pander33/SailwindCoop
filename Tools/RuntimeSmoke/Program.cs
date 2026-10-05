@@ -285,6 +285,41 @@ internal static class Program
                 Assert(gate.Receive(12, 7, 2, 7) && !gate.HasPending, "drop reply rejected after ignored snapshot");
                 Assert(gate.Receive(13, 0, 0, 7), "next snapshot rejected");
             });
+            Test("mooring dock wait cannot acknowledge or erase latest local intent", () => {
+                var pending = new PendingMooringState<string>(); string applied = null;
+                pending.BeginRequest(7);
+                Assert(!pending.Receive(10, 7, 10, null, waitingTarget: true), "unloaded target completed request");
+                Assert(!pending.Receive(0, 0, 10, "Unmoor"), "actual unmoored snapshot erased waiting Moor");
+                pending.TryApply(false, value => { applied = value; return true; });
+                Assert(applied == null, "waiting request applied a fabricated outcome");
+                pending.BeginRequest(8);
+                Assert(!pending.Receive(10, 7, 10, "Moor"), "loaded old dock completed newer request");
+                Assert(pending.Receive(10, 8, 10, "Moor"), "loaded matching dock did not complete request");
+                pending.TryApply(false, value => { applied = value; return true; });
+                Assert(applied == "Moor", "final mooring missing");
+            });
+            Test("installed mooring carry uses pickup objects and final pointer drop hooks", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    foreach (string name in new[] { "PickupableBoatMooringRope", "MooringRopeLengthAdjuster" })
+                        Assert(types[name].BaseType.Name == "PickupableItem", name + " must not route through ShipItem");
+                    Assert(types["PickupableBoatMooringRope"].Fields.Any(f => f.Name == "lengthAdjuster" && f.FieldType.Name == "MooringRopeLengthAdjuster"), "adjuster binding changed");
+                    foreach (string field in new[] { "pickedUpFromMooring", "returnSequencePlaying", "renderer", "coiledRopeVisual", "defaultMaterial" })
+                        Assert(types["MooringRopeLengthAdjuster"].Fields.Any(f => f.Name == field), "carry visual binding missing: " + field);
+                    var pickup = types["GoPointer"].Methods.Single(m => m.Name == "PickUpItem");
+                    int assigned = -1, notified = -1;
+                    for (int i = 0; i < pickup.Body.Instructions.Count; i++)
+                    {
+                        var operand = pickup.Body.Instructions[i].Operand;
+                        if (operand is FieldReference field && field.Name == "held" && pickup.Body.Instructions[i].OpCode.Code == Mono.Cecil.Cil.Code.Stfld) assigned = i;
+                        if (operand is MethodReference method && method.Name == "OnPickup") notified = i;
+                    }
+                    Assert(assigned >= 0 && notified > assigned, "pickup must capture assigned local hand");
+                    Assert(types["GoPointer"].Methods.Single(m => m.Name == "DropItem").Body.Instructions.Any(i =>
+                        i.Operand is FieldReference field && field.Name == "held" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "drop does not clear hand before final hook");
+                }
+            });
             Test("document chunks replace only after complete identified revision", () => {
                 var chunks = new ChunkAccumulator<string>();
                 Assert(chunks.Add("map1/rev3", 2, 3, new[] { "C" }) == null, "partial document became visible");
