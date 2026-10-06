@@ -356,6 +356,21 @@ namespace SailwindCoop.Sync
         /// player is seen standing on something that isn't the ship.
         /// </summary>
         public Transform LocalBoat => _lastLocalBoat;
+
+        /// <summary>Where another player stands on this deck, in the hull's own space.</summary>
+        public bool TryGetCrewDeckPos(Transform boat, out Vector3 localPos)
+        {
+            localPos = Vector3.zero;
+            ushort index = BoatLocator.IndexOf(boat);
+            if (index == BoatLocator.NoBoat) return false;
+            foreach (var a in _remotes.Values)
+            {
+                if (a.Go == null || !a.HasPoseFrame || a.LastPoseFrame != CoordFrame.Boat || a.LastPoseBoatIndex != index) continue;
+                localPos = boat.InverseTransformPoint(a.Go.transform.position);
+                return true;
+            }
+            return false;
+        }
         public string LocalCrouchText => "local " + (_lastLocalCrouch ? "YES" : "—") +
                                          ", h " + _lastLocalCrouchHeight.ToString("0.00");
         public string NearestRemoteAnim

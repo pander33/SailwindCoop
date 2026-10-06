@@ -34,6 +34,7 @@ namespace SailwindCoop.Runtime
         public InteractionSync Interactions { get; private set; }
         public WindTotemSync WindTotem { get; private set; }
         public HouseDoorSync HouseDoors { get; private set; }
+        public BoatTeleport Teleport { get; private set; }
         public ShopSync Shop { get; private set; }
         public WeatherStormSync Storms { get; private set; }
         public SleepSync Sleep { get; private set; }
@@ -147,6 +148,15 @@ namespace SailwindCoop.Runtime
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
             HouseDoors = new HouseDoorSync(Net);
+            Teleport = new BoatTeleport(Net, Players)
+            {
+                Done = (ok, text) =>
+                {
+                    if (_menuUI == null) return;
+                    _menuUI.Status = text;
+                    if (ok) _menuUI.Visible = false;
+                },
+            };
             Shop = new ShopSync(Net);
             Storms = new WeatherStormSync(Net);
             Sleep = new SleepSync(Net);
@@ -341,6 +351,8 @@ namespace SailwindCoop.Runtime
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
                 new SyncStep("HouseDoors.Tick", () => HouseDoors.Tick(_dt)),
                 new SyncStep("Interactions.Tick", () => Interactions.Tick(_dt)),
+                // Before Players.Tick, so the new place goes out in this frame's pose.
+                new SyncStep("Teleport.Tick", () => Teleport.Tick()),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
                 new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
             };

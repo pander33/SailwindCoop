@@ -84,6 +84,10 @@ namespace SailwindCoop.Runtime
             set => SetVisible(value);
         }
 
+        /// <summary>The menu's own status line. Not <see cref="CoopBehaviour.Notice"/>: that one holds
+        /// a failure the player still has to act on.</summary>
+        public string Status { set => _status = value; }
+
         public void Toggle()
         {
             SetVisible(!_visible);
@@ -520,6 +524,16 @@ namespace SailwindCoop.Runtime
             {
                 _coop.DisconnectSession("menu");
                 _status = "Session stopped";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUI.enabled = _coop.Teleport.Available;
+            if (GUILayout.Button("Teleport to boat", _button, GUILayout.Width(ButtonWidth + 44f), GUILayout.Height(ButtonHeight)))
+            {
+                _coop.Teleport.Request();
+                _status = "Teleporting to the boat";
             }
             GUI.enabled = true;
             GUILayout.EndHorizontal();

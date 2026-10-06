@@ -28,6 +28,8 @@ All notable user-facing changes are documented in this file.
   button).
 - The mod now ships two more files that must sit next to `SailwindCoop.dll`:
   `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.
+- **Teleport to boat.** A button in the F8 menu puts you back on the deck: where you last stood,
+  next to the crew, or amidships. For a player who fell overboard or was left ashore.
 
 ### Changed
 

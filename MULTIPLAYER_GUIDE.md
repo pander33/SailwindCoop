@@ -190,6 +190,10 @@ Player position is synchronized in either boat-local or world-real coordinates.
 - Disembarking to land is supported through player pose sync.
 - Multiple boats are partially supported by boat indexes.
 - Some control systems are still safest when both players are using the same active boat.
+- **Teleport to boat** in the F8 menu puts you back on a deck if you fell overboard or the boat left
+  without you. It picks the boat you last stood on, otherwise the host's boat, and places you where
+  you last stood, next to the crew, or amidships. A rope end, anchor or winch in your hand is
+  released first; an ordinary item stays in your hand.
 
 Best current practice: use one main boat for normal co-op sailing, and test dinghy or multi-boat workflows before relying on them in a long session.
 
