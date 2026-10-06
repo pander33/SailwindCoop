@@ -61,6 +61,8 @@ namespace SailwindCoop.Sync
         private readonly ItemMembership<ShipItem> _cargoMembership = new ItemMembership<ShipItem>();
         private readonly Dictionary<int, ItemStateMsg> _pendingStates = new Dictionary<int, ItemStateMsg>();
         private readonly Dictionary<int, SpawnObjectMsg> _pendingSpawns = new Dictionary<int, SpawnObjectMsg>();
+        // Client: mission goods whose mission slot is not in our journal yet (item id -> slot).
+        private readonly Dictionary<int, int> _pendingMissionGoods = new Dictionary<int, int>();
         private readonly CoopNet _net;
         private readonly List<ItemEntry> _items = new List<ItemEntry>();
         private readonly Dictionary<ShipItem, ItemEntry> _byItem = new Dictionary<ShipItem, ItemEntry>();
@@ -169,6 +171,7 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client && _pendingStates.Count != 0)
                 foreach (var state in new List<ItemStateMsg>(_pendingStates.Values))
                     if (TryApplyItemState(state) == ItemApplyStatus.Applied) _pendingStates.Remove(state.InstanceId);
+            if (_net.Role == Role.Client && _pendingMissionGoods.Count != 0) RetryMissionGoods();
             SendLocalHeldPose(dt);
             TickInstruments(dt);
             TickOperations();
@@ -2000,6 +2003,7 @@ namespace SailwindCoop.Sync
                 CargoPort = CargoPortOf(e.Item),
                 InventorySlot = state.InventorySlot,
                 IsSnapshot = snapshot,
+                MissionIndex = MissionIndexOf(e.Item),
             };
             if (peer == null) _net.Broadcast(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
             else peer.Send(msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -2028,6 +2032,8 @@ namespace SailwindCoop.Sync
                     authorRequestId: msg.AuthorRequester == _net.MyNetId ? msg.AuthorRequestId : 0,
                     baseline: msg.IsBaselineItem && msg.AuthorRequestId == 0);
                 if (e == null || e.Item == null) { _pendingSpawns[msg.InstanceId] = msg; return; }
+                // Before the state: applying it rebuilds the look text, which reads the mission.
+                ApplyMissionIndex(e.Item, msg.InstanceId, msg.MissionIndex);
                 OnItemState(new ItemStateMsg {
                     InstanceId = msg.InstanceId, PrefabIndex = msg.PrefabIndex,
                     Revision = msg.Revision, Tick = msg.Tick, Requester = msg.Requester, RequestId = msg.RequestId,
@@ -2061,6 +2067,7 @@ namespace SailwindCoop.Sync
             _tombstones.Add(msg.InstanceId);
             _pendingStates.Remove(msg.InstanceId);
             _pendingSpawns.Remove(msg.InstanceId);
+            _pendingMissionGoods.Remove(msg.InstanceId);
             // Our own copy may already sit in a BoatLocalItems cache (we left the boat's or house's range
             // before the host did). The host brings the item back under a NEW id, so a cached entry with
             // this one would respawn as a ghost next to it.
@@ -3115,6 +3122,64 @@ namespace SailwindCoop.Sync
             return s != null ? s.instanceId : 0;
         }
 
+        private static int MissionIndexOf(ShipItem item)
+        {
+            var good = item != null ? item.GetComponent<Good>() : null;
+            return good != null ? good.GetMissionIndex() : -1;
+        }
+
+        /// <summary>Client: give a good the mission slot the host's copy has. A Good prefab carries slot 0,
+        /// so without this every good created during the session reads as cargo of mission 0.</summary>
+        private void ApplyMissionIndex(ShipItem item, int instanceId, int missionIndex)
+        {
+            var good = item != null ? item.GetComponent<Good>() : null;
+            if (good == null) return;
+            try
+            {
+                _pendingMissionGoods.Remove(instanceId);
+                if (missionIndex < 0) { good.RegisterAsMissionless(); return; }
+                var missions = PlayerMissions.missions;
+                var mission = missions != null && missionIndex < missions.Length ? missions[missionIndex] : null;
+                if (mission == null)
+                {
+                    // The journal has not brought this mission yet. ShipItem.UpdateLookText dereferences
+                    // the slot, so the good stays plain until the mission is there (same as a vanilla load).
+                    good.RegisterAsMissionless();
+                    _pendingMissionGoods[instanceId] = missionIndex;
+                    return;
+                }
+                if (good.GetMissionIndex() == missionIndex) return;
+                ItemComponents.Set(good, "missionIndex", missionIndex);
+                ItemComponents.Set(good, "dueDay", mission.dueDay);
+                item.UpdateLookText();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] role=Client mission slot " + missionIndex + " for item id=" +
+                                         instanceId + " not applied: " + ex.Message);
+            }
+        }
+
+        private void RetryMissionGoods()
+        {
+            var missions = PlayerMissions.missions;
+            if (missions == null) return;
+            List<int> ready = null;
+            foreach (var pair in _pendingMissionGoods)
+            {
+                bool gone = !_byInstanceId.TryGetValue(pair.Key, out var e) || e.Item == null;
+                if (gone || (pair.Value < missions.Length && missions[pair.Value] != null))
+                    (ready ?? (ready = new List<int>())).Add(pair.Key);
+            }
+            if (ready == null) return;
+            foreach (int id in ready)
+            {
+                int slot = _pendingMissionGoods[id];
+                _pendingMissionGoods.Remove(id);
+                if (_byInstanceId.TryGetValue(id, out var e) && e.Item != null) ApplyMissionIndex(e.Item, id, slot);
+            }
+        }
+
         private static int CrateIdOf(ShipItem item)
         {
             var s = item != null ? item.GetComponent<SaveablePrefab>() : null;
@@ -3403,6 +3468,7 @@ namespace SailwindCoop.Sync
             _crateMembership.Clear();
             _cargoMembership.Clear();
             _pendingSpawns.Clear();
+            _pendingMissionGoods.Clear();
             _nextRequest = 0;
             ClearOperations();
             ItemComponents.Clear();

@@ -1406,6 +1406,7 @@ namespace SailwindCoop.Net
         public int InventorySlot = -1; // personal belt slot 0..4 (-1 = not in a belt slot)
 
         public bool IsSnapshot; // initial item manifest; not a new-object event
+        public int MissionIndex = -1; // Good.missionIndex: the mission slot of a cargo good (-1 = not mission cargo)
 
         public uint Revision;
         public uint Requester;
@@ -1450,6 +1451,7 @@ namespace SailwindCoop.Net
             w.Put(CargoPort);
             w.Put(InventorySlot);
             w.Put(IsSnapshot);
+            w.Put(MissionIndex);
         }
 
         public void Deserialize(NetDataReader r)
@@ -1486,6 +1488,7 @@ namespace SailwindCoop.Net
             CargoPort = r.GetInt();
             InventorySlot = r.GetInt();
             IsSnapshot = r.GetBool();
+            MissionIndex = r.GetInt();
         }
     }
 
