@@ -6,16 +6,19 @@ using UnityEngine;
 namespace SailwindCoop.DevConsole
 {
     /// <summary>
-    /// Helpers available to every script as <c>Dev.*</c>. Reflection reaches private members, so a
-    /// script can read what the decompile shows without a rebuild.
+    /// Helpers available to every snippet as <c>Dev.*</c>. Reflection reaches private members, so a
+    /// snippet can read what the decompile shows without a rebuild.
     /// </summary>
     public static class Dev
     {
         private const BindingFlags Any = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
                                          BindingFlags.NonPublic | BindingFlags.FlattenHierarchy;
 
+        /// <summary>Values kept between snippets (each snippet is its own assembly). Cleared by POST /reset.</summary>
+        public static readonly Dictionary<string, object> Vars = new Dictionary<string, object>();
+
         /// <summary>Adds a line to the "out" field of the response.</summary>
-        public static void Print(object value) => ScriptOutput.Write(value == null ? "null" : value.ToString());
+        public static void Print(object value) => SnippetOutput.Write(value == null ? "null" : value.ToString());
 
         public static T One<T>() where T : UnityEngine.Object => UnityEngine.Object.FindObjectOfType<T>();
         public static T[] All<T>() where T : UnityEngine.Object => UnityEngine.Object.FindObjectsOfType<T>();

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Development-only BepInEx plugin: a loopback HTTP endpoint that runs C# inside the running game.
+    Development-only BepInEx plugin: a loopback HTTP endpoint that runs compiled C# snippets inside the running game.
     Builds into its OWN plugin folder so it is never packed with SailwindCoop. Never ship it.
     See README.md next to this file.
   -->
@@ -23,8 +23,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-    <!-- The C# evaluator. The game does not ship Mono.CSharp, so it is copied next to the plugin. -->
-    <PackageReference Include="Mono.CSharp" Version="4.0.0.143" />
   </ItemGroup>
 
   <ItemGroup>

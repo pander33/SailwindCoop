@@ -8,7 +8,7 @@ using System.Threading;
 namespace SailwindCoop.DevConsole
 {
     /// <summary>
-    /// Loopback-only HTTP front end: <c>GET /status</c>, <c>POST /run</c> (body = C#), <c>POST /reset</c>.
+    /// Loopback-only HTTP front end: <c>GET /status</c>, <c>POST /run</c> (body = a compiled snippet assembly), <c>POST /reset</c>.
     ///
     /// This executes arbitrary code, so three things keep other software on the machine out of it:
     /// the listener binds 127.0.0.1 only; the Host header must name the loopback (DNS rebinding);
@@ -21,7 +21,6 @@ namespace SailwindCoop.DevConsole
         private const int PortAttempts = 10;
         private const int MaxBody = 1024 * 1024;
 
-        private readonly ScriptHost _scripts;
         private readonly MainThreadQueue _mainThread;
         private readonly Action<string> _log;
         private readonly int _timeoutMs;
@@ -31,9 +30,9 @@ namespace SailwindCoop.DevConsole
 
         public int Port { get; private set; }
 
-        public ConsoleServer(ScriptHost scripts, MainThreadQueue mainThread, Action<string> log, int timeoutMs)
+        public ConsoleServer(MainThreadQueue mainThread, Action<string> log, int timeoutMs)
         {
-            _scripts = scripts; _mainThread = mainThread; _log = log; _timeoutMs = timeoutMs;
+            _mainThread = mainThread; _log = log; _timeoutMs = timeoutMs;
         }
 
         /// <summary>Binds the first free port from <paramref name="firstPort"/> up, so a second copy of
@@ -95,28 +94,36 @@ namespace SailwindCoop.DevConsole
 
             if (path == "/reset")
             {
-                bool reset = _mainThread.Run(() => _scripts.Reset(), _timeoutMs);
+                bool reset = _mainThread.Run(() => Dev.Vars.Clear(), _timeoutMs);
                 Send(context, reset ? 200 : 504, reset ? "{\"ok\":true}" : Error("Main thread did not respond"));
                 return;
             }
 
-            string code;
             if (request.ContentLength64 > MaxBody) { Send(context, 413, Error("Body is too large")); return; }
-            using (var reader = new StreamReader(request.InputStream, Encoding.UTF8)) code = reader.ReadToEnd();
-            if (code.Trim().Length == 0) { Send(context, 400, Error("Empty body: send C# code")); return; }
+            byte[] assembly;
+            using (var buffer = new MemoryStream())
+            {
+                var chunk = new byte[16 * 1024];
+                int read;
+                while ((read = request.InputStream.Read(chunk, 0, chunk.Length)) > 0 && buffer.Length <= MaxBody)
+                    buffer.Write(chunk, 0, read);
+                assembly = buffer.ToArray();
+            }
+            if (assembly.Length < 2 || assembly[0] != 'M' || assembly[1] != 'Z')
+            { Send(context, 400, Error("The body must be a compiled snippet assembly; use devrun.sh")); return; }
 
             // Serialization also runs on the main thread: it reads live engine objects.
             string body = null;
             bool ran = _mainThread.Run(() =>
             {
-                var result = _scripts.Run(code);
+                var result = SnippetRunner.Run(assembly);
                 var sb = new StringBuilder("{\"ok\":").Append(result.Ok ? "true" : "false");
-                if (result.Ok && result.HasValue)
+                if (result.Ok)
                 {
                     sb.Append(",\"type\":").Append(Json.Quote(result.Value != null ? result.Value.GetType().FullName : "null"));
                     sb.Append(",\"value\":").Append(Json.Value(result.Value));
                 }
-                if (!result.Ok) sb.Append(",\"error\":").Append(Json.Quote(result.Error));
+                else sb.Append(",\"error\":").Append(Json.Quote(result.Error));
                 if (!string.IsNullOrEmpty(result.Output)) sb.Append(",\"out\":").Append(Json.Quote(result.Output));
                 body = sb.Append('}').ToString();
             }, _timeoutMs);
