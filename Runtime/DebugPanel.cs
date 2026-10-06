@@ -471,6 +471,10 @@ namespace SailwindCoop.Runtime
                 else { pos = Vector3.zero; rot = Quaternion.identity; }
 
                 var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
+                // A Good prefab carries missionIndex 0: without this the crate belongs to mission slot 0
+                // (delivery text, cannot be sold). IslandMarket.SpawnGood does the same for a bought good.
+                var good = go.GetComponent<Good>();
+                if (good != null) good.RegisterAsMissionless();
                 var sp = go.GetComponent<SaveablePrefab>();
                 if (sp != null) sp.RegisterToSave();
                 var item = go.GetComponent<ShipItem>();
