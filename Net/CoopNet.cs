@@ -69,6 +69,7 @@ namespace SailwindCoop.Net
         private readonly Dictionary<uint, string> _playerNames = new Dictionary<uint, string>();
         private NetPeer _hostPeer;            // client side: the host
         private DatagramTunnel _tunnel;       // Steam transport: carries this session's datagrams
+        private LagRelay _lag;                // Debug link simulation: the tunnel ends in a delaying UDP relay
         private long _lastTimeSyncTick;
         private SessionMemberInfo[] _roster = new SessionMemberInfo[0];
         private int _rosterRevision;
@@ -113,10 +114,12 @@ namespace SailwindCoop.Net
 
         public int PeerCount => _sessions.Count;
         /// <summary>The session's datagrams also travel over Steam (host) or only over Steam (client).</summary>
-        public bool OverSteam => _tunnel != null;
+        public bool OverSteam => _tunnel != null && _lag == null;
+        /// <summary>Client: this session's datagrams pass through the Debug link simulation.</summary>
+        public bool LinkSimulated => _lag != null;
         /// <summary>Client: who we are joining, for messages — an address or a Steam name.</summary>
         public string HostLabel { get; private set; } = "";
-        public string TransportStatus => _tunnel == null ? "" :
+        public string TransportStatus => !OverSteam ? "" :
             "steam out=" + _tunnel.SentToRelay + " in=" + _tunnel.ReceivedFromRelay +
             (Role == Role.Host ? " links=" + _tunnel.LinkCount : "") +
             (string.IsNullOrEmpty(_tunnel.LastError) ? "" : " err=" + _tunnel.LastError);
@@ -267,6 +270,23 @@ namespace SailwindCoop.Net
         public void StartClient(string ip, int port)
         {
             Stop();
+            if (LinkSimulation.Enabled)
+            {
+                // Development: put a delaying, lossy relay between this client and the host.
+                LagRelay lag = LagRelay.Open(ip, port, out string lagError);
+                if (lag != null)
+                {
+                    _lag = lag;
+                    _tunnel = new DatagramTunnel(lag);
+                    int local = _tunnel.StartClient(LagRelay.HostPeer);
+                    _log("[CoopNet] Link simulation on: " + ip + ":" + port + " through 127.0.0.1:" + local +
+                         " delay=" + LinkSimulation.DelayMs + "ms jitter=" + LinkSimulation.JitterMs +
+                         "ms loss=" + LinkSimulation.LossPercent + "%");
+                    Connect("127.0.0.1", local, ConnectAttempts, ip);
+                    return;
+                }
+                _log("[CoopNet] Link simulation not started (" + lagError + "), connecting directly");
+            }
             Connect(ip, port, ConnectAttempts, ip);
         }
 
@@ -302,7 +322,8 @@ namespace SailwindCoop.Net
             {
                 _tunnel.Stop();
                 _tunnel = null;
-                SteamLink.CloseRelay();
+                if (_lag != null) { _lag.Dispose(); _lag = null; }
+                else SteamLink.CloseRelay();
             }
             _sessions.Clear();
             // Names and our own id belong to the session that just ended: leaving them behind made the
@@ -428,7 +449,7 @@ namespace SailwindCoop.Net
                         ? "Disconnected: " + info.Reason
                         : LastDisconnectReason;
                     // Steam knows why the host could not be reached; "ConnectionFailed" does not.
-                    string steamFailure = _tunnel != null ? SteamLink.TakeFailure() : null;
+                    string steamFailure = OverSteam ? SteamLink.TakeFailure() : null;
                     if (!string.IsNullOrEmpty(steamFailure) && string.IsNullOrEmpty(LastDisconnectReason))
                         LastError = steamFailure;
                 }

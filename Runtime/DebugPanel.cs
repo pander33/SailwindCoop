@@ -47,7 +47,7 @@ namespace SailwindCoop.Runtime
             if (!Visible) return;
             EnsureStyles();
 
-            const float w = 380f, h = 820f;
+            const float w = 380f, h = 900f;
             var rect = new Rect(12, 12, w, h);
             GUI.Box(rect, "Debug Panel - Test Scenarios", _box);
 
@@ -64,6 +64,8 @@ namespace SailwindCoop.Runtime
             DrawWorld();
             GUILayout.Space(6);
             DrawIslandTeleport();
+            GUILayout.Space(6);
+            DrawLinkSimulation();
             GUILayout.Space(6);
             DrawItemSpawn();
 
@@ -399,6 +401,40 @@ namespace SailwindCoop.Runtime
         }
 
         // -----------------------------------------------------------------
+        // Link simulation — this machine as a LAN client (delay, jitter and loss below LiteNetLib)
+        // -----------------------------------------------------------------
+
+        private void DrawLinkSimulation()
+        {
+            GUILayout.Label("- Bad link (LAN client) -", _label);
+            bool on = GUILayout.Toggle(LinkSimulation.Enabled, " Simulate on the next Join");
+            if (on != LinkSimulation.Enabled) LinkSimulation.Enabled = on;
+            LinkSimulation.DelayMs = SimSlider("delay", LinkSimulation.DelayMs, 500, " ms each way");
+            LinkSimulation.JitterMs = SimSlider("jitter", LinkSimulation.JitterMs, 200, " ms");
+            LinkSimulation.LossPercent = SimSlider("loss", LinkSimulation.LossPercent, 30, " %");
+            string state;
+            if (_net.LinkSimulated)
+                state = "active: " + LinkSimulation.Forwarded + " passed, " + LinkSimulation.Dropped +
+                        " lost, RTT " + _net.RttMs.ToString("F0") + " ms";
+            else if (_net.State == LinkState.Connected)
+                state = _net.Role == Role.Host ? "not on a host: enable it on the joining copy"
+                                               : "this session joined without it: rejoin to apply";
+            else
+                state = on ? "starts with the next LAN Join" : "off";
+            GUILayout.Label(state, _label);
+        }
+
+        private int SimSlider(string name, int value, int max, string unit)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(name, _label, GUILayout.Width(50));
+            int result = Mathf.RoundToInt(GUILayout.HorizontalSlider(value, 0f, max, GUILayout.Width(190)));
+            GUILayout.Label(result + unit, _label);
+            GUILayout.EndHorizontal();
+            return result;
+        }
+
+        // -----------------------------------------------------------------
         // 4. Item spawn — host (the new saveable auto-replicates via ItemSync)
         // -----------------------------------------------------------------
 
@@ -414,7 +450,7 @@ namespace SailwindCoop.Runtime
             EnsurePrefabs();
             string flt = _itemFilter != null ? _itemFilter.ToLowerInvariant() : "";
 
-            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(220));
+            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(200));
             int shown = 0;
             foreach (var kv in _prefabs)
             {

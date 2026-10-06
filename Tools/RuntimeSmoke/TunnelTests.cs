@@ -183,6 +183,55 @@ internal static class TunnelTests
             }
         });
 
+        test("link simulation delays and loses datagrams under an intact LiteNetLib session", () => {
+            LinkSimulation.DelayMs = 60; LinkSimulation.JitterMs = 40; LinkSimulation.LossPercent = 10;
+            using (var host = new Node())
+            using (var client = new Node())
+            {
+                LagRelay lag = null;
+                try
+                {
+                    Assert(host.Net.Start(), "host start");
+                    lag = LagRelay.Open("127.0.0.1", host.Net.LocalPort, out string error);
+                    Assert(lag != null, "relay: " + error);
+                    client.Tunnel = new DatagramTunnel(lag);
+                    Assert(client.Net.Start(), "client start");
+                    client.Net.Connect("127.0.0.1", client.Tunnel.StartClient(LagRelay.HostPeer), Key);
+                    Pump(() => host.Peers.Count == 1 && client.Peers.Count == 1, 20000, "connect", host, client);
+
+                    // Reliable ordered messages arrive complete and in order despite loss and reordering.
+                    for (int i = 0; i < 200; i++) client.Peers[0].Send(BitConverter.GetBytes(i), DeliveryMethod.ReliableOrdered);
+                    Pump(() => host.Received.Count >= 200, 30000, "ordered messages", host, client);
+                    for (int i = 0; i < 200; i++)
+                        Assert(BitConverter.ToInt32(host.Received[i], 0) == i, "message " + i + " out of order");
+
+                    // The delay is real: an echo cannot come back sooner than twice the one-way delay.
+                    host.Received.Clear(); client.Received.Clear();
+                    var watch = Stopwatch.StartNew();
+                    client.Peers[0].Send(new byte[] { 1 }, DeliveryMethod.ReliableOrdered);
+                    Pump(() => host.Received.Count >= 1, 10000, "echo request", host, client);
+                    host.Peers[0].Send(new byte[] { 2 }, DeliveryMethod.ReliableOrdered);
+                    Pump(() => client.Received.Count >= 1, 10000, "echo reply", host, client);
+                    Assert(watch.ElapsedMilliseconds >= 120, "round trip took " + watch.ElapsedMilliseconds + " ms, expected at least 120");
+                    Assert(LinkSimulation.Dropped > 0 && LinkSimulation.Forwarded > LinkSimulation.Dropped,
+                           "counters passed=" + LinkSimulation.Forwarded + " lost=" + LinkSimulation.Dropped);
+
+                    // Leaving still reaches the host: the held disconnect packet is sent on Dispose.
+                    LinkSimulation.LossPercent = 0;
+                    host.Net.DisconnectTimeout = 5000;
+                    client.Net.Stop();
+                    client.Tunnel.Stop();
+                    lag.Dispose(); lag = null;
+                    Pump(() => host.Peers.Count == 0, 1500, "the leave is announced through the relay", host);
+                }
+                finally
+                {
+                    lag?.Dispose();
+                    LinkSimulation.DelayMs = 0; LinkSimulation.JitterMs = 0; LinkSimulation.LossPercent = 0;
+                }
+            }
+        });
+
         test("tunnel keeps a session alive while the main thread is blocked", () => {
             var hub = new Hub();
             using (var host = new Node())
