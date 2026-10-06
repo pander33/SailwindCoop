@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Development-only BepInEx plugin: a loopback HTTP endpoint that runs C# inside the running game.
+    Builds into its OWN plugin folder so it is never packed with SailwindCoop. Never ship it.
+    See README.md next to this file.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net46</TargetFramework>
+    <AssemblyName>SailwindCoopDevConsole</AssemblyName>
+    <RootNamespace>SailwindCoop.DevConsole</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <Deterministic>true</Deterministic>
+    <Configuration Condition="'$(Configuration)'==''">Release</Configuration>
+
+    <GameDir>D:\SteamLibrary\steamapps\common\Sailwind</GameDir>
+    <ManagedDir>$(GameDir)\Sailwind_Data\Managed</ManagedDir>
+    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+    <OutputPath>$(GameDir)\BepInEx\plugins\SailwindCoopDevConsole\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <!-- The C# evaluator. The game does not ship Mono.CSharp, so it is copied next to the plugin. -->
+    <PackageReference Include="Mono.CSharp" Version="4.0.0.143" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
