@@ -69,17 +69,19 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 #### Crew And Host Controls
 - The **Crew** section shows each player's loading state, ping, and current boat.
 - The host can use **Lock session** / **Open session** without disconnecting existing players.
-- The host can remove a guest with the two-step **Kick** / **Confirm** action.
+- The host can remove a guest with the two-step **Kick** / **Sure?** action.
+- **Teleport to boat** puts you back on the deck if you fell overboard or the boat left without you.
 
 #### Overlay/Debug Info
-- Press **F8** and use **Show Status** / **Hide Status**
+The buttons below sit under **Settings** in the F8 menu, which is collapsed until you click it.
+- Press **F8**, open **Settings** and use **Show Status** / **Hide Status**
 - **Logging** switches the log file on and off without restarting the game. It is off by default; turn it on *before* reproducing a problem, otherwise the log will hold nothing useful
 - **Dump water state** writes `debug/water-*.txt`. Press it on both machines at the same moment if the sea ever looks different on one of them
 - **Export report** writes `debug/coop-report-*.txt` with session and recent error diagnostics, including when logging was off
 - The **Debug** button opens the developer panel, and only works if `EnableDebugPanel` is set in the config
 
 #### Skin Selection
-- Press **F8** and click **Avatar** to open the skin selection menu
+- Press **F8**, open **Settings** and click **Avatar** to open the skin selection menu
 - Skin changes are visible to other players in real-time
 
 #### Menu Input
@@ -227,13 +229,14 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - Нажмите **F8** и кнопку **Disconnect**
 
 #### Оверлей с информацией
-- Нажмите **F8** и используйте **Show Status** / **Hide Status**
+Кнопки ниже находятся в разделе **Settings** меню F8; он свёрнут, пока по нему не щёлкнуть.
+- Нажмите **F8**, откройте **Settings** и используйте **Show Status** / **Hide Status**
 - **Logging** включает и выключает лог-файл без перезапуска игры. По умолчанию выключено; включайте *до* воспроизведения проблемы, иначе в логе не будет ничего полезного
 - **Dump water state** пишет `debug/water-*.txt`. Нажмите на обеих машинах одновременно, если море где-то выглядит иначе
 - Кнопка **Debug** открывает панель разработчика и работает только при включённом `EnableDebugPanel` в конфиге
 
 #### Выбор скина
-- Нажмите **F8** и кнопку **Avatar**, чтобы открыть меню выбора скина
+- Нажмите **F8**, откройте **Settings** и нажмите **Avatar**, чтобы открыть меню выбора скина
 
 #### Управление курсором
 - Пока co-op меню открыто, курсор работает только с меню и не взаимодействует с миром.

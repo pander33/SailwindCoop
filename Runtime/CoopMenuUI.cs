@@ -9,8 +9,11 @@ namespace SailwindCoop.Runtime
     /// </summary>
     public sealed class CoopMenuUI
     {
+        private const float WindowWidth = 460f;
         private const float ButtonWidth = 116f;
         private const float ButtonHeight = 30f;
+        private const float FieldHeight = 26f;
+        private const float CaptionWidth = 64f;
 
         private readonly CoopBehaviour _coop;
         private readonly CoopNet _net;
@@ -31,6 +34,8 @@ namespace SailwindCoop.Runtime
         private Vector2 _scroll;
         private Sync.ModSyncView _modView;
         private bool _modSharing;
+        private bool _debugTools;
+        private bool _logging;
         private bool _restartPending;
         private string _restartMods = "";
 
@@ -48,24 +53,55 @@ namespace SailwindCoop.Runtime
         private SteamFriendInfo[] _friends = new SteamFriendInfo[0];
         private float _friendsRefreshAt;
 
-        private GUIStyle _window;
+        // What the window is made of is decided once per Layout pass and kept for the Repaint that
+        // follows: a control count that differs between the two passes is Unity's "Getting control
+        // N's position in a group with only M controls".
+        private enum Mode { Offline, Connecting, Hosting, Joined }
+        private Mode _mode;
+        private bool _settingsOpen;
+        private bool _viewSettings;
+        private bool _viewModsPrompt;
+        private string _viewError = "";
+        private string _viewStatus = "";
+        private string _viewNotice = "";
+        private float _contentHeight = 420f;
+        private float _contentWidth;
+
+        private bool _stylesReady;
         private GUIStyle _title;
-        private GUIStyle _label;
+        private GUIStyle _caption;
+        private GUIStyle _text;
         private GUIStyle _muted;
+        private GUIStyle _error;
+        private GUIStyle _notice;
+        private GUIStyle _card;
         private GUIStyle _button;
+        private GUIStyle _primaryButton;
         private GUIStyle _dangerButton;
         private GUIStyle _smallButton;
+        private GUIStyle _ghostButton;
+        private GUIStyle _tab;
+        private GUIStyle _tabOn;
         private GUIStyle _textField;
-        private GUIStyle _pill;
-        private GUIStyle _crewCell;
+        private GUIStyle _pillIdle;
+        private GUIStyle _pillBusy;
+        private GUIStyle _pillGood;
+        private GUIStyle _pillBad;
+        private GUIStyle _cell;
+        private GUIStyle _cellHead;
+        private GUIStyle _cellGood;
+        private GUIStyle _cellWarn;
+        private GUIStyle _cellBad;
+        private GUIStyle _row;
+        private GUIStyle _rowAlt;
         private GUIStyle _alertBox;
         private GUIStyle _alertTitle;
         private GUIStyle _alertText;
-        private GUIStyle _backdrop;
         private Texture2D _backdropTex;
         private Texture2D _shadowTex;
         private Texture2D _windowTex;
         private Texture2D _borderTex;
+        private Texture2D _lineTex;
 
         public CoopMenuUI(CoopBehaviour coop, CoopNet net)
         {
@@ -146,81 +182,157 @@ namespace SailwindCoop.Runtime
                       " for details).", _alertText);
         }
 
+        private void Snapshot()
+        {
+            RefreshSteamView();
+            _drawRoster = _net.RosterSnapshot;
+            _modView = _coop.Mods.BuildView();
+            _modSharing = Plugin.Cfg.ShareMods.Value;
+            _debugTools = Plugin.Cfg.EnableDebugPanel.Value;
+            _logging = Plugin.Logger.Enabled;
+
+            bool busy = _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking;
+            _mode = busy ? Mode.Connecting
+                  : _net.Role == Role.Host ? Mode.Hosting
+                  : _net.Role == Role.Client && _net.State == LinkState.Connected ? Mode.Joined
+                  : Mode.Offline;
+            _viewSettings = _settingsOpen;
+            // A joining player has to answer the mod question and watch the download: that part of
+            // the mod section belongs to the join, not to the settings.
+            _viewModsPrompt = _net.Role != Role.Host && (_modView.Deciding || !string.IsNullOrEmpty(_modView.Text));
+            _viewError = _net.LastError ?? "";
+            _viewStatus = _status ?? "";
+            // Shown even with logging switched off — this is the only surface for an actionable failure.
+            _viewNotice = CoopBehaviour.LastNotice ?? "";
+        }
+
         private void DrawWindow()
         {
-            float w = 430f;
-            float h = Mathf.Min(680f, Screen.height - 80f);
-            float x = Mathf.Clamp(Screen.width - w - 18f, 10f, Screen.width - w - 10f);
+            float w = Mathf.Min(WindowWidth, Screen.width - 20f);
+            float maxHeight = Mathf.Max(200f, Screen.height - 80f);
+            if (Event.current.type == EventType.Layout)
+            {
+                Snapshot();
+                // The window is as tall as what it shows; the scroll bar takes its strip only when
+                // the content does not fit the screen.
+                bool scrolls = _contentHeight + 26f > maxHeight;
+                _contentWidth = w - 28f - (scrolls ? 16f : 0f);
+            }
+            float h = Mathf.Min(_contentHeight + 26f, maxHeight);
+            float x = Mathf.Max(10f, Screen.width - w - 18f);
             float y = 60f;
             var rect = new Rect(x, y, w, h);
 
             GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _backdropTex, ScaleMode.StretchToFill);
-            GUI.DrawTexture(new Rect(rect.x + 8f, rect.y + 8f, rect.width, rect.height), _shadowTex, ScaleMode.StretchToFill);
-            GUI.DrawTexture(new Rect(rect.x - 2f, rect.y - 2f, rect.width + 4f, rect.height + 4f), _borderTex, ScaleMode.StretchToFill);
+            GUI.DrawTexture(new Rect(rect.x + 6f, rect.y + 6f, rect.width, rect.height), _shadowTex, ScaleMode.StretchToFill);
+            GUI.DrawTexture(new Rect(rect.x - 1f, rect.y - 1f, rect.width + 2f, rect.height + 2f), _borderTex, ScaleMode.StretchToFill);
             GUI.DrawTexture(rect, _windowTex, ScaleMode.StretchToFill);
-            GUI.Box(rect, GUIContent.none, _window);
             GUILayout.BeginArea(new Rect(x + 14f, y + 12f, w - 28f, h - 24f));
-            _scroll = GUILayout.BeginScrollView(_scroll, false, true);
+            _scroll = GUILayout.BeginScrollView(_scroll);
+            GUILayout.BeginVertical(GUILayout.Width(_contentWidth));
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Sailwind Co-op", _title);
-            GUILayout.FlexibleSpace();
-            GUILayout.Label(StateText(), _pill, GUILayout.Width(128f), GUILayout.Height(24f));
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(8f);
+            DrawHeader();
             if (_restartPending)
             {
                 DrawRestartBanner();
                 GUILayout.Space(8f);
             }
-            DrawIdentity();
-            GUILayout.Space(8f);
-            DrawConnection();
-            GUILayout.Space(8f);
-            DrawMods();
-            GUILayout.Space(8f);
+            DrawSession();
+            if (_viewModsPrompt) DrawModsPrompt();
             DrawCrew();
-            GUILayout.Space(10f);
-            DrawActions();
-            GUILayout.Space(10f);
-            DrawTools();
-            GUILayout.FlexibleSpace();
+            DrawTeleport();
+            DrawSettings();
+            DrawMessages();
 
-            // Emitted unconditionally (empty string when unset). A Label that appears only when its text
-            // is non-empty changes the control count between the Layout pass and the event pass that set
-            // it — Unity's "Getting control N's position in a group with only M controls", thrown here
-            // between BeginArea and EndArea, which leaves the GUI clip stack unbalanced for that frame.
-            GUILayout.Label(_net.LastError ?? "", _muted);
-            GUILayout.Label(_status ?? "", _muted);
-            // Shown even with logging switched off — this is the only surface for an actionable failure.
-            GUILayout.Label(CoopBehaviour.LastNotice ?? "", _muted);
-
+            GUILayout.EndVertical();
+            if (Event.current.type == EventType.Repaint)
+                _contentHeight = GUILayoutUtility.GetLastRect().height;
             GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
 
-        private void DrawIdentity()
+        private float CardInner => _contentWidth - _card.padding.horizontal;
+
+        /// <summary>Width of one of <paramref name="count"/> equal buttons filling a card row.</summary>
+        private float Split(int count) => (CardInner - 4f * (count + 1) - 2f) / count;
+
+        private void DrawHeader()
         {
-            GUILayout.Label("Player", _label);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Name", _muted, GUILayout.Width(72f));
-            _playerName = GUILayout.TextField(_playerName, _textField, GUILayout.Height(26f));
-            if (GUILayout.Button("Apply", _smallButton, GUILayout.Width(92f), GUILayout.Height(26f)))
+            GUILayout.Label("Sailwind Co-op", _title);
+            GUILayout.FlexibleSpace();
+            GUILayout.Label(StateText(), StatePill(), GUILayout.Width(104f), GUILayout.Height(22f));
+            if (GUILayout.Button("X", _ghostButton, GUILayout.Width(26f), GUILayout.Height(22f)))
+                SetVisible(false);
+            GUILayout.EndHorizontal();
+            Rect line = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true));
+            if (Event.current.type == EventType.Repaint) GUI.DrawTexture(line, _lineTex, ScaleMode.StretchToFill);
+            GUILayout.Space(8f);
+        }
+
+        private void DrawSession()
+        {
+            GUILayout.BeginVertical(_card);
+            switch (_mode)
             {
-                string name = string.IsNullOrWhiteSpace(_playerName) ? "Player" : _playerName.Trim();
-                Plugin.Cfg.PlayerName.Value = name;
-                _net.PlayerName = name;
-                _playerName = name;
-                _status = "Player name updated";
+                case Mode.Offline: DrawSessionOffline(); break;
+                case Mode.Connecting: DrawSessionConnecting(); break;
+                case Mode.Hosting: DrawSessionHosting(); break;
+                default: DrawSessionJoined(); break;
             }
+            GUILayout.EndVertical();
+        }
+
+        private void DrawSessionOffline()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("SESSION", _caption);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("LAN", _steamMode ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f)))
+                SetSteamMode(false);
+            if (GUILayout.Button("Steam", _steamMode ? _tabOn : _tab, GUILayout.Width(70f), GUILayout.Height(22f)))
+                SetSteamMode(true);
+            GUILayout.EndHorizontal();
+            GUILayout.Space(4f);
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Name", _muted, GUILayout.Width(CaptionWidth));
+            _playerName = GUILayout.TextField(_playerName, 32, _textField, GUILayout.Height(FieldHeight));
             GUILayout.EndHorizontal();
 
+            if (!_steamMode)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Host IP", _muted, GUILayout.Width(CaptionWidth));
+                _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(FieldHeight));
+                GUILayout.Label("Port", _muted, GUILayout.Width(34f));
+                _port = GUILayout.TextField(_port, 5, _textField, GUILayout.Width(62f), GUILayout.Height(FieldHeight));
+                GUILayout.EndHorizontal();
+            }
+            else if (!_steamReady)
+            {
+                GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
+                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+                    _steamInitTried = false;
+            }
+            else
+            {
+                DrawSteam();
+            }
+
+            GUILayout.Space(6f);
+            float third = Split(3);
             bool canReconnect = _net.HasConnectedSuccessfully &&
                                 (_net.State == LinkState.Idle || _net.State == LinkState.Failed || _net.State == LinkState.Rejected);
             GUILayout.BeginHorizontal();
+            GUI.enabled = PatchHealth.Blocker == null;
+            if (GUILayout.Button("Host", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                StartHost();
+            GUI.enabled = PatchHealth.Blocker == null && !_restartPending;
+            if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                Join();
             GUI.enabled = canReconnect && !_restartPending;
-            if (GUILayout.Button("Reconnect", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+            if (GUILayout.Button("Reconnect", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
             {
                 if (GameState.playing)
                     _status = "Return to the main menu before reconnecting";
@@ -232,96 +344,131 @@ namespace SailwindCoop.Runtime
                     _status = "Reconnecting to " + _joinIp.Trim() + ":" + reconnectPort;
                 }
             }
-            GUI.enabled = _net.Role == Role.Host;
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
+                : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
+                : "Host: load a world first. Guest: join from the main menu.", _muted);
+        }
+
+        private void DrawSessionConnecting()
+        {
+            GUILayout.Label("SESSION", _caption);
+            GUILayout.Label(_net.OverSteam ? "Connecting to " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")..."
+                                           : "Connecting to " + _joinIp + ":" + _port + "...", _text);
+            GUILayout.Space(4f);
+            if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(Split(3)), GUILayout.Height(ButtonHeight)))
+            {
+                _coop.DisconnectSession("menu");
+                _status = "Connection cancelled";
+            }
+        }
+
+        private void DrawSessionHosting()
+        {
+            GUILayout.Label("SESSION", _caption);
+            GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value + (_net.AcceptingClients ? "" : " - locked"), _text);
+            GUILayout.Label((_net.OverSteam ? "LAN and Steam (" + _net.TransportStatus + ")" : "LAN") +
+                            ", guests: " + _net.PeerCount, _muted);
+            GUILayout.Space(4f);
+            float half = Split(2);
+            GUILayout.BeginHorizontal();
             if (GUILayout.Button(_net.AcceptingClients ? "Lock session" : "Open session", _button,
-                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+                                 GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
             {
                 _net.SetAcceptingClients(!_net.AcceptingClients);
                 _status = _net.AcceptingClients ? "Session open" : "Session locked";
             }
-            GUI.enabled = true;
+            if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+            {
+                _coop.DisconnectSession("menu");
+                _status = "Session stopped";
+            }
             GUILayout.EndHorizontal();
         }
 
-        private void DrawMods()
+        private void DrawSessionJoined()
         {
-            // Snapshot once per layout pass: the phase changes from network packets and from the
-            // buttons below, and the control count must not differ between Layout and Repaint.
-            if (Event.current.type == EventType.Layout)
+            GUILayout.Label("SESSION", _caption);
+            GUILayout.Label(_net.OverSteam ? "Connected to " + _net.HostLabel + " over Steam"
+                                           : "Connected to " + _joinIp + ":" + _port, _text);
+            GUILayout.Label(_net.OverSteam ? _net.TransportStatus : "LAN", _muted);
+            GUILayout.Space(4f);
+            if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight)))
             {
-                _modView = _coop.Mods.BuildView();
-                _modSharing = Plugin.Cfg.ShareMods.Value;
+                _coop.DisconnectSession("menu");
+                _status = "Session stopped";
             }
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Mods", _label);
-            GUILayout.FlexibleSpace();
-            GUI.enabled = _net.Role != Role.Client;
-            if (GUILayout.Button(_modSharing ? "Sharing: ON" : "Sharing: off", _smallButton,
-                                 GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
-            {
-                Plugin.Cfg.ShareMods.Value = !_modSharing;
-                _status = !_modSharing
-                    ? "Joining players can now download your mods"
-                    : "Joining players can no longer download your mods";
-            }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-
-            GUILayout.Label(_modView.Text ?? "", _muted);
-            if (!_modView.Deciding) return;
-
-            GUILayout.BeginHorizontal();
-            GUI.enabled = _modView.CanDownload;
-            if (GUILayout.Button(_modView.DownloadLabel, _button, GUILayout.Width(ButtonWidth + 44f), GUILayout.Height(ButtonHeight)))
-                _coop.Mods.Download();
-            GUI.enabled = true;
-            if (GUILayout.Button("Join anyway", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                _coop.Mods.JoinAnyway();
-            if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(ButtonWidth - 20f), GUILayout.Height(ButtonHeight)))
-            {
-                _coop.Mods.Cancel();
-                _status = "Join cancelled";
-            }
-            GUILayout.EndHorizontal();
         }
+
+        private void DrawModsPrompt()
+        {
+            GUILayout.BeginVertical(_card);
+            GUILayout.Label("MODS", _caption);
+            GUILayout.Label(_modView.Text ?? "", _muted);
+            if (_modView.Deciding)
+            {
+                float third = Split(3);
+                GUILayout.BeginHorizontal();
+                GUI.enabled = _modView.CanDownload;
+                if (GUILayout.Button(_modView.DownloadLabel, _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                    _coop.Mods.Download();
+                GUI.enabled = true;
+                if (GUILayout.Button("Join anyway", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                    _coop.Mods.JoinAnyway();
+                if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                {
+                    _coop.Mods.Cancel();
+                    _status = "Join cancelled";
+                }
+                GUILayout.EndHorizontal();
+            }
+            GUILayout.EndVertical();
+        }
+
+        private const float StatusColumn = 76f, PingColumn = 58f, BoatColumn = 62f, KickColumn = 56f;
 
         private void DrawCrew()
         {
-            // Row count must not change between Layout and Repaint.
-            if (Event.current.type == EventType.Layout)
-                _drawRoster = _net.RosterSnapshot;
+            GUILayout.BeginVertical(_card);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("CREW", _caption);
+            GUILayout.FlexibleSpace();
+            GUILayout.Label(_drawRoster.Length == 0 ? "" : _drawRoster.Length + (_drawRoster.Length == 1 ? " player" : " players"), _muted);
+            GUILayout.EndHorizontal();
 
-            GUILayout.Label("Crew", _label);
             if (_drawRoster.Length == 0)
             {
                 GUILayout.Label(_net.Role == Role.None ? "No active session." : "Waiting for crew state...", _muted);
+                GUILayout.EndVertical();
                 return;
             }
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Player", _crewCell, GUILayout.Width(116f));
-            GUILayout.Label("Status", _crewCell, GUILayout.Width(72f));
-            GUILayout.Label("Ping", _crewCell, GUILayout.Width(64f));
-            GUILayout.Label("Location", _crewCell, GUILayout.Width(72f));
+            GUILayout.BeginHorizontal(_row);
+            GUILayout.Label("Player", _cellHead, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
+            GUILayout.Label("Status", _cellHead, GUILayout.Width(StatusColumn));
+            GUILayout.Label("Ping", _cellHead, GUILayout.Width(PingColumn));
+            GUILayout.Label("Location", _cellHead, GUILayout.Width(BoatColumn));
+            GUILayout.Label("", _cellHead, GUILayout.Width(KickColumn));
             GUILayout.EndHorizontal();
 
             for (int i = 0; i < _drawRoster.Length; i++)
             {
                 SessionMemberInfo member = _drawRoster[i];
-                GUILayout.BeginHorizontal();
-                string role = member.IsHost ? " (host)" : "";
-                GUILayout.Label(member.Name + role, _crewCell, GUILayout.Width(116f));
-                GUILayout.Label(MemberStateText(member.State), _crewCell, GUILayout.Width(72f));
-                GUILayout.Label(PingText(member), _crewCell, GUILayout.Width(64f));
-                GUILayout.Label(BoatText(member.BoatIndex), _crewCell, GUILayout.Width(72f));
+                GUILayout.BeginHorizontal(i % 2 == 0 ? _rowAlt : _row);
+                string tag = member.IsHost ? " (host)" : member.NetId == _net.MyNetId ? " (you)" : "";
+                GUILayout.Label(member.Name + tag, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
+                GUILayout.Label(MemberStateText(member.State), _cell, GUILayout.Width(StatusColumn));
+                GUILayout.Label(PingText(member), PingStyle(member), GUILayout.Width(PingColumn));
+                GUILayout.Label(BoatText(member.BoatIndex), _cell, GUILayout.Width(BoatColumn));
 
                 bool canKick = _net.Role == Role.Host && !member.IsHost;
                 if (canKick)
                 {
                     bool confirming = _kickConfirmNetId == member.NetId && Time.realtimeSinceStartup < _kickConfirmUntil;
-                    if (GUILayout.Button(confirming ? "Confirm" : "Kick", confirming ? _dangerButton : _smallButton,
-                                         GUILayout.Width(58f), GUILayout.Height(22f)))
+                    if (GUILayout.Button(confirming ? "Sure?" : "Kick", confirming ? _dangerButton : _smallButton,
+                                         GUILayout.Width(KickColumn - 4f), GUILayout.Height(20f)))
                     {
                         if (!confirming)
                         {
@@ -336,13 +483,21 @@ namespace SailwindCoop.Runtime
                         }
                     }
                 }
+                else GUILayout.Label("", _cell, GUILayout.Width(KickColumn));
                 GUILayout.EndHorizontal();
             }
+            GUILayout.EndVertical();
+        }
+
+        private GUIStyle PingStyle(SessionMemberInfo member)
+        {
+            if (member.IsHost || member.PingMs < 0) return _cell;
+            return member.PingMs < 90 ? _cellGood : member.PingMs < 200 ? _cellWarn : _cellBad;
         }
 
         private static string PingText(SessionMemberInfo member)
         {
-            if (member.IsHost) return "local";
+            if (member.IsHost) return "host";
             return member.PingMs < 0 ? "—" : member.PingMs + " ms";
         }
 
@@ -367,56 +522,106 @@ namespace SailwindCoop.Runtime
             return "Boat " + boatIndex;
         }
 
-        private void DrawConnection()
+        private void DrawTeleport()
         {
-            // The mode, Steam's state and the friends list decide which controls exist below, so they
-            // are read once per Layout pass and stay fixed for the Repaint that follows.
-            if (Event.current.type == EventType.Layout)
-                RefreshSteamView();
+            GUI.enabled = _coop.Teleport.Available;
+            if (GUILayout.Button("Teleport to boat", _button, GUILayout.Height(ButtonHeight + 2f)))
+            {
+                _coop.Teleport.Request();
+                _status = "Teleporting to the boat";
+            }
+            GUI.enabled = true;
+            GUILayout.Space(6f);
+        }
 
-            bool idle = _net.Role == Role.None && _net.State != LinkState.Connecting && _net.State != LinkState.Handshaking;
+        private void DrawSettings()
+        {
+            if (GUILayout.Button(_viewSettings ? "Settings   (hide)" : "Settings   (show)", _ghostButton, GUILayout.Height(26f)))
+                _settingsOpen = !_settingsOpen;
+            if (!_viewSettings) return;
+
+            GUILayout.Space(4f);
+            float half = Split(2);
+
+            GUILayout.BeginVertical(_card);
+            GUILayout.Label("PLAYER", _caption);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Connection", _label);
+            GUILayout.Label("Model: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _text);
             GUILayout.FlexibleSpace();
-            GUI.enabled = idle;
-            if (GUILayout.Button(_steamMode ? "LAN" : "[ LAN ]", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
-                SetSteamMode(false);
-            if (GUILayout.Button(_steamMode ? "[ Steam ]" : "Steam", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
-                SetSteamMode(true);
+            if (GUILayout.Button("Avatar", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(FieldHeight)))
+            {
+                AvatarCatalog.Scan();
+                _coop.ToggleAvatarMenu();
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
+
+            GUILayout.BeginVertical(_card);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("MODS", _caption);
+            GUILayout.FlexibleSpace();
+            GUI.enabled = _net.Role != Role.Client;
+            if (GUILayout.Button(_modSharing ? "Sharing: ON" : "Sharing: off", _modSharing ? _tabOn : _tab,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+            {
+                Plugin.Cfg.ShareMods.Value = !_modSharing;
+                _status = !_modSharing
+                    ? "Joining players can now download your mods"
+                    : "Joining players can no longer download your mods";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+            GUILayout.Label(string.IsNullOrEmpty(_modView.Text) ? "Mods are compared with the host when you join." : _modView.Text, _muted);
+            GUILayout.EndVertical();
+
+            GUILayout.BeginVertical(_card);
+            GUILayout.Label("DIAGNOSTICS", _caption);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(_coop.OverlayVisible ? "Hide Status" : "Show Status", _button,
+                                 GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+                _coop.OverlayVisible = !_coop.OverlayVisible;
+            if (GUILayout.Button(_logging ? "Logging: ON" : "Logging: off", _logging ? _primaryButton : _button,
+                                 GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+            {
+                bool next = !_logging;
+                Plugin.Logger.Enabled = next;
+                Plugin.Cfg.EnableLogging.Value = next;   // persists to the config file
+                _status = next
+                    ? "Logging ON - reproduce the problem, then send BepInEx/LogOutput.log"
+                    : "Logging off";
+            }
+            GUILayout.EndHorizontal();
+
+            // Water dump: press on BOTH machines within a second or two, then diff the two files.
+            // Deliberately not gated behind debug tools - it only reads state and writes one text
+            // file, and it is the thing we ask a player to do when a boat looks wrong in the water.
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Export report", _button, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+                _status = CoopReport.Write(_coop);
+            if (GUILayout.Button("Dump water state", _button, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+                _status = WaterDump.Write(_coop);
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUI.enabled = _debugTools;
+            if (GUILayout.Button("Debug", _button, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+                _coop.ToggleDebugPanel();
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
-            if (!_steamMode)
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Host IP", _muted, GUILayout.Width(72f));
-                _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(26f));
-                GUILayout.Label("Port", _muted, GUILayout.Width(38f));
-                _port = GUILayout.TextField(_port, _textField, GUILayout.Width(66f), GUILayout.Height(26f));
-                GUILayout.EndHorizontal();
-            }
-            else if (!_steamReady)
-            {
-                GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
-                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
-                    _steamInitTried = false;
-            }
-            else
-            {
-                DrawSteam(idle);
-            }
+            GUILayout.Label(_logging
+                ? "Logging is ON. Reproduce the problem, then send BepInEx/LogOutput.log."
+                : "Logging is off. Turn it on BEFORE reproducing a problem - nothing is written to the log until you do.",
+                _muted);
+            GUILayout.Label(_debugTools ? "Debug tools are enabled." : "Debug tools are disabled in public mode.", _muted);
+            GUILayout.EndVertical();
+        }
 
-            if (_net.Role == Role.Client || _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking)
-                GUILayout.Label(_net.OverSteam ? "Target: " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")"
-                                               : "Target: " + _joinIp + ":" + _port, _muted);
-            else if (_net.Role == Role.Host)
-                GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value +
-                                (_net.OverSteam ? " and over Steam (" + _net.TransportStatus + ")" : "") +
-                                "; clients: " + _net.PeerCount, _muted);
-            else
-                GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
-                    : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
-                    : "Load a world, then host a session or join a host.", _muted);
+        private void DrawMessages()
+        {
+            if (_viewError.Length > 0) GUILayout.Label(_viewError, _error);
+            if (_viewNotice.Length > 0) GUILayout.Label(_viewNotice, _notice);
+            if (_viewStatus.Length > 0) GUILayout.Label(_viewStatus, _muted);
         }
 
         private void RefreshSteamView()
@@ -447,30 +652,28 @@ namespace SailwindCoop.Runtime
             if (steam) _steamInitTried = false;
         }
 
-        private void DrawSteam(bool idle)
+        private void DrawSteam()
         {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Host ID", _muted, GUILayout.Width(CaptionWidth));
+            _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(FieldHeight));
+            GUILayout.EndHorizontal();
+
             GUILayout.BeginHorizontal();
             GUILayout.Label("You: " + _steamSelf + " (" + _steamMyId + ")", _muted);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Copy ID", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
+            if (GUILayout.Button("Copy ID", _smallButton, GUILayout.Width(70f), GUILayout.Height(22f)))
             {
                 GUIUtility.systemCopyBuffer = _steamMyId.ToString();
                 _status = "Your Steam ID is in the clipboard";
             }
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Host ID", _muted, GUILayout.Width(72f));
-            _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(26f));
-            GUI.enabled = idle;
-            if (GUILayout.Button(_steamFriendsOnly ? "Friends only" : "Anyone", _smallButton,
-                                 GUILayout.Width(ButtonWidth), GUILayout.Height(26f)))
+            if (GUILayout.Button(_steamFriendsOnly ? "Friends only" : "Anyone", _steamFriendsOnly ? _tabOn : _tab,
+                                 GUILayout.Width(96f), GUILayout.Height(22f)))
             {
                 Plugin.Cfg.SteamFriendsOnly.Value = !_steamFriendsOnly;
                 _status = !_steamFriendsOnly ? "Hosting accepts Steam friends only"
                                              : "Hosting accepts anyone who knows your Steam ID";
             }
-            GUI.enabled = true;
             GUILayout.EndHorizontal();
 
             GUILayout.Label(_friends.Length == 0
@@ -480,12 +683,12 @@ namespace SailwindCoop.Runtime
             for (int i = 0; i < rows; i++)
             {
                 SteamFriendInfo friend = _friends[i];
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(friend.Name, _crewCell, GUILayout.Width(170f));
+                GUILayout.BeginHorizontal(i % 2 == 0 ? _rowAlt : _row);
+                GUILayout.Label(friend.Name, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
                 GUILayout.Label(!friend.Hosting ? "in game" : friend.SameVersion ? "hosting" : "hosting, other version",
-                                _crewCell, GUILayout.Width(130f));
-                GUI.enabled = idle && PatchHealth.Blocker == null && !_restartPending;
-                if (GUILayout.Button("Join", _smallButton, GUILayout.Width(58f), GUILayout.Height(22f)))
+                                friend.Hosting && friend.SameVersion ? _cellGood : _cell, GUILayout.Width(136f));
+                GUI.enabled = PatchHealth.Blocker == null && !_restartPending;
+                if (GUILayout.Button("Join", _smallButton, GUILayout.Width(KickColumn - 4f), GUILayout.Height(20f)))
                 {
                     _steamJoinId = friend.Id.ToString();
                     JoinSteamFromField();
@@ -507,113 +710,6 @@ namespace SailwindCoop.Runtime
             Plugin.Cfg.SteamJoinId.Value = text;
             _coop.StartSteamClientSession(hostId);
             _status = "Connecting over Steam to " + (string.IsNullOrEmpty(_net.HostLabel) ? text : _net.HostLabel);
-        }
-
-        private void DrawActions()
-        {
-            GUILayout.BeginHorizontal();
-            bool busy = _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking;
-            GUI.enabled = !busy && PatchHealth.Blocker == null;
-            if (GUILayout.Button("Host", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                StartHost();
-            GUI.enabled = GUI.enabled && !_restartPending;
-            if (GUILayout.Button("Join", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                Join();
-            GUI.enabled = _net.State != LinkState.Idle || _net.Role != Role.None;
-            if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-            {
-                _coop.DisconnectSession("menu");
-                _status = "Session stopped";
-            }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUI.enabled = _coop.Teleport.Available;
-            if (GUILayout.Button("Teleport to boat", _button, GUILayout.Width(ButtonWidth + 44f), GUILayout.Height(ButtonHeight)))
-            {
-                _coop.Teleport.Request();
-                _status = "Teleporting to the boat";
-            }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-        }
-
-        private void DrawTools()
-        {
-            // Snapshot both flags ONCE, before any control is emitted, and render the whole section from
-            // them. Either can change between the Layout and Repaint passes (the Logging button below
-            // flips one; ConfigurationManager can flip the other), and a control count that differs
-            // between the two passes is Unity's "Getting control N's position in a group with only M
-            // controls" — thrown between BeginArea and EndArea, leaving the GUI clip stack unbalanced.
-            bool debugTools = Plugin.Cfg.EnableDebugPanel.Value;
-
-            GUILayout.Label("Tools", _label);
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Avatar", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-            {
-                AvatarCatalog.Scan();
-                _coop.ToggleAvatarMenu();
-            }
-            if (GUILayout.Button(_coop.OverlayVisible ? "Hide Status" : "Show Status", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                _coop.OverlayVisible = !_coop.OverlayVisible;
-
-            GUI.enabled = debugTools;
-            if (GUILayout.Button("Debug", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                _coop.ToggleDebugPanel();
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-
-            // Water dump: press on BOTH machines within a second or two, then diff the two files.
-            // Deliberately not gated behind debug tools - it only reads state and writes one text
-            // file, and it is the thing we ask a player to do when a boat looks wrong in the water.
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Dump water state", _button,
-                                 GUILayout.Width(ButtonWidth * 2f + 6f), GUILayout.Height(ButtonHeight)))
-                _status = WaterDump.Write(_coop);
-            if (GUILayout.Button("Export report", _button,
-                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-                _status = CoopReport.Write(_coop);
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
-            // Same rule as debugTools above: a button only returns true on the event pass, never on the
-            // Layout pass, so flipping this mid-draw and branching on it would emit different control
-            // counts in the two passes. The new value is picked up on the next pass, which sees a
-            // consistent Layout/Repaint pair.
-            bool logging = Plugin.Logger.Enabled;
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button(logging ? "Logging: ON" : "Logging: off", _button,
-                                 GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
-            {
-                bool next = !logging;
-                Plugin.Logger.Enabled = next;
-                Plugin.Cfg.EnableLogging.Value = next;   // persists to the config file
-                _status = next
-                    ? "Logging ON - reproduce the problem, then send BepInEx/LogOutput.log"
-                    : "Logging off";
-            }
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
-            // Always emitted (constant control count); only the text depends on the state.
-            GUILayout.Label(debugTools
-                ? "Debug tools are enabled."
-                : "Debug tools are disabled in public mode.", _muted);
-
-            // Always emitted (constant control count); only the text depends on the state.
-            GUILayout.Label(logging
-                ? "Logging is ON. Reproduce the problem, then send BepInEx/LogOutput.log."
-                : "Logging is off. Turn it on BEFORE reproducing a problem - nothing is written to the log until you do.",
-                _muted);
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Model: " + AvatarCatalog.DisplayNameFor(AvatarCatalog.CurrentSelection), _muted);
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Close", _smallButton, GUILayout.Width(82f), GUILayout.Height(26f)))
-                SetVisible(false);
-            GUILayout.EndHorizontal();
         }
 
         private void StartHost()
@@ -664,13 +760,26 @@ namespace SailwindCoop.Runtime
         {
             switch (_net.State)
             {
-                case LinkState.Idle: return "offline";
-                case LinkState.Connecting: return "connecting";
-                case LinkState.Handshaking: return "handshake";
-                case LinkState.Connected: return _net.Role == Role.Host ? "host" : "client";
-                case LinkState.Rejected: return "rejected";
-                case LinkState.Failed: return "failed";
-                default: return _net.State.ToString();
+                case LinkState.Idle: return "OFFLINE";
+                case LinkState.Connecting: return "CONNECTING";
+                case LinkState.Handshaking: return "HANDSHAKE";
+                case LinkState.Connected: return _net.Role == Role.Host ? "HOSTING" : "CONNECTED";
+                case LinkState.Rejected: return "REJECTED";
+                case LinkState.Failed: return "FAILED";
+                default: return _net.State.ToString().ToUpperInvariant();
+            }
+        }
+
+        private GUIStyle StatePill()
+        {
+            switch (_net.State)
+            {
+                case LinkState.Connected: return _pillGood;
+                case LinkState.Connecting:
+                case LinkState.Handshaking: return _pillBusy;
+                case LinkState.Rejected:
+                case LinkState.Failed: return _pillBad;
+                default: return _pillIdle;
             }
         }
 
@@ -737,61 +846,79 @@ namespace SailwindCoop.Runtime
 
         private void EnsureStyles()
         {
-            if (_window != null) return;
+            if (_stylesReady) return;
+            _stylesReady = true;
 
-            _backdropTex = MakeBg(new Color(0f, 0f, 0f, 0.62f));
-            _shadowTex = MakeBg(new Color(0f, 0f, 0f, 0.72f));
-            _windowTex = MakeBg(new Color(0.025f, 0.022f, 0.018f, 0.98f));
-            _borderTex = MakeBg(new Color(0.62f, 0.48f, 0.30f, 0.95f));
-            var warm = MakeBg(new Color(0.32f, 0.24f, 0.16f, 0.96f));
-            var warmHover = MakeBg(new Color(0.42f, 0.31f, 0.20f, 0.98f));
-            var red = MakeBg(new Color(0.40f, 0.14f, 0.11f, 0.96f));
-            var redHover = MakeBg(new Color(0.52f, 0.18f, 0.14f, 0.98f));
-            var field = MakeBg(new Color(0.08f, 0.075f, 0.06f, 0.95f));
-            var pill = MakeBg(new Color(0.13f, 0.20f, 0.18f, 0.95f));
+            var cream = new Color(0.96f, 0.90f, 0.78f);
+            var sand = new Color(0.74f, 0.70f, 0.62f);
+            var gold = new Color(0.86f, 0.68f, 0.38f);
+            var none = new RectOffset(0, 0, 0, 0);
 
-            _window = new GUIStyle(GUI.skin.box)
-            {
-                normal = { background = null },
-                border = new RectOffset(8, 8, 8, 8),
-                padding = new RectOffset(12, 12, 12, 12)
-            };
-            _backdrop = new GUIStyle(GUI.skin.box)
-            {
-                normal = { background = _backdropTex },
-                border = new RectOffset(0, 0, 0, 0),
-                padding = new RectOffset(0, 0, 0, 0)
-            };
+            _backdropTex = MakeBg(new Color(0f, 0f, 0f, 0.40f));
+            _shadowTex = MakeBg(new Color(0f, 0f, 0f, 0.55f));
+            _windowTex = MakeBg(new Color(0.045f, 0.040f, 0.034f, 0.97f));
+            _borderTex = MakeBg(new Color(0.55f, 0.43f, 0.27f, 0.95f));
+            _lineTex = MakeBg(new Color(0.55f, 0.43f, 0.27f, 0.55f));
+            var card = MakeBg(new Color(0.095f, 0.084f, 0.070f, 0.96f));
+            var warm = MakeBg(new Color(0.24f, 0.19f, 0.14f, 0.98f));
+            var warmHover = MakeBg(new Color(0.33f, 0.26f, 0.18f, 0.98f));
+            var accent = MakeBg(new Color(0.62f, 0.45f, 0.20f, 0.98f));
+            var accentHover = MakeBg(new Color(0.74f, 0.55f, 0.26f, 0.98f));
+            var red = MakeBg(new Color(0.42f, 0.15f, 0.12f, 0.98f));
+            var redHover = MakeBg(new Color(0.55f, 0.20f, 0.15f, 0.98f));
+            var ghost = MakeBg(new Color(0.14f, 0.12f, 0.10f, 0.96f));
+            var field = MakeBg(new Color(0.02f, 0.02f, 0.018f, 0.95f));
+            var fieldFocus = MakeBg(new Color(0.07f, 0.06f, 0.045f, 0.98f));
+            var rowAlt = MakeBg(new Color(1f, 1f, 1f, 0.035f));
+
             _title = new GUIStyle(GUI.skin.label)
             {
                 fontSize = 20,
                 fontStyle = FontStyle.Bold,
-                normal = { textColor = new Color(0.96f, 0.88f, 0.72f) }
+                normal = { textColor = cream }
             };
-            _label = new GUIStyle(GUI.skin.label)
+            _caption = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 14,
+                fontSize = 11,
                 fontStyle = FontStyle.Bold,
-                normal = { textColor = new Color(0.92f, 0.84f, 0.68f) }
+                normal = { textColor = gold }
+            };
+            _text = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                wordWrap = true,
+                normal = { textColor = cream }
             };
             _muted = new GUIStyle(GUI.skin.label)
             {
                 fontSize = 12,
                 wordWrap = true,
-                normal = { textColor = new Color(0.74f, 0.70f, 0.62f) }
+                normal = { textColor = sand }
             };
-            _crewCell = new GUIStyle(_muted)
+            _error = new GUIStyle(_muted) { normal = { textColor = new Color(1f, 0.56f, 0.48f) } };
+            _notice = new GUIStyle(_muted) { normal = { textColor = new Color(1f, 0.82f, 0.42f) } };
+            _card = new GUIStyle(GUI.skin.box)
             {
-                wordWrap = false,
-                clipping = TextClipping.Clip
+                normal = { background = card },
+                border = none,
+                padding = new RectOffset(12, 12, 9, 11),
+                margin = new RectOffset(0, 0, 0, 8)
             };
+
             _button = new GUIStyle(GUI.skin.button)
             {
                 fontSize = 13,
                 fontStyle = FontStyle.Bold,
-                normal = { background = warm, textColor = new Color(0.98f, 0.92f, 0.80f) },
+                border = none,
+                normal = { background = warm, textColor = cream },
                 hover = { background = warmHover, textColor = Color.white },
                 active = { background = warmHover, textColor = Color.white }
+            };
+            _primaryButton = new GUIStyle(_button)
+            {
+                normal = { background = accent, textColor = Color.white },
+                hover = { background = accentHover, textColor = Color.white },
+                active = { background = accentHover, textColor = Color.white }
             };
             _dangerButton = new GUIStyle(_button)
             {
@@ -800,10 +927,52 @@ namespace SailwindCoop.Runtime
                 active = { background = redHover, textColor = Color.white }
             };
             _smallButton = new GUIStyle(_button) { fontSize = 12 };
+            _ghostButton = new GUIStyle(_button)
+            {
+                fontSize = 12,
+                normal = { background = ghost, textColor = sand },
+                hover = { background = warm, textColor = cream },
+                active = { background = warm, textColor = cream }
+            };
+            _tab = new GUIStyle(_ghostButton);
+            _tabOn = new GUIStyle(_primaryButton) { fontSize = 12 };
+
+            _textField = new GUIStyle(GUI.skin.textField)
+            {
+                fontSize = 13,
+                border = none,
+                alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(7, 7, 3, 3),
+                normal = { background = field, textColor = Color.white },
+                hover = { background = field, textColor = Color.white },
+                focused = { background = fieldFocus, textColor = Color.white }
+            };
+
+            _pillIdle = Pill(new Color(0.20f, 0.19f, 0.17f), sand);
+            _pillBusy = Pill(new Color(0.36f, 0.27f, 0.08f), new Color(1f, 0.86f, 0.45f));
+            _pillGood = Pill(new Color(0.12f, 0.27f, 0.19f), new Color(0.66f, 1f, 0.78f));
+            _pillBad = Pill(new Color(0.38f, 0.13f, 0.11f), new Color(1f, 0.78f, 0.72f));
+
+            _cell = new GUIStyle(_muted)
+            {
+                wordWrap = false,
+                clipping = TextClipping.Clip,
+                alignment = TextAnchor.MiddleLeft,
+                margin = none,
+                padding = new RectOffset(4, 4, 3, 3),
+                normal = { textColor = cream }
+            };
+            _cellHead = new GUIStyle(_cell) { fontSize = 11, normal = { textColor = sand } };
+            _cellGood = new GUIStyle(_cell) { normal = { textColor = new Color(0.62f, 0.95f, 0.72f) } };
+            _cellWarn = new GUIStyle(_cell) { normal = { textColor = new Color(1f, 0.84f, 0.42f) } };
+            _cellBad = new GUIStyle(_cell) { normal = { textColor = new Color(1f, 0.58f, 0.50f) } };
+            _row = new GUIStyle { padding = new RectOffset(2, 2, 1, 1) };
+            _rowAlt = new GUIStyle(_row) { normal = { background = rowAlt } };
+
             _alertBox = new GUIStyle(GUI.skin.box)
             {
                 normal = { background = MakeBg(new Color(0.46f, 0.30f, 0.04f, 0.97f)) },
-                border = new RectOffset(0, 0, 0, 0),
+                border = none,
                 padding = new RectOffset(10, 10, 8, 10)
             };
             _alertTitle = new GUIStyle(GUI.skin.label)
@@ -818,17 +987,16 @@ namespace SailwindCoop.Runtime
                 wordWrap = true,
                 normal = { textColor = Color.white }
             };
-            _textField = new GUIStyle(GUI.skin.textField)
+        }
+
+        private GUIStyle Pill(Color background, Color text)
+        {
+            return new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13,
-                normal = { background = field, textColor = Color.white },
-                focused = { background = field, textColor = Color.white }
-            };
-            _pill = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 12,
+                fontSize = 11,
+                fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                normal = { background = pill, textColor = new Color(0.74f, 1f, 0.84f) }
+                normal = { background = MakeBg(background), textColor = text }
             };
         }
     }

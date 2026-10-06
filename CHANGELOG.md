@@ -33,6 +33,10 @@ All notable user-facing changes are documented in this file.
 
 ### Changed
 
+- **The F8 menu was redesigned.** It now shows only the session (connection settings, or the
+  running session), the crew and **Teleport to boat**. Avatar, mod sharing, the status overlay,
+  logging, reports and the debug panel moved under a **Settings** section that is collapsed by
+  default. The window is as tall as its content.
 - **Joining over a slow connection pauses the host for less time.** The world sent to a joining
   player is now compressed to about a quarter of its size.
 

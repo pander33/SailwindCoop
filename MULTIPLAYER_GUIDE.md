@@ -169,7 +169,7 @@ The sea is host-authoritative and identical on every machine.
 - The water is drawn at the same instant as the boat, so hull and wave stay in step even on a slow link.
 - The sea stops while the host is paused, and resumes with it.
 
-If the water ever looks different on one machine, press **Dump water state** in the F8 menu on both machines
+If the water ever looks different on one machine, press **Dump water state** (F8 menu, **Settings**) on both machines
 at the same moment and compare the two `debug/water-*.txt` files — they are plain `key = value` text meant to
 be diffed.
 
@@ -199,7 +199,7 @@ Best current practice: use one main boat for normal co-op sailing, and test ding
 
 ## Avatars And Skins
 
-- Open the F8 co-op menu and press `Avatar`.
+- Open the F8 co-op menu, open **Settings** and press `Avatar`.
 - Skin changes are sent during the session.
 - The included `avatar.bundle` is the default fallback.
 - NPC-style skins can appear if the game has loaded suitable NPC models on that machine.
@@ -270,7 +270,7 @@ Details:
 - `ModSyncExclude` in the config lists plugin GUIDs that are never compared or shared. By default it
   holds the XUnity translator; add personal or host-only mods there.
 - Hosts: sharing is on by default, so anyone who joins can download your listed mods. Press
-  **Sharing** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
+  **Sharing** under **Settings** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
 
 ## Crew Status And Session Access
 
@@ -279,7 +279,7 @@ Details:
 - The host may close the session to new joins without removing anyone already connected.
 - Removing a guest uses a two-step confirmation and sends that guest a readable reason.
 - Reconnect is a full fresh join and is only allowed from the main menu.
-- **Export report** creates a single diagnostic text file that can be attached to a bug report.
+- **Export report** (under **Settings**) creates a single diagnostic text file that can be attached to a bug report.
 
 ## Reporting A Problem
 
