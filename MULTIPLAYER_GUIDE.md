@@ -4,8 +4,8 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build uses **protocol 59** and cannot connect to
-earlier protocol builds. Independent boat controls are implemented; multi-boat gameplay validation is pending.
+Use the same build on every machine. The current build (0.2.1) uses **protocol 80**, requires Sailwind 0.39, and cannot connect to
+earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Session Model
 

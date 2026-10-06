@@ -1896,11 +1896,25 @@ namespace SailwindCoop.Sync
             {
                 if (_mShipItemExitBoat == null)
                     _mShipItemExitBoat = typeof(ShipItem).GetMethod("ExitBoat", BindingFlags.NonPublic | BindingFlags.Instance);
+                // Vanilla's ShipItem.EnterHouse runs once, on trigger enter. An item RESTING in a house gets
+                // no second enter, so undoing its membership here would be permanent: the host would then
+                // save it as a loose world item and destroy it by distance instead of caching it with the
+                // house. A copy in a remote hand has its root collider off (EnterRemoteHeldVisual) and gets
+                // a fresh enter when the drop re-enables it, so only an enabled collider keeps the house.
+                // Only the host's membership decides the save and the house cache.
+                Transform house = Instance != null && Instance._net.Role == Role.Host ? RestingHouseOf(item) : null;
+
                 if (item.currentActualBoat != null && _mShipItemExitBoat != null)
                     _mShipItemExitBoat.Invoke(item, null);
 
                 Transform world = FloatingOriginManager.instance != null ? FloatingOriginManager.instance.transform : null;
-                if (world != null)
+                if (house != null)
+                {
+                    item.transform.parent = house;
+                    var irb = item.GetItemRigidbody();
+                    if (irb != null && world != null) irb.transform.parent = world;
+                }
+                else if (world != null)
                 {
                     item.transform.parent = world;
                     var irb = item.GetItemRigidbody();
@@ -1928,13 +1942,28 @@ namespace SailwindCoop.Sync
                 }
 
                 var saveable = item.GetComponent<SaveablePrefab>();
-                if (saveable != null && saveable.GetParentObject() != -3)
+                if (saveable != null && house != null)
+                    saveable.SetParentObject(house.GetComponent<SaveableObject>().sceneIndex);
+                else if (saveable != null && saveable.GetParentObject() != -3)
                     saveable.SetParentObject(-1);
             }
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[ItemSync] Failed to unparent item from boat: " + e.Message);
             }
+        }
+
+        /// <summary>The island house (game 0.39) a free item belongs to through vanilla's own trigger
+        /// (<c>ShipItem.EnterHouse</c>: parent = the "House" trigger, parentObject = its sceneIndex), or null.</summary>
+        private static Transform RestingHouseOf(ShipItem item)
+        {
+            var parent = item.transform.parent;
+            if (parent == null || !parent.CompareTag("House")) return null;
+            var col = item.GetComponent<Collider>();
+            if (col == null || !col.enabled) return null;
+            var saveable = item.GetComponent<SaveablePrefab>();
+            var house = parent.GetComponent<SaveableObject>();
+            return saveable != null && house != null && saveable.GetParentObject() == house.sceneIndex ? parent : null;
         }
 
         // -----------------------------------------------------------------
@@ -2022,6 +2051,10 @@ namespace SailwindCoop.Sync
             _tombstones.Add(msg.InstanceId);
             _pendingStates.Remove(msg.InstanceId);
             _pendingSpawns.Remove(msg.InstanceId);
+            // Our own copy may already sit in a BoatLocalItems cache (we left the boat's or house's range
+            // before the host did). The host brings the item back under a NEW id, so a cached entry with
+            // this one would respawn as a ghost next to it.
+            RemoveCachedLocalItem(msg.InstanceId);
             // We claimed this item into our own belt — the despawn is the host dropping its shared copy in
             // response. Keep our local (now player-local) item; just untrack it. Other peers destroy theirs.
             if (_localClaimed.Remove(msg.InstanceId))
@@ -2051,6 +2084,10 @@ namespace SailwindCoop.Sync
             {
                 _byItem.Remove(item);
                 _localHeld.Remove(item);
+                // Like vanilla DestroyItem: a destroyed prefab left in SaveLoadManager.currentPrefabs makes
+                // BoatLocalItems.CacheCurrentItems throw on it every frame once we leave its boat or house.
+                try { item.GetComponent<SaveablePrefab>()?.Unregister(); }
+                catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Despawn unregister id=" + msg.InstanceId + ": " + ex.Message); }
                 UnityEngine.Object.Destroy(item.gameObject);
             }
 
