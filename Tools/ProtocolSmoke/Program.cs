@@ -123,7 +123,19 @@ namespace ProtocolSmoke
                 new SleepRequestMsg { RequestId = 104, CycleActor = 0x12345678, CycleId = 91, Phase = SleepPhase.Sleeping,
                     Address = new SleepAddress { Source = SleepSource.ItemBed, InstanceId = 55, PrefabIndex = 12, Timeskip = true } },
                 new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage },
-                new HouseDoorMsg { Door = 0x2A03, Open = true }
+                new HouseDoorMsg { Door = 0x2A03, Open = true },
+                new ModManifestMsg { DownloadAllowed = true, Mods = new[] {
+                    new ModEntry { Folder = "SeaLifeMod", Downloadable = true,
+                        Plugins = new[] { new ModPlugin { Guid = "com.example.sealife", Name = "Sea Life", Version = "1.2.0" } },
+                        Files = new[] { new ModFile { Path = "SeaLifeMod.dll", Size = 14336, Hash = SampleHash(1) },
+                                        new ModFile { Path = "data/assets", Size = 8376605, Hash = SampleHash(2) } } },
+                    new ModEntry { Folder = "", Downloadable = false,
+                        Plugins = new[] { new ModPlugin { Guid = "a", Name = "A", Version = "0.1" }, new ModPlugin { Guid = "b", Name = "B", Version = "2" } },
+                        Files = new[] { new ModFile { Path = "Lone.dll", Size = 1, Hash = SampleHash(3) } } } } },
+                new ModSyncResultMsg { Decision = ModSyncDecision.Abort, Missing = 3, Different = 1 },
+                new ModFileRequestMsg { Mod = 2, File = 511 },
+                new ModFileChunkMsg { Mod = 2, File = 511, Index = 77, Data = new byte[] { 1, 2, 3, 250 } },
+                new ModFileEndMsg { Mod = 2, File = 511, Ok = true }
             })
                 CheckPopulatedMessage(msg, failures, ref populated, ref truncated);
 
@@ -138,6 +150,13 @@ namespace ProtocolSmoke
             foreach (var failure in failures)
                 Console.Error.WriteLine(" - " + failure);
             return 1;
+        }
+
+        private static byte[] SampleHash(byte seed)
+        {
+            var hash = new byte[ModLimits.HashBytes];
+            for (int i = 0; i < hash.Length; i++) hash[i] = (byte)(seed * 31 + i);
+            return hash;
         }
 
         private static object Sample(Type type)
@@ -214,6 +233,18 @@ namespace ProtocolSmoke
             waves.Put((byte)1); waves.Put(ushort.MaxValue);
             if (Protocol.ReadBody(MsgType.WavePhases, new NetDataReader(waves.Data, 0, waves.Length)) != null)
                 failures.Add("WavePhasesMsg: oversized phase count accepted");
+            var mods = new NetDataWriter();
+            mods.Put(true); mods.Put((byte)(ModLimits.MaxMods + 1));
+            if (Protocol.ReadBody(MsgType.ModManifest, new NetDataReader(mods.Data, 0, mods.Length)) != null)
+                failures.Add("ModManifestMsg: oversized mod count accepted");
+            var files = new NetDataWriter();
+            files.Put(true); files.Put((byte)1); files.Put("Mod"); files.Put(true); files.Put((byte)0); files.Put((ushort)ModLimits.MaxFilesPerMod);
+            if (Protocol.ReadBody(MsgType.ModManifest, new NetDataReader(files.Data, 0, files.Length)) != null)
+                failures.Add("ModManifestMsg: file count beyond the payload accepted");
+            var chunk = new NetDataWriter();
+            chunk.Put((ushort)0); chunk.Put((ushort)0); chunk.Put(0); chunk.Put(ushort.MaxValue);
+            if (Protocol.ReadBody(MsgType.ModFileChunk, new NetDataReader(chunk.Data, 0, chunk.Length)) != null)
+                failures.Add("ModFileChunkMsg: oversized chunk accepted");
         }
 
         private static void TestSleepOrdering(List<string> failures)
@@ -287,7 +318,8 @@ namespace ProtocolSmoke
                 return true;
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
-                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage))
+                (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
+                 a is ModEntry || a is ModPlugin || a is ModFile))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

@@ -14,7 +14,7 @@ namespace SailwindCoop
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.0";
 
         internal static Plugin Instance { get; private set; }
 
@@ -76,6 +76,11 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> ForceHostSaveOnJoin;
         public readonly ConfigEntry<bool> PauseHostOnJoin;
 
+        // Mod sharing (the host lists its mods before the world transfer; a client may download them).
+        public readonly ConfigEntry<bool> ShareMods;
+        public readonly ConfigEntry<bool> AllowModDownload;
+        public readonly ConfigEntry<string> ModSyncExclude;
+
         // Debug.
         public readonly ConfigEntry<bool> EnableLogging;
         public readonly ConfigEntry<bool> EnableDebugPanel;
@@ -103,6 +108,10 @@ namespace SailwindCoop
             CoopSaveSlot = c.Bind("Save", "CoopSaveSlot", 5, "Save slot (0..5) where the client writes the received host world and loads from it. WARNING: the local save in this slot on the client is overwritten. Join from the main menu.");
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
             PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
+
+            ShareMods = c.Bind("Mods", "ShareMods", true, "Host: let joining players download the mods they lack straight from this PC. On by default; toggle it in the co-op menu (F8 -> Mods -> Sharing). When off, joining players are still told which of your mods they are missing, but must install them themselves. Share only mods whose authors allow redistribution.");
+            AllowModDownload = c.Bind("Mods", "AllowModDownload", true, "Client: allow downloading missing mods from a host that offers them. Nothing is ever installed without a click in the co-op menu, and the game must be restarted afterwards. Mods run code on your PC - download only from a host you trust.");
+            ModSyncExclude = c.Bind("Mods", "ModSyncExclude", "gravydevsupreme.xunity.autotranslator,gravydevsupreme.xunity.resourceredirector", "Comma-separated plugin GUIDs that are never listed, compared or shared (personal mods such as a UI translator, or mods only the host needs). A folder containing an excluded plugin is skipped whole. Applied on both host and client.");
 
             EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");

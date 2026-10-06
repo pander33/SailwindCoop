@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.2.1) uses **protocol 80**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.3.0) uses **protocol 81**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Session Model
@@ -220,9 +220,38 @@ Before a long session, make a normal backup of important Sailwind saves.
 5. Use the status overlay if something looks wrong.
 6. Disconnect through F8 when finished.
 
+## Other Mods
+
+Right after connecting, and before the world is sent, the host tells the joining player which other
+BepInEx mods it runs. Nothing happens when both sides have the same ones.
+
+If the joining player lacks some of the host's mods, or has another version, the F8 menu opens with a
+**Mods** section listing the differences and three buttons:
+
+- **Download** — fetch the missing mods from the host. Available while the host has
+  **Sharing: ON** in its F8 menu (`ShareMods`, on by default). The files are checked against the host's
+  list and placed into `BepInEx/plugins`; the session then ends and **the game must be restarted** before
+  joining again. Existing files and folders are never overwritten.
+- **Join anyway** — join with your current mods. Things those mods change may not match the host.
+- **Cancel** — do not join.
+
+Mods are programs: a downloaded mod runs on your PC with your rights. **Download only from a host you
+trust.** The checksum shown in the list guards against a damaged transfer, not against a dishonest host.
+
+Details:
+
+- Only missing mods are downloaded. A mod you already have in another version is reported, but you
+  update it yourself.
+- A downloaded folder contains `.coop-installed.json`, which lists what was installed and from which host.
+  Delete the folder to remove the mod.
+- `ModSyncExclude` in the config lists plugin GUIDs that are never compared or shared. By default it
+  holds the XUnity translator; add personal or host-only mods there.
+- Hosts: sharing is on by default, so anyone who joins can download your listed mods. Press
+  **Sharing** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
+
 ## Crew Status And Session Access
 
-- The F8 **Crew** list shows whether each player is waiting, receiving/loading the world, ready, or failed.
+- The F8 **Crew** list shows whether each player is waiting, comparing mods, receiving/loading the world, ready, or failed.
 - Ping and the last known boat are shown beside each player.
 - The host may close the session to new joins without removing anyone already connected.
 - Removing a guest uses a two-step confirmation and sends that guest a readable reason.

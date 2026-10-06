@@ -29,6 +29,8 @@ namespace SailwindCoop.Runtime
         private uint _kickConfirmNetId;
         private float _kickConfirmUntil;
         private Vector2 _scroll;
+        private Sync.ModSyncView _modView;
+        private bool _modSharing;
 
         private GUIStyle _window;
         private GUIStyle _title;
@@ -104,6 +106,8 @@ namespace SailwindCoop.Runtime
             GUILayout.Space(8f);
             DrawConnection();
             GUILayout.Space(8f);
+            DrawMods();
+            GUILayout.Space(8f);
             DrawCrew();
             GUILayout.Space(10f);
             DrawActions();
@@ -162,6 +166,49 @@ namespace SailwindCoop.Runtime
                 _status = _net.AcceptingClients ? "Session open" : "Session locked";
             }
             GUI.enabled = true;
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawMods()
+        {
+            // Snapshot once per layout pass: the phase changes from network packets and from the
+            // buttons below, and the control count must not differ between Layout and Repaint.
+            if (Event.current.type == EventType.Layout)
+            {
+                _modView = _coop.Mods.BuildView();
+                _modSharing = Plugin.Cfg.ShareMods.Value;
+            }
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Mods", _label);
+            GUILayout.FlexibleSpace();
+            GUI.enabled = _net.Role != Role.Client;
+            if (GUILayout.Button(_modSharing ? "Sharing: ON" : "Sharing: off", _smallButton,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+            {
+                Plugin.Cfg.ShareMods.Value = !_modSharing;
+                _status = !_modSharing
+                    ? "Joining players can now download your mods"
+                    : "Joining players can no longer download your mods";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label(_modView.Text ?? "", _muted);
+            if (!_modView.Deciding) return;
+
+            GUILayout.BeginHorizontal();
+            GUI.enabled = _modView.CanDownload;
+            if (GUILayout.Button(_modView.DownloadLabel, _button, GUILayout.Width(ButtonWidth + 44f), GUILayout.Height(ButtonHeight)))
+                _coop.Mods.Download();
+            GUI.enabled = true;
+            if (GUILayout.Button("Join anyway", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
+                _coop.Mods.JoinAnyway();
+            if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(ButtonWidth - 20f), GUILayout.Height(ButtonHeight)))
+            {
+                _coop.Mods.Cancel();
+                _status = "Join cancelled";
+            }
             GUILayout.EndHorizontal();
         }
 
@@ -235,6 +282,7 @@ namespace SailwindCoop.Runtime
                 case MemberJoinState.LoadingWorld: return "Loading";
                 case MemberJoinState.Ready: return "Ready";
                 case MemberJoinState.Failed: return "Failed";
+                case MemberJoinState.CheckingMods: return "Mods";
                 default: return "—";
             }
         }

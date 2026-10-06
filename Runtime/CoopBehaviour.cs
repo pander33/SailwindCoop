@@ -40,6 +40,7 @@ namespace SailwindCoop.Runtime
         public MissionSync Missions { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
         public SaveTransferSync SaveTransfer { get; private set; }
+        public ModSync Mods { get; private set; }
         public JoinPause Pause { get; private set; }
 
         /// <summary>Клиентская сторона паузы хоста: пока хост стоит, наш игрок не ходит.</summary>
@@ -155,6 +156,15 @@ namespace SailwindCoop.Runtime
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
             SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = true;
+            Mods = new ModSync(Net)
+            {
+                // Stream the host's world to the client once it answered the mod check, so it loads
+                // into our world. The join-freeze is taken INSIDE that coroutine, after the save is on
+                // disk — freezing first would mean asking the game to save while its own clock is stopped.
+                HostProceed = (peer, netId) => StartCoroutine(StreamSaveToClient(peer, netId)),
+                ClientLeave = reason => DisconnectSession(reason),
+                NeedsAttention = () => { if (_menuUI != null) _menuUI.Visible = true; },
+            };
             Pause = new JoinPause();
             HostPause = new HostPauseSync(Net);
 
@@ -222,10 +232,8 @@ namespace SailwindCoop.Runtime
                                       ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
                 // Remember the bundle file this client wants; used when their first PlayerState arrives.
                 Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
-                // Stream the host's world to the freshly-joined client so it loads into our world.
-                // The join-freeze is taken INSIDE that coroutine, after the save is on disk — freezing
-                // first would mean asking the game to save while its own clock is stopped.
-                StartCoroutine(StreamSaveToClient(s.Peer, s.PlayerNetId));
+                // The world transfer starts when the client answers the mod list (Mods.HostProceed).
+                Mods.OnClientReady(s);
             };
             Net.OnGameMessage += OnGameMessage;
             _notifications = new CoopNotifications();
@@ -240,6 +248,7 @@ namespace SailwindCoop.Runtime
                 Damage.ClearRemoteActor(netId);
                 Sleep.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
+                Mods.ClearRemoteActor(netId);
                 Pause.Release(netId);
             };
 
@@ -293,6 +302,8 @@ namespace SailwindCoop.Runtime
         {
             _steps = new[]
             {
+                // Touches no game object: file chunks for a joining client and the download watchdog.
+                new SyncStep("Mods.Tick", () => Mods.Tick()),
                 new SyncStep("Pause.Tick", () => Pause.Tick()),
                 new SyncStep("Shipyard.Tick", () => Shipyard.Tick(_dt)),
                 new SyncStep("Boats.Tick", () => Boats.Tick(_dt)),
@@ -401,6 +412,16 @@ namespace SailwindCoop.Runtime
             if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
             {
+                case MsgType.ModManifest:
+                    Mods.OnManifest((ModManifestMsg)msg); break;
+                case MsgType.ModSyncResult:
+                    Mods.OnResult((ModSyncResultMsg)msg, fromPeer); break;
+                case MsgType.ModFileRequest:
+                    Mods.OnFileRequest((ModFileRequestMsg)msg, fromPeer); break;
+                case MsgType.ModFileChunk:
+                    Mods.OnFileChunk((ModFileChunkMsg)msg); break;
+                case MsgType.ModFileEnd:
+                    Mods.OnFileEnd((ModFileEndMsg)msg); break;
                 case MsgType.PlayerState:
                     Players.OnPlayerState((PlayerStateMsg)msg, fromPeer);
                     break;
@@ -843,6 +864,7 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("destroy");
             ResetJoinStreaming();
+            Mods?.Reset();
             Shipyard?.Clear();
             Missions?.Clear();
             Sleep?.Clear();
@@ -936,6 +958,7 @@ namespace SailwindCoop.Runtime
             // fix something that is no longer true.
             ClearNotice();
             Net.StartHost(port);
+            if (Net.Role == Role.Host) Mods.BeginHost();
             NoticeFaultedPatchSets();
         }
 
@@ -947,6 +970,7 @@ namespace SailwindCoop.Runtime
             ClearNotice();
             _clientProfileSavedOnShutdown = false;
             _clientCoopWorldLoaded = false;
+            Mods.BeginClient();
             Net.StartClient(ip, port);
             NoticeFaultedPatchSets();
         }
@@ -972,6 +996,7 @@ namespace SailwindCoop.Runtime
             if (saveClientProfile)
                 SaveClientProfileBeforeStop(reason);
             SaveTransfer.Reset();
+            Mods.Reset();
             Pause.Clear();
             // An in-flight StreamSaveToClient is now pointless (its peer is going away) and must not
             // leave the queue slot held for the next session.

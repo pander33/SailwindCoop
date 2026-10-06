@@ -2,6 +2,30 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.3.0] - 2026-10-06
+
+### Added
+
+- **Other mods are compared when joining.** Before the world is sent, the host tells the joining
+  player which other BepInEx mods it runs. With the same mods nothing changes. Otherwise the F8 menu
+  opens a **Mods** section listing what is missing or different, with **Download**, **Join anyway**
+  and **Cancel**.
+- **Missing mods can be downloaded from the host.** The files are checked against the host's list
+  (size and SHA-256) and placed into `BepInEx/plugins`; the game must then be restarted. Existing
+  files and folders are never overwritten, and a mod you already have in another version is only
+  reported. Mods run code on your PC: download only from a host you trust.
+- Host sharing is **on by default**; the **Sharing** button in the F8 menu (`ShareMods`) turns it
+  off. `AllowModDownload` disables downloading on the client, and `ModSyncExclude` lists plugin
+  GUIDs that are never compared or shared (the XUnity translator by default).
+- The crew list shows `Mods` while a joining player is comparing mods.
+
+### Network
+
+- **Everyone must update.** The wire protocol moved from `80` to `81`; `0.2.x` and `0.3.0` refuse
+  to connect to each other.
+
+Not yet verified in game: the comparison step, the menu section and the download.
+
 ## [0.2.1] - 2026-10-05
 
 ### Changed

@@ -95,6 +95,13 @@ namespace SailwindCoop.Net
         ResyncRequest = 105,    // client -> host : send the current value of a change-only state stream
         HouseDoor = 106,        // client -> host : requested target; host -> clients : island house door target
         AnchorRequest = 88,     // client -> host : pickup/held pose/drop of the addressed boat anchor
+
+        // --- mod sharing (ReliableOrdered) — between HelloAck and the world transfer ---
+        ModManifest = 107,      // host -> client : the host's shared mods (plugins, files, hashes)
+        ModSyncResult = 108,    // client -> host : proceed with the join / leaving
+        ModFileRequest = 109,   // client -> host : send file F of mod M (manifest indices)
+        ModFileChunk = 110,     // host -> client : one chunk of a requested mod file
+        ModFileEnd = 111,       // host -> client : requested file complete or refused
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -133,6 +140,7 @@ namespace SailwindCoop.Net
         LoadingWorld = 3,
         Ready = 4,
         Failed = 5,
+        CheckingMods = 6,   // the host sent its mod list and waits for the client's answer
     }
 
     public enum GameplayNoticeKind : byte

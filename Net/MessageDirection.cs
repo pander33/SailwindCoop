@@ -41,6 +41,8 @@ namespace SailwindCoop.Net
                 case MsgType.SleepRequest:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
+                case MsgType.ModSyncResult:
+                case MsgType.ModFileRequest:
                     return MsgFlow.ToHost;
 
                 case MsgType.HelloAck:
@@ -78,6 +80,9 @@ namespace SailwindCoop.Net
                 case MsgType.OrbState:
                 case MsgType.InstrumentState:
                 case MsgType.RefitState:
+                case MsgType.ModManifest:
+                case MsgType.ModFileChunk:
+                case MsgType.ModFileEnd:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.

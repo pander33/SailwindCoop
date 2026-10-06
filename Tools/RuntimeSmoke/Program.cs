@@ -55,6 +55,7 @@ internal static class Program
         try
         {
             ItemReliabilityTests.Run(Test);
+            ModSharingTests.Run(Test);
             Test("boat configuration barrier holds future packets and discards old indices", () => {
                 var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<string>();
                 queue.Add(1, 2, "boat1 new rope"); queue.Add(2, 1, "boat2 unchanged"); queue.Add(1, 1, "boat1 old rope");
