@@ -18,18 +18,18 @@ namespace SailwindCoop.Runtime
 		private readonly List<Entry> _entries = new List<Entry>();
 		private GUIStyle _style;
 
-		public void Add(string text)
+		public void Add(string text, float lifetimeSec = LifetimeSec)
 		{
 			if (string.IsNullOrWhiteSpace(text)) return;
 			float now = Time.realtimeSinceStartup;
 			for (int i = 0; i < _entries.Count; i++)
 			{
 				if (_entries[i].Text != text) continue;
-				_entries[i].ExpiresAt = now + LifetimeSec;
+				_entries[i].ExpiresAt = now + lifetimeSec;
 				return;
 			}
 			while (_entries.Count >= MaxVisible) _entries.RemoveAt(0);
-			_entries.Add(new Entry { Text = text.Trim(), ExpiresAt = now + LifetimeSec });
+			_entries.Add(new Entry { Text = text.Trim(), ExpiresAt = now + lifetimeSec });
 		}
 
 		public void Add(GameplayNoticeMsg msg, CoopNet net)

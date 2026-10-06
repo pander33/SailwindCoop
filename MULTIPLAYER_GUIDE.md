@@ -212,6 +212,8 @@ Best current practice: use one main boat for normal co-op sailing, and test ding
   "Point" aim where you are looking; "Land ho!" also shouts, and others hear it from your position.
 - Walking ends a gesture. You do not see your own gesture: the game is first person.
 - The key is `UI.EmoteKey` in the config file. Change it if `G` is bound to something else.
+- A hint with the key appears once, the first time the wheel is available. The F8 menu shows the
+  key as well.
 
 If a selected NPC skin is not available on the other machine yet, the remote player may temporarily appear with the default avatar until the skin can be built.
 

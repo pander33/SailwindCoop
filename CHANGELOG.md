@@ -51,7 +51,8 @@ All notable user-facing changes are documented in this file.
   puts its hands on the winch, wheel or rope the player is holding. Not yet verified in game.
 - **Gesture wheel.** Hold `G` in a session, pick a gesture with the mouse and release: Wave,
   Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray. "Land ho!" shouts, and other players
-  hear it from where you stand. The key is `UI.EmoteKey`. Not yet verified in game.
+  hear it from where you stand. The key is `UI.EmoteKey`; it is shown in the F8 menu and in a
+  one-time on-screen hint. Not yet verified in game.
 
 ### Network
 

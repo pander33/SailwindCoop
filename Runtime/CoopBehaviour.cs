@@ -375,8 +375,16 @@ namespace SailwindCoop.Runtime
 
             try
             {
-                EmoteId picked = _emoteWheel.Update(Plugin.Cfg.EmoteKey.Value, EmoteWheelAllowed());
+                bool emotesAllowed = EmoteWheelAllowed();
+                EmoteId picked = _emoteWheel.Update(Plugin.Cfg.EmoteKey.Value, emotesAllowed);
                 if (picked != EmoteId.None) Players.StartEmote(picked);
+
+                // Подсказка о колесе — один раз за всё время, в первой сессии, где колесо доступно.
+                if (emotesAllowed && !Plugin.Cfg.EmoteHintShown.Value && _notifications != null)
+                {
+                    _notifications.Add("Hold " + Plugin.Cfg.EmoteKey.Value + " to open the gesture wheel", 10f);
+                    Plugin.Cfg.EmoteHintShown.Value = true;
+                }
             }
             catch (System.Exception e)
             {

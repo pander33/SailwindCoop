@@ -91,6 +91,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> EnableDebugPanel;
         public readonly ConfigEntry<KeyCode> MenuKey;
         public readonly ConfigEntry<KeyCode> EmoteKey;
+        public readonly ConfigEntry<bool> EmoteHintShown;
 
         public CoopConfig(ConfigFile c)
         {
@@ -127,6 +128,7 @@ namespace SailwindCoop
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
             EmoteKey = c.Bind("UI", "EmoteKey", KeyCode.G, "Hold to open the emote wheel, move the mouse to a gesture and release. Works only in a co-op session. Change it if the key is bound to something else in the game.");
+            EmoteHintShown = c.Bind("UI", "EmoteHintShown", false, "The one-time on-screen hint about the emote wheel has been shown. Set to false to see it again in the next session.");
         }
     }
 }

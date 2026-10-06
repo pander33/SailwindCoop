@@ -531,6 +531,8 @@ namespace SailwindCoop.Runtime
                 _status = "Teleporting to the boat";
             }
             GUI.enabled = true;
+            GUILayout.Space(4f);
+            GUILayout.Label("Hold " + Plugin.Cfg.EmoteKey.Value + " in a session to open the gesture wheel.", _muted);
             GUILayout.Space(6f);
         }
 

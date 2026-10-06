@@ -26,6 +26,8 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 - **Shared Sea:** Waves, weather and time of day run on the host's clock, so every player sees the same water under the same hull
 - **Quiet by Default:** Routine diagnostics are off; serious errors still use a limited log budget
 - **Crew Status and Host Controls:** See who is loading or ready, their ping and boat; hosts can lock the session or remove a guest
+- **Gesture Wheel:** Hold G to wave, point, salute or shout "Land ho!" to your crew
+- **Hands on the Ship:** Other players' avatars reach for the item they carry and the winch, wheel or rope they hold
 
 ### 📥 Installation
 
@@ -72,6 +74,13 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 - The host can remove a guest with the two-step **Kick** / **Sure?** action.
 - **Teleport to boat** puts you back on the deck if you fell overboard or the boat left without you.
 
+#### Gestures
+- Hold **G** during a session to open the gesture wheel, move the mouse to a gesture and release. Release in the middle, or press **Esc**, to cancel.
+- Gestures: Wave, Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray.
+- "Land ho!" and "Point" aim where you are looking. "Land ho!" also shouts, and other players hear it from where you stand.
+- Walking ends a gesture. You do not see your own gesture, because the game is first person.
+- The first time the wheel becomes available, a short hint appears on screen. The key is also shown in the F8 menu and can be changed with `EmoteKey` in the config.
+
 #### Overlay/Debug Info
 The buttons below sit under **Settings** in the F8 menu, which is collapsed until you click it.
 - Press **F8**, open **Settings** and use **Show Status** / **Hide Status**
@@ -114,6 +123,8 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `EnableDebugPanel` | false | Developer/test panel. The **Debug** button in the menu does nothing until this is on |
 | **UI** |
 | `MenuKey` | F8 | Open/close the Sailwind Co-op menu |
+| `EmoteKey` | G | Hold to open the gesture wheel. Change it if G is bound to something else in the game |
+| `EmoteHintShown` | false | Becomes true after the one-time gesture hint was shown. Set to false to see it again |
 
 ### 🔍 Finding Your IP Address
 
@@ -189,6 +200,8 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - **До 5 игроков:** Один хост и до 4 клиентов одновременно
 - **Общее море:** Волны, погода и время суток идут по часам хоста — вода под лодкой одинакова у всех
 - **Тишина по умолчанию:** Обычная диагностика выключена; серьёзные ошибки пишутся с ограничением частоты
+- **Колесо жестов:** Удерживайте G, чтобы помахать, указать, отдать честь или крикнуть команде «Land ho!»
+- **Руки на снастях:** Аватары других игроков тянутся к предмету в руке и к лебёдке, штурвалу или верёвке, которую держит игрок
 
 ### 📥 Установка
 
@@ -227,6 +240,13 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 #### Отключение
 - Нажмите **F8** и кнопку **Disconnect**
+
+#### Жесты
+- Во время сессии удерживайте **G**: откроется колесо жестов. Наведите мышь на жест и отпустите клавишу. Чтобы отменить, отпустите её в центре или нажмите **Esc**.
+- Жесты: Wave, Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray.
+- «Land ho!» и «Point» направлены туда, куда вы смотрите. «Land ho!» ещё и звучит: другие игроки слышат выкрик с вашего места.
+- Шаг прерывает жест. Свой жест вы не видите, потому что игра от первого лица.
+- Когда колесо впервые становится доступным, на экране появляется короткая подсказка. Клавиша также указана в меню F8 и меняется настройкой `EmoteKey`.
 
 #### Оверлей с информацией
 Кнопки ниже находятся в разделе **Settings** меню F8; он свёрнут, пока по нему не щёлкнуть.
@@ -268,6 +288,8 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `EnableDebugPanel` | false | Панель разработчика. Кнопка **Debug** в меню не работает, пока это выключено |
 | **UI** |
 | `MenuKey` | F8 | Открыть/закрыть меню Sailwind Co-op |
+| `EmoteKey` | G | Удерживать, чтобы открыть колесо жестов. Смените, если G занята в игре |
+| `EmoteHintShown` | false | Становится true после разовой подсказки о жестах. Верните false, чтобы увидеть её снова |
 
 ### 🔍 Как узнать свой IP адрес
 
