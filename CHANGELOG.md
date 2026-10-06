@@ -53,10 +53,17 @@ All notable user-facing changes are documented in this file.
   Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray. "Land ho!" shouts, and other players
   hear it from where you stand. The key is `UI.EmoteKey`; it is shown in the F8 menu and in a
   one-time on-screen hint. Not yet verified in game.
+- **Sleep waits for the whole crew.** Time is skipped only when every player is in a bed. A player
+  who lies down alone, or collapses from exhaustion, sleeps by himself: his screen goes dark, he
+  recovers at the usual sleep speed and does not get hungry or thirsty, while the world keeps
+  going for the others. Not yet verified in game.
+- Fixed: during a shared sleep guests lost food and water about 16 times slower than the host.
+- **Players lie in their beds.** The avatar of a player who is in a bed lies on its back on that
+  bed instead of standing in it. Not yet verified in game.
 
 ### Network
 
-- **Everyone must update.** The wire protocol moved from `80` to `85`; `0.2.x` and `0.3.0` refuse
+- **Everyone must update.** The wire protocol moved from `80` to `86`; `0.2.x` and `0.3.0` refuse
   to connect to each other.
 
 Not yet verified in game: the comparison step, the menu section and the download; the Steam

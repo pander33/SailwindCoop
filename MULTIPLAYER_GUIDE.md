@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.3.0) uses **protocol 85**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.3.0) uses **protocol 86**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Session Model
@@ -150,8 +150,18 @@ For testing, keep the status overlay open and watch the damage line while using 
 Sleep and time advance are shared-world actions.
 
 - The host controls world time.
-- Host sleep is mirrored to clients with blackout/control lock behavior.
-- Client stamina recovery during host sleep is handled separately.
+- Time is skipped only when **every player is in a bed** (a paid tavern night counts) and at least
+  one of them is tired enough to fall asleep. Then every screen goes dark and the world runs fast,
+  as in the single-player game. Everyone recovers, and everyone gets hungry and thirsty at the
+  same rate.
+- When the shared sleep ends, everyone is put out of bed.
+- A player who lies down alone, or collapses from exhaustion, sleeps by himself. His screen goes
+  dark, his sleep need recovers at the usual sleep speed, and hunger and thirst stand still.
+  The world keeps its normal pace for the others. He stays in bed, so the rest of the crew can
+  still join him and start the shared sleep. Any key gets him up and ends this sleep.
+- A tavern night taken alone restores the player at once but does not skip to the morning.
+- During a shared sleep nobody can get out of bed; it ends by itself. A collision, running
+  aground or water coming into the hull wakes the whole crew, as in the single-player game.
 
 Clients should not expect independent time skipping.
 

@@ -14,10 +14,10 @@ namespace SailwindCoop.Sync
         public static void Apply(Harmony harmony)
         {
             var hooks = new PatchHookCatalog();
-            Install(harmony, hooks, typeof(global::Sleep), "EnterBed", new[] { typeof(Transform) }, null, nameof(PostEnterBed));
             Install(harmony, hooks, typeof(global::Sleep), "FallAsleep", Type.EmptyTypes, nameof(PreFallAsleep), null);
             Install(harmony, hooks, typeof(global::Sleep), "WakeUp", Type.EmptyTypes, nameof(PreWakeUp), null);
             Install(harmony, hooks, typeof(global::Sleep), "LeaveBed", Type.EmptyTypes, nameof(PreLeaveBed), nameof(PostLeaveBed));
+            Install(harmony, hooks, typeof(global::Sleep), "Update", Type.EmptyTypes, nameof(PreSleepLoop), nameof(PostSleepLoop));
             hooks.Install(typeof(Tavern), "ClickSleepButton", Type.EmptyTypes, target => harmony.Patch(target,
                 prefix: Callback(nameof(PreTavern)), postfix: Callback(nameof(PostInput)), finalizer: Callback(nameof(FinishInput))));
             Install(harmony, hooks, typeof(GPButtonOnsenEntrance), "OnActivate", Type.EmptyTypes, nameof(PreEntrance), nameof(PostEntrance));
@@ -40,35 +40,28 @@ namespace SailwindCoop.Sync
             => new HarmonyMethod(typeof(SleepPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic));
 
         private static bool Active => SleepSync.Instance?.Connected == true && !SleepSync.Instance.Applying;
-        private struct NeedsBefore
+        private static void PreNeeds(PlayerNeeds __instance, out SleepSync.NeedsSnapshot __state)
         {
-            internal bool Captured;
-            internal float Sleep, Debt;
-        }
-
-        private static void PreNeeds(PlayerNeeds __instance, out NeedsBefore __state)
-        {
-            __state = default(NeedsBefore);
+            __state = default(SleepSync.NeedsSnapshot);
             try
             {
                 if (Active && SleepSync.Instance.ClientAsleep && !__instance.godMode && GameState.playing &&
                     !GameState.recovering && GameState.currentShipyard == null &&
                     !(EconomyUI.instance.uiActive && !Debugger.buildDebugModeOn) && !__instance.applyOverride)
-                    __state = new NeedsBefore { Captured = true, Sleep = PlayerNeeds.sleep, Debt = PlayerNeeds.sleepDebt };
+                    __state = new SleepSync.NeedsSnapshot
+                    {
+                        Captured = true, Sleep = PlayerNeeds.sleep, Debt = PlayerNeeds.sleepDebt,
+                        Food = PlayerNeeds.food, FoodDebt = PlayerNeeds.foodDebt, Water = PlayerNeeds.water,
+                        Protein = PlayerNeeds.protein, Vitamins = PlayerNeeds.vitamins
+                    };
             }
             catch (Exception error) { Warn(nameof(PreNeeds), error); }
         }
 
-        private static void PostNeeds(NeedsBefore __state)
+        private static void PostNeeds(SleepSync.NeedsSnapshot __state)
         {
-            try { if (__state.Captured && Active) SleepSync.Instance.RestoreNeeds(__state.Sleep, __state.Debt); }
+            try { if (__state.Captured && Active) SleepSync.Instance.AdjustNeeds(__state); }
             catch (Exception error) { Warn(nameof(PostNeeds), error); }
-        }
-
-        private static void PostEnterBed(Transform __0)
-        {
-            try { if (Active && GameState.inBed == __0) SleepSync.Instance.EnteredBed(__0); }
-            catch (Exception error) { Warn(nameof(PostEnterBed), error); }
         }
 
         private static bool PreFallAsleep()
@@ -87,24 +80,32 @@ namespace SailwindCoop.Sync
             try
             {
                 if (!Active) return true;
-                if (GameState.eyesFullyClosed) SleepSync.Instance.Wake(false);
+                if (GameState.eyesFullyClosed) SleepSync.Instance.Wake(_inSleepLoop);
             }
             catch (Exception error) { Warn(nameof(PreWakeUp), error); }
             return false;
         }
 
-        private static void PreLeaveBed(out bool __state)
+        /// <summary>A rested player lying in a shared sleep is not asleep for the game, so any key
+        /// would take him out of bed with the screen still dark.</summary>
+        private static bool PreLeaveBed()
         {
-            __state = false;
-            try { __state = Active && GameState.inBed != null; }
+            try { if (Active && SleepSync.Instance.HoldsBed) return false; }
             catch (Exception error) { Warn(nameof(PreLeaveBed), error); }
+            return true;
         }
 
-        private static void PostLeaveBed(bool __state)
+        private static void PostLeaveBed()
         {
-            try { if (__state && Active) SleepSync.Instance.Wake(true); }
+            try { if (Active && GameState.inBed == null) SleepSync.Instance.LeftBed(); }
             catch (Exception error) { Warn(nameof(PostLeaveBed), error); }
         }
+
+        // Sleep.Update wakes the player when he has slept enough; every other WakeUp caller is an
+        // emergency (collision, running aground, water coming in). SleepSync tells them apart by this.
+        private static bool _inSleepLoop;
+        private static void PreSleepLoop() { _inSleepLoop = true; }
+        private static void PostSleepLoop() { _inSleepLoop = false; }
 
         private static void PreTavern(Tavern __instance)
         {

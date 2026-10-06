@@ -39,6 +39,7 @@ namespace SailwindCoop.Net
                 case MsgType.InstrumentRequest:
                 case MsgType.RefitRequest:
                 case MsgType.SleepRequest:
+                case MsgType.SleepPresence:
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
                 case MsgType.ModSyncResult:

@@ -54,7 +54,8 @@ namespace SailwindCoop.Sync
             public NpcLocomotionDriver NpcLoco;   // procedural gait for NPC-skin avatars (no Animator)
             public bool NpcFitPending;            // one-time feet-on-deck fit awaiting valid bounds
             public AvatarRigDriver Rig;           // owns the arm IK; null on the primitive fallback
-            public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft
+            public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft / Lying
+            public Vector3 LieHead, LieDir;       // last bed pose, in the frame of the player pose (boat or real)
             public Vector3 HandR, HandL;          // grip points in the avatar root's frame
             public EmoteId Emote;
             public long EmoteTick;                // host-clock start of the current emote
@@ -237,10 +238,67 @@ namespace SailwindCoop.Sync
             public float OffsetY;
             public NpcLocomotionDriver NpcLoco;
 
+            // Лёжа: точка головы и направление к ногам в кадре корня аватара. «Верх» — палуба
+            // лодки, на которой лежит игрок, или мир (LieUp == null).
+            public bool Lying;
+            public Vector3 LieHead, LieDir;
+            public Transform LieUp;
+
+            private const float LieBlendSeconds = 0.6f;
+            /// <summary>Насколько центр головы ниже глаз лежащего игрока, м.</summary>
+            private const float LieDrop = 0.1f;
+            private float _lie;               // 0 — стоит, 1 — лежит
+            private float _headHeight = -1f;  // от пивота модели до головы вдоль её оси, м
+
             public void Step()
             {
                 transform.localPosition = new Vector3(0f, OffsetY + (NpcLoco != null ? NpcLoco.CrouchOffsetY : 0f), 0f);
                 transform.localRotation = Quaternion.identity;
+
+                _lie = Mathf.MoveTowards(_lie, Lying ? 1f : 0f, Time.unscaledDeltaTime / LieBlendSeconds);
+                Transform root = transform.parent;
+                if (_lie <= 0f || root == null) return;
+                // Модель только что поставлена стоя — рост меряется в этой позе, один раз.
+                if (_headHeight < 0f) _headHeight = MeasureHeadHeight();
+
+                Vector3 up = LieUp != null ? LieUp.up : Vector3.up;
+                Vector3 feet = Vector3.ProjectOnPlane(root.rotation * LieDir, up);
+                if (feet.sqrMagnitude < 1e-4f) feet = Vector3.ProjectOnPlane(root.forward, up);
+                if (feet.sqrMagnitude < 1e-4f) return;
+                feet.Normalize();
+
+                // На спине: лицо вверх, макушка — против направления к ногам.
+                Quaternion rot = Quaternion.LookRotation(up, -feet);
+                Vector3 head = root.position + root.rotation * LieHead;
+                Vector3 pos = head - up * LieDrop + feet * _headHeight;
+                float t = Mathf.SmoothStep(0f, 1f, _lie);
+                transform.position = Vector3.Lerp(transform.position, pos, t);
+                transform.rotation = Quaternion.Slerp(transform.rotation, rot, t);
+            }
+
+            private float MeasureHeadHeight()
+            {
+                Transform head = null;
+                try
+                {
+                    var animator = GetComponentInChildren<Animator>();
+                    if (animator != null && animator.isHuman) head = animator.GetBoneTransform(HumanBodyBones.Head);
+                }
+                catch { head = null; }
+                if (head == null) head = FindBone(transform, "Head");
+                float height = head != null ? Vector3.Dot(head.position - transform.position, transform.up) : 0f;
+                return height > 0.3f ? height : 1.5f * transform.lossyScale.y;
+            }
+
+            private static Transform FindBone(Transform root, string name)
+            {
+                if (root.name == name) return root;
+                for (int i = 0; i < root.childCount; i++)
+                {
+                    Transform found = FindBone(root.GetChild(i), name);
+                    if (found != null) return found;
+                }
+                return null;
             }
         }
 
@@ -612,6 +670,8 @@ namespace SailwindCoop.Sync
                 hands |= PlayerStateMsg.HandRight;
             if (_handProbe.HasLeft && ToHandLocal(_handProbe.LeftWorld, pl, out handL))
                 hands |= PlayerStateMsg.HandLeft;
+            Vector3 lieHead, lieDir;
+            if (LocalLying(boat, out lieHead, out lieDir)) hands |= PlayerStateMsg.Lying;
 
             if (_emote != EmoteId.None)
             {
@@ -638,6 +698,8 @@ namespace SailwindCoop.Sync
                 Hands = hands,
                 HandR = handR,
                 HandL = handL,
+                LieHead = lieHead,
+                LieDir = lieDir,
                 Emote = (byte)_emote,
                 EmoteTick = _emote != EmoteId.None ? _emoteTick : 0L,
             }, LiteNetLib.DeliveryMethod.Unreliable);
@@ -720,6 +782,50 @@ namespace SailwindCoop.Sync
             if (id == EmoteId.LandHo) EmoteAudio.PlayLandHoLocal();
         }
 
+        /// <summary>
+        /// Игрок лежит в койке: где его голова и в какую сторону ноги — в том же кадре, что и Pos
+        /// (палуба <paramref name="boat"/> или реальное пространство).
+        /// Голова — точка сна койки (первый дочерний объект, туда игра ставит камеру). Ноги — в
+        /// сторону середины койки; если точка сна стоит над серединой, берётся её ориентация.
+        /// </summary>
+        private static bool LocalLying(Transform boat, out Vector3 head, out Vector3 feetDir)
+        {
+            head = feetDir = Vector3.zero;
+            Transform bed;
+            try { bed = GameState.inBed; }
+            catch { return false; }
+            if (bed == null) return false;
+
+            Transform spot = bed.childCount > 0 ? bed.GetChild(0) : bed;
+            Vector3 feet = Vector3.ProjectOnPlane(BedCentre(bed) - spot.position, Vector3.up);
+            if (feet.magnitude < 0.25f)
+            {
+                feet = Vector3.ProjectOnPlane(spot.forward, Vector3.up);
+                // Взгляд в потолок: тогда к ногам смотрит низ камеры.
+                if (feet.magnitude < 0.5f) feet = Vector3.ProjectOnPlane(-spot.up, Vector3.up);
+            }
+            if (feet.sqrMagnitude < 1e-4f) return false;
+
+            feet.Normalize();
+            head = boat != null ? boat.InverseTransformPoint(spot.position) : CoordSpace.LocalToReal(spot.position);
+            feetDir = boat != null ? Quaternion.Inverse(boat.rotation) * feet : feet;
+            return true;
+        }
+
+        /// <summary>Середина койки по форме её коллайдера. Игра выключает коллайдер занятой койки,
+        /// а у выключенного <c>bounds</c> пуст, поэтому берётся локальная форма.</summary>
+        private static Vector3 BedCentre(Transform bed)
+        {
+            Collider col = bed.GetComponent<Collider>();
+            var box = col as BoxCollider;
+            if (box != null) return bed.TransformPoint(box.center);
+            var capsule = col as CapsuleCollider;
+            if (capsule != null) return bed.TransformPoint(capsule.center);
+            var mesh = col as MeshCollider;
+            if (mesh != null && mesh.sharedMesh != null) return bed.TransformPoint(mesh.sharedMesh.bounds.center);
+            return bed.position;
+        }
+
         /// <summary>Дальше этого от игрока точка хвата не шлётся: рука всё равно не дотянется.</summary>
         private const float MaxHandReach = 4f;
 
@@ -792,6 +898,12 @@ namespace SailwindCoop.Sync
             a.Hands = msg.Hands;
             a.HandR = msg.HandR;
             a.HandL = msg.HandL;
+            // Последняя поза лёжа остаётся: по ней аватар плавно встаёт после сброса бита.
+            if ((msg.Hands & PlayerStateMsg.Lying) != 0)
+            {
+                a.LieHead = msg.LieHead;
+                a.LieDir = msg.LieDir;
+            }
 
             var emote = (EmoteId)msg.Emote;
             if (emote == EmoteId.LandHo && msg.EmoteTick != a.EmoteVoicedTick && a.Go != null &&
@@ -1153,32 +1265,52 @@ namespace SailwindCoop.Sync
         {
             if (a.Go == null) return;
 
+            // Лежащий в койке лежит прямо: без шага, приседа, наклона взгляда и рук.
+            bool lying = (a.Hands & PlayerStateMsg.Lying) != 0;
+            AvatarVisualOffsetDriver offset = a.Rig != null ? a.Rig.Offset : null;
+            if (offset != null)
+            {
+                offset.Lying = lying && a.Net.ToWorldPos != null && a.Net.ToWorldRot != null;
+                if (a.Net.ToWorldPos != null && a.Net.ToWorldRot != null)
+                {
+                    // Койка задана в кадре лодки или мира; драйверу она нужна относительно корня
+                    // аватара. Обе стороны берутся в одном кадре, поэтому задержка интерполяции
+                    // корня в результат не попадает.
+                    Transform root = a.Go.transform;
+                    Quaternion inv = Quaternion.Inverse(root.rotation);
+                    offset.LieHead = inv * (a.Net.ToWorldPos(a.LieHead) - root.position);
+                    offset.LieDir = inv * (a.Net.ToWorldRot(Quaternion.identity) * a.LieDir);
+                }
+                offset.LieUp = a.LastPoseFrame == CoordFrame.Boat ? a.PoseBoat : null;
+            }
+
             ApplyAnimatorParams(a);
             ApplyLookPitch(a);
+            if (lying && a.PoseDriver != null) a.PoseDriver.TargetPitch = 0f;
             ApplyVisualOffset(a);
 
             if (a.NpcFitPending) FitNpcBody(a);
             if (a.NpcLoco != null)
             {
-                a.NpcLoco.TargetSpeedMps = a.NpcTargetSpeedMps;
-                a.NpcLoco.TargetCrouch = a.AnimTargetCrouch;
-                a.NpcLoco.TargetTurn = a.AnimTargetTurn;
+                a.NpcLoco.TargetSpeedMps = lying ? 0f : a.NpcTargetSpeedMps;
+                a.NpcLoco.TargetCrouch = lying ? 0f : a.AnimTargetCrouch;
+                a.NpcLoco.TargetTurn = lying ? 0f : a.AnimTargetTurn;
                 Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
-                a.NpcLoco.TargetPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg, -35f, 45f);
-                a.NpcLoco.TargetYaw = Mathf.Clamp(Mathf.Atan2(localLook.x, localLook.z) * Mathf.Rad2Deg, -60f, 60f);
+                a.NpcLoco.TargetPitch = lying ? 0f : Mathf.Clamp(Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg, -35f, 45f);
+                a.NpcLoco.TargetYaw = lying ? 0f : Mathf.Clamp(Mathf.Atan2(localLook.x, localLook.z) * Mathf.Rad2Deg, -60f, 60f);
             }
 
             AvatarArmIk ik = a.Rig != null ? a.Rig.Ik : null;
             if (ik != null)
             {
-                bool right = (a.Hands & PlayerStateMsg.HandRight) != 0;
-                bool left = (a.Hands & PlayerStateMsg.HandLeft) != 0;
+                bool right = !lying && (a.Hands & PlayerStateMsg.HandRight) != 0;
+                bool left = !lying && (a.Hands & PlayerStateMsg.HandLeft) != 0;
                 Vector3 rightTarget = a.HandR, leftTarget = a.HandL;
                 bool rightEmote = false, leftEmote = false;
 
                 // Жест берёт только те руки, которыми пользуется; вторая остаётся на предмете.
                 EmotePose pose;
-                if (a.Emote != EmoteId.None &&
+                if (!lying && a.Emote != EmoteId.None &&
                     EmoteCatalog.Evaluate(a.Emote, (_net.Clock.ServerTick - a.EmoteTick) / 1000f, LookPitch(a), out pose))
                 {
                     if (pose.Right) { right = rightEmote = true; rightTarget = pose.RightArm; }
@@ -1189,7 +1321,7 @@ namespace SailwindCoop.Sync
                 ik.SetTarget(false, left, leftTarget, leftEmote);
             }
 
-            if (a.Head != null && !a.HeadDrivenByAnimator)
+            if (a.Head != null && !a.HeadDrivenByAnimator && !lying)
             {
                 Quaternion localHead = Quaternion.Inverse(a.Go.transform.rotation) * a.HeadWorldRot;
                 a.Head.localRotation = Quaternion.Slerp(a.Head.localRotation, localHead, 0.35f);

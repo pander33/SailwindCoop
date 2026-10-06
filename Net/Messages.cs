@@ -102,6 +102,7 @@ namespace SailwindCoop.Net
         ModFileRequest = 109,   // client -> host : send file F of mod M (manifest indices)
         ModFileChunk = 110,     // host -> client : one chunk of a requested mod file
         ModFileEnd = 111,       // host -> client : requested file complete or refused
+        SleepPresence = 112,    // client -> host : in bed / wants to sleep / rested (ReliableOrdered, on change)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -340,6 +341,15 @@ namespace SailwindCoop.Net
         public Vector3 HandR;
         public Vector3 HandL;
 
+        // --- лежит в койке (Protocol 86) -------------------------------------------------
+        // Бит в том же байте Hands. LieHead — точка головы, LieDir — направление от головы к
+        // ногам. Оба в кадре Frame, как Pos (палуба лодки или реальное пространство), а не в
+        // кадре позы игрока: койка неподвижна, а игрок в ней вертит головой. Пишутся в пакет
+        // только при этом бите.
+        public const byte Lying = 4;
+        public Vector3 LieHead;
+        public Vector3 LieDir;
+
         // --- жест (Protocol 85) ---------------------------------------------------------
         // Emote — значение Sync.EmoteId, 0 = жеста нет. EmoteTick — момент начала по часам хоста:
         // получатель считает фазу жеста от него, поэтому жест идёт у всех одинаково, а потеря
@@ -366,6 +376,7 @@ namespace SailwindCoop.Net
             w.Put(Hands);
             if ((Hands & HandRight) != 0) w.PutVector3(HandR);
             if ((Hands & HandLeft) != 0) w.PutVector3(HandL);
+            if ((Hands & Lying) != 0) { w.PutVector3(LieHead); w.PutVector3(LieDir); }
             w.Put(Emote);
             if (Emote != 0) w.Put(EmoteTick);
         }
@@ -387,6 +398,9 @@ namespace SailwindCoop.Net
             Hands = r.GetByte();
             HandR = (Hands & HandRight) != 0 ? r.GetVector3() : Vector3.zero;
             HandL = (Hands & HandLeft) != 0 ? r.GetVector3() : Vector3.zero;
+            bool lying = (Hands & Lying) != 0;
+            LieHead = lying ? r.GetVector3() : Vector3.zero;
+            LieDir = lying ? r.GetVector3() : Vector3.zero;
             Emote = r.GetByte();
             EmoteTick = Emote != 0 ? r.GetLong() : 0L;
         }
@@ -1879,6 +1893,23 @@ namespace SailwindCoop.Net
                 (Phase == SleepPhase.Awake && Address.Source != SleepSource.Onsen))))
                 throw new System.IO.InvalidDataException("Invalid sleep request header");
         }
+    }
+
+    /// <summary>Client -> host, ReliableOrdered, on change and every 2 s. What the host needs to
+    /// decide on the shared sleep: it starts when every loaded player is InBed or Wants and at least
+    /// one Wants; at sea it ends early when everyone is Rested.</summary>
+    public sealed class SleepPresenceMsg : INetMessage
+    {
+        public const byte InBed = 1;      // lies in a bed
+        public const byte Wants = 2;      // asleep by himself, or lying in a house bed
+        public const byte Rested = 4;     // sleep need is full
+        public const byte Tavern = 8;     // paid for a tavern night
+        public const byte Timeskip = 16;  // ashore, in a tavern, or the boat is moored
+
+        public byte Flags;
+        public MsgType Type => MsgType.SleepPresence;
+        public void Serialize(NetDataWriter writer) { writer.Put(Flags); }
+        public void Deserialize(NetDataReader reader) { Flags = reader.GetByte(); }
     }
 
     /// <summary>Host -> client, ReliableOrdered: full absolute sleep lifecycle and host revision.

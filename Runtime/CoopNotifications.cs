@@ -47,8 +47,8 @@ namespace SailwindCoop.Runtime
 				case GameplayNoticeKind.SessionLocked: text = "Session locked"; break;
 				case GameplayNoticeKind.AnchorDropped: text = msg.ActorNetId == 0 ? "Anchor set" : actor + " dropped the anchor"; break;
 				case GameplayNoticeKind.AnchorRaised: text = msg.ActorNetId == 0 ? "Anchor raised" : actor + " raised the anchor"; break;
-				case GameplayNoticeKind.SleepStarted: text = actor + " started sleeping"; break;
-				case GameplayNoticeKind.SleepEnded: text = actor + " woke up"; break;
+				case GameplayNoticeKind.SleepStarted: text = msg.ActorNetId == 0 ? "The crew fell asleep" : actor + " started sleeping"; break;
+				case GameplayNoticeKind.SleepEnded: text = msg.ActorNetId == 0 ? "The crew woke up" : actor + " woke up"; break;
 				case GameplayNoticeKind.ItemBought: text = actor + " bought " + msg.Detail; break;
 				case GameplayNoticeKind.ItemSold: text = actor + " sold " + msg.Detail; break;
 				default: return;

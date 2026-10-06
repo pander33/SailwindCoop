@@ -576,6 +576,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.SleepRequest:
                     Sleep.OnSleepRequest((SleepRequestMsg)msg, fromPeer);
                     break;
+                case MsgType.SleepPresence:
+                    Sleep.OnSleepPresence((SleepPresenceMsg)msg, fromPeer);
+                    break;
                 case MsgType.MissionJournal:
                     Missions.OnMissionJournal((MissionJournalMsg)msg, fromPeer);
                     break;
