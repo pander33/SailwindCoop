@@ -37,7 +37,7 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 
 #### Mod Installation
 1. Download the latest release archive
-2. Extract `SailwindCoop.dll`, `LiteNetLib.dll`, and `avatar.bundle` to: `Sailwind/BepInEx/plugins/SailwindCoop/`
+2. Extract `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll`, and `avatar.bundle` to: `Sailwind/BepInEx/plugins/SailwindCoop/`
 3. If you use a custom avatar, replace the included `avatar.bundle` with your compatible bundle
 4. Launch the game
 
@@ -50,7 +50,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 2. Load or start a save game
 3. Press **F8** to open the **Sailwind Co-op** menu
 4. Click **Host**
-5. Share your IP address with friends (see "Finding Your IP" below)
+5. Share your IP address with friends (see "Finding Your IP" below), or switch the menu to **Steam** before pressing **Host** so Steam friends can join without an IP address (see [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md#playing-over-steam))
 6. Wait for friends to connect
 
 #### Joining a Game
@@ -198,7 +198,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 #### Установка мода
 1. Скачайте последний архив релиза
-2. Распакуйте `SailwindCoop.dll`, `LiteNetLib.dll` и `avatar.bundle` в: `Sailwind/BepInEx/plugins/SailwindCoop/`
+2. Распакуйте `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` и `avatar.bundle` в: `Sailwind/BepInEx/plugins/SailwindCoop/`
 3. Если используете свой аватар, замените комплектный `avatar.bundle` на совместимый bundle
 4. Запустите игру
 

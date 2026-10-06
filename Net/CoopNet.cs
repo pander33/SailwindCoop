@@ -68,6 +68,7 @@ namespace SailwindCoop.Net
         private readonly Dictionary<int, PeerSession> _sessions = new Dictionary<int, PeerSession>();
         private readonly Dictionary<uint, string> _playerNames = new Dictionary<uint, string>();
         private NetPeer _hostPeer;            // client side: the host
+        private DatagramTunnel _tunnel;       // Steam transport: carries this session's datagrams
         private long _lastTimeSyncTick;
         private SessionMemberInfo[] _roster = new SessionMemberInfo[0];
         private int _rosterRevision;
@@ -111,6 +112,14 @@ namespace SailwindCoop.Net
         }
 
         public int PeerCount => _sessions.Count;
+        /// <summary>The session's datagrams also travel over Steam (host) or only over Steam (client).</summary>
+        public bool OverSteam => _tunnel != null;
+        /// <summary>Client: who we are joining, for messages — an address or a Steam name.</summary>
+        public string HostLabel { get; private set; } = "";
+        public string TransportStatus => _tunnel == null ? "" :
+            "steam out=" + _tunnel.SentToRelay + " in=" + _tunnel.ReceivedFromRelay +
+            (Role == Role.Host ? " links=" + _tunnel.LinkCount : "") +
+            (string.IsNullOrEmpty(_tunnel.LastError) ? "" : " err=" + _tunnel.LastError);
         public double RttMs => Clock.RttMs;
         public SessionMemberInfo[] RosterSnapshot => (SessionMemberInfo[])_roster.Clone();
 
@@ -211,10 +220,61 @@ namespace SailwindCoop.Net
                  " port " + port + " (protocol " + Protocol.Version + ")");
         }
 
+        /// <summary>
+        /// Host over Steam as well as the LAN port: the same LiteNetLib host, plus a tunnel that feeds it
+        /// the datagrams of Steam peers through loopback. If Steam is unavailable the LAN host stays up.
+        /// </summary>
+        public void StartSteamHost(int port, bool friendsOnly)
+        {
+            StartHost(port);
+            if (Role != Role.Host) return;
+            IDatagramRelay relay = SteamLink.OpenHost(friendsOnly);
+            if (relay == null)
+            {
+                LastError = SteamLink.Error + " Hosting on the LAN port only.";
+                _log("[CoopNet] " + LastError);
+                return;
+            }
+            bool bindAll = string.IsNullOrEmpty(ListenIp) || ListenIp == "0.0.0.0";
+            IPAddress local = IPAddress.Loopback;
+            if (!bindAll && !IPAddress.TryParse(ListenIp, out local)) local = IPAddress.Loopback;
+            _tunnel = new DatagramTunnel(relay);
+            _tunnel.StartHost(new IPEndPoint(local, port));
+            _log("[CoopNet] Host also reachable over Steam as " + SteamLink.MyId +
+                 (friendsOnly ? " (friends only)" : ""));
+        }
+
+        /// <summary>Join a host by Steam id: LiteNetLib connects to a loopback tunnel instead of an address.</summary>
+        public void StartSteamClient(ulong hostSteamId)
+        {
+            Stop();
+            IDatagramRelay relay = hostSteamId == 0UL ? null : SteamLink.OpenClient(hostSteamId);
+            if (relay == null)
+            {
+                State = LinkState.Failed;
+                LastError = hostSteamId == 0UL ? "Invalid Steam ID" : SteamLink.Error;
+                _log("[CoopNet] " + LastError);
+                return;
+            }
+            _tunnel = new DatagramTunnel(relay);
+            int port = _tunnel.StartClient(hostSteamId);
+            string name = SteamLink.NameOf(hostSteamId);
+            // Steam may need many seconds to open a session through NAT or its relays.
+            int attempts = Math.Max(ConnectAttempts, 30000 / Math.Max(100, ReconnectDelayMs));
+            Connect("127.0.0.1", port, attempts, string.IsNullOrEmpty(name) ? "Steam " + hostSteamId : name);
+        }
+
         public void StartClient(string ip, int port)
         {
             Stop();
+            Connect(ip, port, ConnectAttempts, ip);
+        }
+
+        private void Connect(string ip, int port, int attempts, string hostLabel)
+        {
+            HostLabel = hostLabel ?? "";
             _net = NewManager();
+            _net.MaxConnectAttempts = Math.Max(1, attempts);
             if (!_net.Start())
             {
                 State = LinkState.Failed;
@@ -226,7 +286,7 @@ namespace SailwindCoop.Net
             State = LinkState.Connecting;
             LastError = "";
             LastDisconnectReason = "";
-            _log("[CoopNet] Connecting to " + ip + ":" + port + " ...");
+            _log("[CoopNet] Connecting to " + (OverSteam ? HostLabel + " over Steam" : ip + ":" + port) + " ...");
             _net.Connect(ip, port, ConnKey);   // Hello is sent once the peer connects
         }
 
@@ -237,6 +297,12 @@ namespace SailwindCoop.Net
             {
                 _net.Stop();
                 _net = null;
+            }
+            if (_tunnel != null)
+            {
+                _tunnel.Stop();
+                _tunnel = null;
+                SteamLink.CloseRelay();
             }
             _sessions.Clear();
             // Names and our own id belong to the session that just ended: leaving them behind made the
@@ -277,6 +343,7 @@ namespace SailwindCoop.Net
 
         public void PollEvents()
         {
+            SteamLink.Tick();   // free unless Steam was started from the menu
             if (_net == null) return;
             _net.PollEvents();
 
@@ -360,6 +427,10 @@ namespace SailwindCoop.Net
                     LastError = string.IsNullOrEmpty(LastDisconnectReason)
                         ? "Disconnected: " + info.Reason
                         : LastDisconnectReason;
+                    // Steam knows why the host could not be reached; "ConnectionFailed" does not.
+                    string steamFailure = _tunnel != null ? SteamLink.TakeFailure() : null;
+                    if (!string.IsNullOrEmpty(steamFailure) && string.IsNullOrEmpty(LastDisconnectReason))
+                        LastError = steamFailure;
                 }
                 _log("[CoopNet] Disconnected from host: " + info.Reason);
             }

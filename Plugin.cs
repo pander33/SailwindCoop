@@ -81,6 +81,11 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> AllowModDownload;
         public readonly ConfigEntry<string> ModSyncExclude;
 
+        // Steam transport (an alternative to typing an IP address; the LAN port keeps working).
+        public readonly ConfigEntry<bool> UseSteam;
+        public readonly ConfigEntry<bool> SteamFriendsOnly;
+        public readonly ConfigEntry<string> SteamJoinId;
+
         // Debug.
         public readonly ConfigEntry<bool> EnableLogging;
         public readonly ConfigEntry<bool> EnableDebugPanel;
@@ -112,6 +117,10 @@ namespace SailwindCoop
             ShareMods = c.Bind("Mods", "ShareMods", true, "Host: let joining players download the mods they lack straight from this PC. On by default; toggle it in the co-op menu (F8 -> Mods -> Sharing). When off, joining players are still told which of your mods they are missing, but must install them themselves. Share only mods whose authors allow redistribution.");
             AllowModDownload = c.Bind("Mods", "AllowModDownload", true, "Client: allow downloading missing mods from a host that offers them. Nothing is ever installed without a click in the co-op menu, and the game must be restarted afterwards. Mods run code on your PC - download only from a host you trust.");
             ModSyncExclude = c.Bind("Mods", "ModSyncExclude", "gravydevsupreme.xunity.autotranslator,gravydevsupreme.xunity.resourceredirector", "Comma-separated plugin GUIDs that are never listed, compared or shared (personal mods such as a UI translator, or mods only the host needs). A folder containing an excluded plugin is skipped whole. Applied on both host and client.");
+
+            UseSteam = c.Bind("Steam", "UseSteam", false, "The co-op menu opens in Steam mode: host for Steam friends and join them without an IP address. Steam must be running and own Sailwind. Switch it in the co-op menu (F8 -> Connection). A Steam host still accepts LAN clients on its UDP port.");
+            SteamFriendsOnly = c.Bind("Steam", "FriendsOnly", true, "Host: accept Steam connections only from players on your Steam friends list. Turn off to let anyone who knows your Steam ID join.");
+            SteamJoinId = c.Bind("Steam", "JoinId", "", "SteamID64 of the host joined last (17 digits). Filled in from the co-op menu.");
 
             EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");

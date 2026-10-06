@@ -47,7 +47,7 @@ $BODY
 EOF
 
 for dll in "$GAME"/Sailwind_Data/Managed/*.dll "$GAME/BepInEx/core/BepInEx.dll" \
-           "$GAME"/BepInEx/plugins/SailwindCoop/*.dll \
+           "$GAME/BepInEx/plugins/SailwindCoop/SailwindCoop.dll" "$GAME/BepInEx/plugins/SailwindCoop/LiteNetLib.dll" \
            "$GAME/BepInEx/plugins/SailwindCoopDevConsole/SailwindCoopDevConsole.dll"; do
   echo "-r:\"$dll\""
 done > "$WORK/refs.rsp"

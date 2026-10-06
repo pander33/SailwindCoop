@@ -63,6 +63,13 @@ namespace SailwindCoop.Sync
         private float _lastDataTime;
         private bool _leaveAfterInstall;
         private string _message = "";
+        private string _installedNames = "";
+
+        /// <summary>Client: mods were installed in this run of the game. Joining is pointless until the
+        /// game is restarted — the loader has not read them, so the host would offer them again.</summary>
+        public bool RestartRequired => _phase == Phase.RestartRequired;
+        /// <summary>The mods installed in this run, for the restart notice.</summary>
+        public string InstalledNames => _installedNames;
 
         private sealed class Upload
         {
@@ -102,7 +109,7 @@ namespace SailwindCoop.Sync
         public void BeginClient()
         {
             Reset();
-            _phase = Phase.Idle; _message = "";
+            if (_phase != Phase.RestartRequired) { _phase = Phase.Idle; _message = ""; }
         }
 
         /// <summary>Session teardown. A finished install keeps its "restart the game" text.</summary>
@@ -395,11 +402,12 @@ namespace SailwindCoop.Sync
                 return;
             }
 
-            List<string> installed = _download.Commit(Plugin.Cfg.JoinIp.Value);
+            List<string> installed = _download.Commit(_net.HostLabel);
             DropDownload();
             _phase = Phase.RestartRequired;
-            _message = "Installed from the host: " + string.Join(", ", installed.ToArray()) +
-                       ". Restart the game, then join again.";
+            _installedNames = string.Join(", ", installed.ToArray());
+            _message = "Mods installed from the host: " + _installedNames +
+                       ". You are not connected yet: quit the game, start it again, then join the host again.";
             Plugin.Logger.LogInfo("[Mods] role=Client " + _message);
             SendResult(ModSyncDecision.Abort);
             // This runs inside the receive callback; the session is torn down from Tick instead.
@@ -484,11 +492,17 @@ namespace SailwindCoop.Sync
                             Megabytes(_download.TotalBytes) + " MB";
                 return view;
             }
+            if (_phase == Phase.RestartRequired)
+            {
+                // The restart notice at the top of the menu carries the instructions.
+                view.Text = "Installed, waiting for a game restart: " + _installedNames;
+                return view;
+            }
             if (_phase != Phase.Deciding && _phase != Phase.Failed) return view;
 
             var text = new StringBuilder();
             if (_phase == Phase.Failed) text.Append(_message).Append('\n');
-            text.Append("Host ").Append(Plugin.Cfg.JoinIp.Value).Append(" uses mods that differ from yours:");
+            text.Append("Host ").Append(_net.HostLabel).Append(" uses mods that differ from yours:");
             foreach (ModDiff diff in _diffs)
             {
                 if (diff.Kind == ModDiffKind.Same) continue;
@@ -514,7 +528,7 @@ namespace SailwindCoop.Sync
             {
                 view.DownloadLabel = "Download " + mods + " (" + Megabytes(bytes) + " MB)";
                 text.Append(view.CanDownload
-                    ? "\nMods run code on your PC with your rights. Download only from a host you trust. The game must be restarted afterwards."
+                    ? "\nMods run code on your PC with your rights. Download only from a host you trust.\nAfter the download you must RESTART THE GAME and join again."
                     : !_downloadAllowed ? "\nThe host does not offer downloads (ShareMods is off on the host)."
                     : "\nDownloads are disabled in your config (AllowModDownload).");
             }

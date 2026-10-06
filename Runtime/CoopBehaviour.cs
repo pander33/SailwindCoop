@@ -888,6 +888,7 @@ namespace SailwindCoop.Runtime
             Pause?.Clear();
             HostPause?.Clear();
             Net?.Stop();
+            SteamLink.Shutdown();
             _notifications?.Clear();
             _harmony?.UnpatchSelf();
         }
@@ -896,6 +897,7 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("quit");
             Net?.Stop();
+            SteamLink.Shutdown();
         }
 
         private void SaveClientProfileBeforeStop(string reason)
@@ -943,28 +945,39 @@ namespace SailwindCoop.Runtime
             return true;
         }
 
+        /// <summary>Mods downloaded in this run are not loaded yet: a new join would only offer them
+        /// again. The menu shows the restart notice; this keeps every join path behind it.</summary>
+        private bool RestartPending()
+        {
+            if (!Mods.RestartRequired) return false;
+            Plugin.Logger.LogWarning("[Coop] role=None join refused: mods were installed, the game must be restarted first");
+            if (_menuUI != null) _menuUI.Visible = true;
+            return true;
+        }
+
         private static void NoticeFaultedPatchSets()
         {
             if (PatchHealth.FaultedSets != null)
                 Notice("Not synced in this session (patch failed): " + PatchHealth.FaultedSets + ". See BepInEx/LogOutput.log.");
         }
 
-        public void StartHostSession(int port)
+        public void StartHostSession(int port, bool steam = false)
         {
             if (SessionBlocked()) return;
-            Plugin.Logger.LogInfo("[Coop] Starting host via UI");
+            Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
             TeardownSession("start-host", saveClientProfile: true);
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
-            Net.StartHost(port);
+            if (steam) Net.StartSteamHost(port, Plugin.Cfg.SteamFriendsOnly.Value);
+            else Net.StartHost(port);
             if (Net.Role == Role.Host) Mods.BeginHost();
             NoticeFaultedPatchSets();
         }
 
         public void StartClientSession(string ip, int port)
         {
-            if (SessionBlocked()) return;
+            if (SessionBlocked() || RestartPending()) return;
             Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
             TeardownSession("start-client", saveClientProfile: true);
             ClearNotice();
@@ -972,6 +985,19 @@ namespace SailwindCoop.Runtime
             _clientCoopWorldLoaded = false;
             Mods.BeginClient();
             Net.StartClient(ip, port);
+            NoticeFaultedPatchSets();
+        }
+
+        public void StartSteamClientSession(ulong hostSteamId)
+        {
+            if (SessionBlocked() || RestartPending()) return;
+            Plugin.Logger.LogInfo("[Coop] Joining via UI over Steam to " + hostSteamId);
+            TeardownSession("start-client", saveClientProfile: true);
+            ClearNotice();
+            _clientProfileSavedOnShutdown = false;
+            _clientCoopWorldLoaded = false;
+            Mods.BeginClient();
+            Net.StartSteamClient(hostSteamId);
             NoticeFaultedPatchSets();
         }
 

@@ -18,13 +18,24 @@ All notable user-facing changes are documented in this file.
   off. `AllowModDownload` disables downloading on the client, and `ModSyncExclude` lists plugin
   GUIDs that are never compared or shared (the XUnity translator by default).
 - The crew list shows `Mods` while a joining player is comparing mods.
+- **Play over Steam without an IP address.** The F8 menu has a **LAN / Steam** switch. In Steam
+  mode the host is reachable by Steam ID, and a joining player sees Steam friends who are in the
+  game, with **Join** next to a friend who is hosting. No port forwarding or VPN is needed. Steam
+  must be running, and each player needs their own Steam account that owns Sailwind.
+- A Steam host still accepts LAN players on its UDP port. LAN play itself is unchanged and does not
+  need Steam.
+- By default a Steam host accepts only Steam friends (`Steam/FriendsOnly`, the **Friends only**
+  button).
+- The mod now ships two more files that must sit next to `SailwindCoop.dll`:
+  `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.
 
 ### Network
 
 - **Everyone must update.** The wire protocol moved from `80` to `81`; `0.2.x` and `0.3.0` refuse
   to connect to each other.
 
-Not yet verified in game: the comparison step, the menu section and the download.
+Not yet verified in game: the comparison step, the menu section and the download; the Steam
+connection (it needs two PCs with different Steam accounts).
 
 ## [0.2.1] - 2026-10-05
 

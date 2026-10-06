@@ -31,6 +31,22 @@ namespace SailwindCoop.Runtime
         private Vector2 _scroll;
         private Sync.ModSyncView _modView;
         private bool _modSharing;
+        private bool _restartPending;
+        private string _restartMods = "";
+
+        // Steam section. Everything the layout depends on is snapshotted once per Layout pass.
+        private const int MaxFriendRows = 8;
+        private bool _steamModeWanted;
+        private bool _steamMode;
+        private bool _steamInitTried;
+        private bool _steamReady;
+        private bool _steamFriendsOnly;
+        private string _steamError = "";
+        private string _steamSelf = "";
+        private ulong _steamMyId;
+        private string _steamJoinId;
+        private SteamFriendInfo[] _friends = new SteamFriendInfo[0];
+        private float _friendsRefreshAt;
 
         private GUIStyle _window;
         private GUIStyle _title;
@@ -42,6 +58,9 @@ namespace SailwindCoop.Runtime
         private GUIStyle _textField;
         private GUIStyle _pill;
         private GUIStyle _crewCell;
+        private GUIStyle _alertBox;
+        private GUIStyle _alertTitle;
+        private GUIStyle _alertText;
         private GUIStyle _backdrop;
         private Texture2D _backdropTex;
         private Texture2D _shadowTex;
@@ -55,6 +74,8 @@ namespace SailwindCoop.Runtime
             _joinIp = Plugin.Cfg.JoinIp.Value;
             _port = Plugin.Cfg.Port.Value.ToString();
             _playerName = Plugin.Cfg.PlayerName.Value;
+            _steamModeWanted = Plugin.Cfg.UseSteam.Value;
+            _steamJoinId = Plugin.Cfg.SteamJoinId.Value ?? "";
         }
 
         public bool Visible
@@ -72,11 +93,53 @@ namespace SailwindCoop.Runtime
         {
             EnsureStyles();
 
+            // Snapshot once per layout pass: the banner adds controls to the window.
+            if (Event.current.type == EventType.Layout)
+            {
+                bool pending = _coop.Mods.RestartRequired;
+                if (pending && !_restartPending) _scroll = Vector2.zero; // the banner sits at the top
+                _restartPending = pending;
+                _restartMods = _coop.Mods.InstalledNames ?? "";
+            }
+
             if (_visible)
             {
                 ApplyCursorState();
                 DrawWindow();
             }
+            else if (_restartPending)
+                DrawRestartReminder();
+        }
+
+        /// <summary>Mods were downloaded: the join stopped on purpose and nothing else on screen says
+        /// why. Large, coloured, and with the one action that moves the player forward.</summary>
+        private void DrawRestartBanner()
+        {
+            GUILayout.BeginVertical(_alertBox);
+            GUILayout.Label("RESTART THE GAME TO JOIN", _alertTitle);
+            GUILayout.Label("The host's mods were downloaded: " + _restartMods + ".\n" +
+                            "You are NOT connected yet - new mods load only when the game starts.\n\n" +
+                            "1. Quit the game.\n2. Start it again.\n3. Open this menu (" + Plugin.Cfg.MenuKey.Value +
+                            ") and press Join again.", _alertText);
+            GUILayout.Space(4f);
+            if (GUILayout.Button("Quit game now", _button, GUILayout.Height(ButtonHeight)))
+            {
+                Plugin.Logger.LogInfo("[Mods] role=Client quitting from the restart notice");
+                Application.Quit();
+            }
+            GUILayout.EndVertical();
+        }
+
+        /// <summary>The same notice while the menu is closed, so it cannot be dismissed by accident.</summary>
+        private void DrawRestartReminder()
+        {
+            float w = Mathf.Min(560f, Screen.width - 20f);
+            var rect = new Rect((Screen.width - w) * 0.5f, 18f, w, 58f);
+            GUI.Box(rect, GUIContent.none, _alertBox);
+            GUI.Label(new Rect(rect.x + 10f, rect.y + 6f, rect.width - 20f, 24f), "RESTART THE GAME TO JOIN", _alertTitle);
+            GUI.Label(new Rect(rect.x + 10f, rect.y + 30f, rect.width - 20f, 22f),
+                      "Mods from the host are installed. Quit and start the game again (" + Plugin.Cfg.MenuKey.Value +
+                      " for details).", _alertText);
         }
 
         private void DrawWindow()
@@ -102,6 +165,11 @@ namespace SailwindCoop.Runtime
             GUILayout.EndHorizontal();
 
             GUILayout.Space(8f);
+            if (_restartPending)
+            {
+                DrawRestartBanner();
+                GUILayout.Space(8f);
+            }
             DrawIdentity();
             GUILayout.Space(8f);
             DrawConnection();
@@ -147,11 +215,13 @@ namespace SailwindCoop.Runtime
             bool canReconnect = _net.HasConnectedSuccessfully &&
                                 (_net.State == LinkState.Idle || _net.State == LinkState.Failed || _net.State == LinkState.Rejected);
             GUILayout.BeginHorizontal();
-            GUI.enabled = canReconnect;
+            GUI.enabled = canReconnect && !_restartPending;
             if (GUILayout.Button("Reconnect", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
             {
                 if (GameState.playing)
                     _status = "Return to the main menu before reconnecting";
+                else if (_steamMode)
+                    JoinSteamFromField();
                 else if (TryApplyConnectionFields(out int reconnectPort))
                 {
                     _coop.ReconnectSession(_joinIp.Trim(), reconnectPort);
@@ -295,22 +365,144 @@ namespace SailwindCoop.Runtime
 
         private void DrawConnection()
         {
-            GUILayout.Label("Connection", _label);
+            // The mode, Steam's state and the friends list decide which controls exist below, so they
+            // are read once per Layout pass and stay fixed for the Repaint that follows.
+            if (Event.current.type == EventType.Layout)
+                RefreshSteamView();
+
+            bool idle = _net.Role == Role.None && _net.State != LinkState.Connecting && _net.State != LinkState.Handshaking;
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Host IP", _muted, GUILayout.Width(72f));
-            _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(26f));
-            GUILayout.Label("Port", _muted, GUILayout.Width(38f));
-            _port = GUILayout.TextField(_port, _textField, GUILayout.Width(66f), GUILayout.Height(26f));
+            GUILayout.Label("Connection", _label);
+            GUILayout.FlexibleSpace();
+            GUI.enabled = idle;
+            if (GUILayout.Button(_steamMode ? "LAN" : "[ LAN ]", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
+                SetSteamMode(false);
+            if (GUILayout.Button(_steamMode ? "[ Steam ]" : "Steam", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
+                SetSteamMode(true);
+            GUI.enabled = true;
             GUILayout.EndHorizontal();
 
+            if (!_steamMode)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Host IP", _muted, GUILayout.Width(72f));
+                _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(26f));
+                GUILayout.Label("Port", _muted, GUILayout.Width(38f));
+                _port = GUILayout.TextField(_port, _textField, GUILayout.Width(66f), GUILayout.Height(26f));
+                GUILayout.EndHorizontal();
+            }
+            else if (!_steamReady)
+            {
+                GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
+                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+                    _steamInitTried = false;
+            }
+            else
+            {
+                DrawSteam(idle);
+            }
+
             if (_net.Role == Role.Client || _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking)
-                GUILayout.Label("Target: " + _joinIp + ":" + _port, _muted);
+                GUILayout.Label(_net.OverSteam ? "Target: " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")"
+                                               : "Target: " + _joinIp + ":" + _port, _muted);
             else if (_net.Role == Role.Host)
-                GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value + "; clients: " + _net.PeerCount, _muted);
+                GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value +
+                                (_net.OverSteam ? " and over Steam (" + _net.TransportStatus + ")" : "") +
+                                "; clients: " + _net.PeerCount, _muted);
             else
                 GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
                     : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
                     : "Load a world, then host a session or join a host.", _muted);
+        }
+
+        private void RefreshSteamView()
+        {
+            _steamMode = _steamModeWanted;
+            if (!_steamMode) return;
+            // Steam is started only here: on the first frame the menu is shown in Steam mode.
+            if (!_steamInitTried)
+            {
+                _steamInitTried = true;
+                SteamLink.EnsureReady();
+                _friendsRefreshAt = 0f;
+            }
+            _steamReady = SteamLink.Ready;
+            _steamError = SteamLink.Error;
+            _steamFriendsOnly = Plugin.Cfg.SteamFriendsOnly.Value;
+            if (!_steamReady || Time.realtimeSinceStartup < _friendsRefreshAt) return;
+            _friendsRefreshAt = Time.realtimeSinceStartup + 2f;
+            _steamMyId = SteamLink.MyId;
+            _steamSelf = SteamLink.MyName;
+            _friends = SteamLink.FriendsInGame();
+        }
+
+        private void SetSteamMode(bool steam)
+        {
+            _steamModeWanted = steam;
+            Plugin.Cfg.UseSteam.Value = steam;
+            if (steam) _steamInitTried = false;
+        }
+
+        private void DrawSteam(bool idle)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("You: " + _steamSelf + " (" + _steamMyId + ")", _muted);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Copy ID", _smallButton, GUILayout.Width(76f), GUILayout.Height(22f)))
+            {
+                GUIUtility.systemCopyBuffer = _steamMyId.ToString();
+                _status = "Your Steam ID is in the clipboard";
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Host ID", _muted, GUILayout.Width(72f));
+            _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(26f));
+            GUI.enabled = idle;
+            if (GUILayout.Button(_steamFriendsOnly ? "Friends only" : "Anyone", _smallButton,
+                                 GUILayout.Width(ButtonWidth), GUILayout.Height(26f)))
+            {
+                Plugin.Cfg.SteamFriendsOnly.Value = !_steamFriendsOnly;
+                _status = !_steamFriendsOnly ? "Hosting accepts Steam friends only"
+                                             : "Hosting accepts anyone who knows your Steam ID";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label(_friends.Length == 0
+                ? "No Steam friends are in Sailwind right now. A friend not listed here can still be joined by Host ID."
+                : "Steam friends in Sailwind:", _muted);
+            int rows = Mathf.Min(_friends.Length, MaxFriendRows);
+            for (int i = 0; i < rows; i++)
+            {
+                SteamFriendInfo friend = _friends[i];
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(friend.Name, _crewCell, GUILayout.Width(170f));
+                GUILayout.Label(!friend.Hosting ? "in game" : friend.SameVersion ? "hosting" : "hosting, other version",
+                                _crewCell, GUILayout.Width(130f));
+                GUI.enabled = idle && PatchHealth.Blocker == null && !_restartPending;
+                if (GUILayout.Button("Join", _smallButton, GUILayout.Width(58f), GUILayout.Height(22f)))
+                {
+                    _steamJoinId = friend.Id.ToString();
+                    JoinSteamFromField();
+                }
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+            }
+        }
+
+        private void JoinSteamFromField()
+        {
+            string text = (_steamJoinId ?? "").Trim();
+            if (!ulong.TryParse(text, out ulong hostId) || hostId == 0UL)
+            {
+                _status = "Enter the Steam ID of the host (17 digits) or pick a friend";
+                return;
+            }
+            if (!TryApplyConnectionFields(out _)) return;
+            Plugin.Cfg.SteamJoinId.Value = text;
+            _coop.StartSteamClientSession(hostId);
+            _status = "Connecting over Steam to " + (string.IsNullOrEmpty(_net.HostLabel) ? text : _net.HostLabel);
         }
 
         private void DrawActions()
@@ -320,6 +512,7 @@ namespace SailwindCoop.Runtime
             GUI.enabled = !busy && PatchHealth.Blocker == null;
             if (GUILayout.Button("Host", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
                 StartHost();
+            GUI.enabled = GUI.enabled && !_restartPending;
             if (GUILayout.Button("Join", _button, GUILayout.Width(ButtonWidth), GUILayout.Height(ButtonHeight)))
                 Join();
             GUI.enabled = _net.State != LinkState.Idle || _net.Role != Role.None;
@@ -412,12 +605,18 @@ namespace SailwindCoop.Runtime
         private void StartHost()
         {
             if (!TryApplyConnectionFields(out int port)) return;
-            _coop.StartHostSession(port);
-            _status = "Host started";
+            bool steam = _steamMode && _steamReady;
+            _coop.StartHostSession(port, steam);
+            _status = steam ? "Host started (Steam + LAN)" : "Host started";
         }
 
         private void Join()
         {
+            if (_steamMode)
+            {
+                JoinSteamFromField();
+                return;
+            }
             if (!TryApplyConnectionFields(out int port)) return;
             _coop.StartClientSession(_joinIp.Trim(), port);
             _status = "Connecting to " + _joinIp.Trim() + ":" + port;
@@ -434,6 +633,9 @@ namespace SailwindCoop.Runtime
             }
 
             string name = string.IsNullOrWhiteSpace(_playerName) ? "Player" : _playerName.Trim();
+            // An untouched default name is replaced by the Steam persona name when Steam is in use.
+            if (_steamMode && _steamReady && name == "Player" && !string.IsNullOrWhiteSpace(_steamSelf))
+                name = _steamSelf.Trim();
             Plugin.Cfg.JoinIp.Value = ip;
             Plugin.Cfg.Port.Value = port;
             Plugin.Cfg.PlayerName.Value = name;
@@ -584,6 +786,24 @@ namespace SailwindCoop.Runtime
                 active = { background = redHover, textColor = Color.white }
             };
             _smallButton = new GUIStyle(_button) { fontSize = 12 };
+            _alertBox = new GUIStyle(GUI.skin.box)
+            {
+                normal = { background = MakeBg(new Color(0.46f, 0.30f, 0.04f, 0.97f)) },
+                border = new RectOffset(0, 0, 0, 0),
+                padding = new RectOffset(10, 10, 8, 10)
+            };
+            _alertTitle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 17,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(1f, 0.90f, 0.35f) }
+            };
+            _alertText = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                wordWrap = true,
+                normal = { textColor = Color.white }
+            };
             _textField = new GUIStyle(GUI.skin.textField)
             {
                 fontSize = 13,

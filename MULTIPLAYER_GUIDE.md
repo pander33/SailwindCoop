@@ -220,6 +220,25 @@ Before a long session, make a normal backup of important Sailwind saves.
 5. Use the status overlay if something looks wrong.
 6. Disconnect through F8 when finished.
 
+## Playing Over Steam
+
+The F8 menu has a **LAN / Steam** switch in the **Connection** section. LAN works as before: the
+guest types the host's IP address. Steam mode needs no IP address, port forwarding or VPN.
+
+- Steam must be running on every PC, and each player needs their own Steam account that owns
+  Sailwind. Two copies of the game on one PC cannot connect to each other over Steam.
+- **Host:** load the world, switch to **Steam**, press **Host**. LAN players can still join the same
+  session by IP.
+- **Guest:** stay in the main menu, switch to **Steam**. Friends who are in Sailwind are listed;
+  press **Join** next to the one marked `hosting`. A host who is not listed can be joined by typing
+  their Steam ID (17 digits) into **Host ID**; the host copies it with **Copy ID**.
+- **Friends only / Anyone** (host): by default only your Steam friends can connect. **Anyone** lets
+  in whoever knows your Steam ID.
+- `hosting, other version` means that friend runs a different build of the mod; update both sides.
+- The first connection can take up to half a minute while Steam finds a route.
+- If the menu says Steam is unavailable, start Steam and press **Retry Steam**. LAN play does not
+  need Steam at all.
+
 ## Other Mods
 
 Right after connecting, and before the world is sent, the host tells the joining player which other

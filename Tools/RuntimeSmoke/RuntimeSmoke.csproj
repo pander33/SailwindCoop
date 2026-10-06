@@ -30,6 +30,9 @@
     <Compile Include="..\..\Sync\SnapshotBuffer.cs" Link="SnapshotBuffer.cs" />
     <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
+    <Compile Include="..\..\Net\DatagramTunnel.cs" Link="Net\DatagramTunnel.cs" />
+    <Reference Include="LiteNetLib"><HintPath>..\..\libs\LiteNetLib.dll</HintPath></Reference>
+    <Reference Include="netstandard"><HintPath>$(GameDir)\Sailwind_Data\Managed\netstandard.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx"><HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath></Reference>
     <Reference Include="0Harmony"><HintPath>$(GameDir)\BepInEx\core\0Harmony.dll</HintPath></Reference>
     <Reference Include="Mono.Cecil"><HintPath>$(GameDir)\BepInEx\core\Mono.Cecil.dll</HintPath></Reference>

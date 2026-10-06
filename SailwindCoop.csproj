@@ -60,6 +60,13 @@
       <Private>true</Private>
     </Reference>
 
+    <!-- Steam transport: the managed wrapper, copied next to the plugin DLL. Its native half
+         (steam_api64.dll) is copied below; the game ships no Steam library of its own. -->
+    <Reference Include="Facepunch.Steamworks.Win64">
+      <HintPath>$(MSBuildProjectDirectory)\libs\Facepunch.Steamworks.Win64.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
     <!-- Game + Unity (do not copy: provided by the game). -->
     <Reference Include="Assembly-CSharp">
       <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
@@ -113,6 +120,10 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="libs\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
   <!--
     The netstandard2.0 LiteNetLib drags BCL facade shims into the output. Unity Mono
     provides those at runtime; shipping them into BepInEx/plugins can cause assembly
@@ -123,6 +134,8 @@
       <_Keep Include="$(OutputPath)SailwindCoop.dll" />
       <_Keep Include="$(OutputPath)SailwindCoop.pdb" />
       <_Keep Include="$(OutputPath)LiteNetLib.dll" />
+      <_Keep Include="$(OutputPath)Facepunch.Steamworks.Win64.dll" />
+      <_Keep Include="$(OutputPath)steam_api64.dll" />
       <_AllDlls Include="$(OutputPath)*.dll" />
       <_Strip Include="@(_AllDlls)" Exclude="@(_Keep)" />
     </ItemGroup>
