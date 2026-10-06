@@ -330,6 +330,16 @@ namespace SailwindCoop.Net
         public float MoveSpeed;   // м/с в плоскости, относительно опоры
         public float TurnRate;    // град/с рыскания, относительно опоры
 
+        // --- руки (Protocol 84) ---------------------------------------------------------
+        // Точки хвата идут в кадре передаваемой позы игрока (Pos/Rot): он общий для обеих машин
+        // и не зависит ни от лодки, ни от плавающего начала координат. Вектор руки пишется в
+        // пакет только при выставленном бите.
+        public const byte HandRight = 1;
+        public const byte HandLeft = 2;
+        public byte Hands;
+        public Vector3 HandR;
+        public Vector3 HandL;
+
         public MsgType Type => MsgType.PlayerState;
 
         public void Serialize(NetDataWriter w)
@@ -346,6 +356,9 @@ namespace SailwindCoop.Net
             w.Put(HasLocalAnim);
             w.Put(MoveSpeed);
             w.Put(TurnRate);
+            w.Put(Hands);
+            if ((Hands & HandRight) != 0) w.PutVector3(HandR);
+            if ((Hands & HandLeft) != 0) w.PutVector3(HandL);
         }
 
         public void Deserialize(NetDataReader r)
@@ -362,6 +375,9 @@ namespace SailwindCoop.Net
             HasLocalAnim = r.GetBool();
             MoveSpeed = r.GetFloat();
             TurnRate = r.GetFloat();
+            Hands = r.GetByte();
+            HandR = (Hands & HandRight) != 0 ? r.GetVector3() : Vector3.zero;
+            HandL = (Hands & HandLeft) != 0 ? r.GetVector3() : Vector3.zero;
         }
     }
 

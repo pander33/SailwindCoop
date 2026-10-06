@@ -47,10 +47,12 @@ All notable user-facing changes are documented in this file.
   and due date of the first mission on a guest's screen. The guest now gets the mission slot of
   each good from the host.
 - Goods created with the debug item spawn are ordinary goods, not mission cargo.
+- **Other players' arms follow what they do.** An avatar now reaches for the item it carries and
+  puts its hands on the winch, wheel or rope the player is holding. Not yet verified in game.
 
 ### Network
 
-- **Everyone must update.** The wire protocol moved from `80` to `83`; `0.2.x` and `0.3.0` refuse
+- **Everyone must update.** The wire protocol moved from `80` to `84`; `0.2.x` and `0.3.0` refuse
   to connect to each other.
 
 Not yet verified in game: the comparison step, the menu section and the download; the Steam

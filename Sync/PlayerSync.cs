@@ -53,6 +53,9 @@ namespace SailwindCoop.Sync
             public float VisualOffsetY;
             public NpcLocomotionDriver NpcLoco;   // procedural gait for NPC-skin avatars (no Animator)
             public bool NpcFitPending;            // one-time feet-on-deck fit awaiting valid bounds
+            public AvatarRigDriver Rig;           // owns the arm IK; null on the primitive fallback
+            public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft
+            public Vector3 HandR, HandL;          // grip points in the avatar root's frame
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -69,7 +72,7 @@ namespace SailwindCoop.Sync
                 _ready = Spine != null || Chest != null || Neck != null;
             }
 
-            private void LateUpdate()
+            public void Step()
             {
                 if (!_ready) return;
 
@@ -137,7 +140,7 @@ namespace SailwindCoop.Sync
                 Ready = _legL != null && _legR != null; // минимум для походки — ноги
             }
 
-            private void LateUpdate()
+            public void Step()
             {
                 if (!Ready) return;
 
@@ -231,10 +234,46 @@ namespace SailwindCoop.Sync
             public float OffsetY;
             public NpcLocomotionDriver NpcLoco;
 
-            private void LateUpdate()
+            public void Step()
             {
                 transform.localPosition = new Vector3(0f, OffsetY + (NpcLoco != null ? NpcLoco.CrouchOffsetY : 0f), 0f);
                 transform.localRotation = Quaternion.identity;
+            }
+        }
+
+        /// <summary>
+        /// Единственный LateUpdate аватара. Порядок шагов важен и поэтому задан явно, а не оставлен
+        /// порядку компонентов: положение модели → кости походки/взгляда → IK рук поверх них.
+        /// </summary>
+        private sealed class AvatarRigDriver : MonoBehaviour
+        {
+            public AvatarVisualOffsetDriver Offset;
+            public NpcLocomotionDriver Loco;
+            public AvatarPoseDriver Pose;
+            public AvatarArmIk Ik;               // null, пока у модели не найдены кости рук
+
+            // Humanoid-кости Animator отдаёт только после своей инициализации, а аватар создаётся
+            // в том же кадре, что и модель. Поэтому поиск повторяется несколько кадров.
+            public Transform IkRoot;
+            public Animator IkAnimator;
+            public int IkRetryFrames;
+
+            private void LateUpdate()
+            {
+                if (Ik == null && IkRetryFrames > 0)
+                {
+                    IkRetryFrames--;
+                    Ik = AvatarArmIk.TryCreate(IkRoot, transform, IkAnimator);
+                    if (Ik != null)
+                    {
+                        Ik.RestoreBind = IkAnimator == null;
+                        Plugin.Logger.LogInfo("[PlayerSync] Arm bones found after animator init: arms=" + ArmsText(Ik));
+                    }
+                }
+                if (Offset != null) Offset.Step();
+                if (Loco != null) Loco.Step();
+                if (Pose != null) Pose.Step();
+                if (Ik != null) Ik.Solve();
             }
         }
 
@@ -396,7 +435,7 @@ namespace SailwindCoop.Sync
                            ", Turn " + best.AnimTargetTurn.ToString("0.00") +
                            ", Crouch " + best.AnimTargetCrouch.ToString("0.0") +
                            ", Look " + best.NpcLoco.TargetPitch.ToString("0.0") + "/" +
-                           best.NpcLoco.TargetYaw.ToString("0.0");
+                           best.NpcLoco.TargetYaw.ToString("0.0") + HandsText(best);
                 if (best.Animator == null) return "—";
                 return "Speed " + best.AnimSpeed.ToString("0.00") +
                        " -> " + best.AnimTargetSpeed.ToString("0.0") +
@@ -404,8 +443,16 @@ namespace SailwindCoop.Sync
                        ", Crouch " + best.AnimCrouch.ToString("0.00") +
                        " -> " + best.AnimTargetCrouch.ToString("0.0") +
                        ", param " + (best.HasCrouchFloatParam ? "float" : best.HasCrouchBoolParam ? "bool" : best.HasIsCrouchingParam ? "IsCrouching" : "NO") +
-                       ", moving " + (best.AnimMoving ? "YES" : "—");
+                       ", moving " + (best.AnimMoving ? "YES" : "—") + HandsText(best);
             }
+        }
+
+        private static string HandsText(RemoteAvatar a)
+        {
+            AvatarArmIk ik = a.Rig != null ? a.Rig.Ik : null;
+            return ", Hands " + (ik == null
+                ? "no IK"
+                : ik.RightWeight.ToString("0.0") + "/" + ik.LeftWeight.ToString("0.0"));
         }
 
         /// <summary>Distance from the local player to the nearest remote avatar, or -1 if none.</summary>
@@ -555,6 +602,14 @@ namespace SailwindCoop.Sync
             float moveSpeed = LocalDeckSpeed(out hasLocalAnim);
             float turnRate = LocalTurnRate(tick, hasLocalAnim);
 
+            _handProbe.Sample(pl);
+            byte hands = 0;
+            Vector3 handR = Vector3.zero, handL = Vector3.zero;
+            if (_handProbe.HasRight && ToHandLocal(_handProbe.RightWorld, pl, out handR))
+                hands |= PlayerStateMsg.HandRight;
+            if (_handProbe.HasLeft && ToHandLocal(_handProbe.LeftWorld, pl, out handL))
+                hands |= PlayerStateMsg.HandLeft;
+
             _net.Broadcast(new PlayerStateMsg
             {
                 NetId = _net.MyNetId,
@@ -569,6 +624,9 @@ namespace SailwindCoop.Sync
                 HasLocalAnim = hasLocalAnim,
                 MoveSpeed = moveSpeed,
                 TurnRate = turnRate,
+                Hands = hands,
+                HandR = handR,
+                HandL = handL,
             }, LiteNetLib.DeliveryMethod.Unreliable);
         }
 
@@ -627,6 +685,18 @@ namespace SailwindCoop.Sync
         private float _lastYaw;
         private long _lastYawTick;
         private bool _haveYaw;
+
+        private readonly LocalHandProbe _handProbe = new LocalHandProbe();
+
+        /// <summary>Дальше этого от игрока точка хвата не шлётся: рука всё равно не дотянется.</summary>
+        private const float MaxHandReach = 4f;
+
+        /// <summary>Точка хвата в кадре передаваемой позы игрока (см. PlayerStateMsg).</summary>
+        private static bool ToHandLocal(Vector3 world, Transform pl, out Vector3 local)
+        {
+            local = Quaternion.Inverse(pl.rotation) * (world - pl.position);
+            return local.sqrMagnitude <= MaxHandReach * MaxHandReach;
+        }
 
         // -----------------------------------------------------------------
         // Inbound: a player pose arrived
@@ -687,6 +757,9 @@ namespace SailwindCoop.Sync
 
             a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
             UpdateAnimatorTargets(a, msg);
+            a.Hands = msg.Hands;
+            a.HandR = msg.HandR;
+            a.HandL = msg.HandL;
         }
 
         // -----------------------------------------------------------------
@@ -779,6 +852,7 @@ namespace SailwindCoop.Sync
             _boatSurfaceValidUntil = 0f;
             _localCrouching = null;
             _haveLast = false;
+            _handProbe.Clear();
             foreach (var b in _bundleCache.Values)
                 if (b != null) b.Unload(false);
             _bundleCache.Clear();
@@ -1049,6 +1123,13 @@ namespace SailwindCoop.Sync
                 Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
                 a.NpcLoco.TargetPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg, -35f, 45f);
                 a.NpcLoco.TargetYaw = Mathf.Clamp(Mathf.Atan2(localLook.x, localLook.z) * Mathf.Rad2Deg, -60f, 60f);
+            }
+
+            AvatarArmIk ik = a.Rig != null ? a.Rig.Ik : null;
+            if (ik != null)
+            {
+                ik.SetTarget(true, (a.Hands & PlayerStateMsg.HandRight) != 0, a.HandR);
+                ik.SetTarget(false, (a.Hands & PlayerStateMsg.HandLeft) != 0, a.HandL);
             }
 
             if (a.Head != null && !a.HeadDrivenByAnimator)
@@ -1353,13 +1434,24 @@ namespace SailwindCoop.Sync
             pose.Neck = neck;
             pose.CaptureBase();
 
+            AvatarArmIk ik = AvatarArmIk.TryCreate(go.transform, model.transform, animator);
+            if (ik != null) ik.RestoreBind = animator == null;
+            var rig = model.AddComponent<AvatarRigDriver>();
+            rig.Offset = offsetDriver;
+            rig.Pose = pose;
+            rig.Ik = ik;
+            rig.IkRoot = go.transform;
+            rig.IkAnimator = animator;
+            rig.IkRetryFrames = ik == null && animator != null ? 30 : 0;
+
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Created avatar.bundle avatar NetId=" + netId +
                                   ", head=" + (head != null ? head.name : "none") +
                                   ", offsetY=" + verticalOffset.ToString("F2"));
             Plugin.Logger.LogInfo("[PlayerSync] Pose bones: spine=" + (spine != null ? spine.name : "none") +
                                   ", chest=" + (chest != null ? chest.name : "none") +
-                                  ", neck=" + (neck != null ? neck.name : "none"));
+                                  ", neck=" + (neck != null ? neck.name : "none") +
+                                  ", arms=" + ArmsText(ik));
             return new RemoteAvatar
             {
                 Go = go,
@@ -1374,6 +1466,7 @@ namespace SailwindCoop.Sync
                 HasCrouchBoolParam = hasCrouchBool,
                 HasIsCrouchingParam = hasIsCrouching,
                 VisualOffsetY = verticalOffset,
+                Rig = rig,
             };
         }
 
@@ -1407,13 +1500,21 @@ namespace SailwindCoop.Sync
             var loco = model.AddComponent<NpcLocomotionDriver>();
             loco.Setup();
             offsetDriver.NpcLoco = loco;
+            AvatarArmIk ik = AvatarArmIk.TryCreate(go.transform, model.transform, null);
+            // Плечо и локоть каждый кадр сбрасывает походка; если она не поднялась — сам IK.
+            if (ik != null) ik.RestoreBind = !loco.Ready;
+            var rig = model.AddComponent<AvatarRigDriver>();
+            rig.Offset = offsetDriver;
+            rig.Loco = loco;
+            rig.Ik = ik;
 
             Object.DontDestroyOnLoad(go);
             Plugin.Logger.LogInfo("[PlayerSync] Created NPC skin avatar NetId=" + netId +
                                   ", head=" + (head != null ? head.name : "none") +
                                   ", offsetY=" + verticalOffset.ToString("F2") +
                                   ", scale=" + model.transform.localScale.x.ToString("F2") +
-                                  ", loco=" + loco.Ready);
+                                  ", loco=" + loco.Ready +
+                                  ", arms=" + ArmsText(ik));
             return new RemoteAvatar
             {
                 Go = go,
@@ -1428,7 +1529,14 @@ namespace SailwindCoop.Sync
                 VisualOffsetY = verticalOffset,
                 NpcLoco = loco,
                 NpcFitPending = true,
+                Rig = rig,
             };
+        }
+
+        private static string ArmsText(AvatarArmIk ik)
+        {
+            if (ik == null) return "none";
+            return (ik.RightUsable ? "R" : "-") + (ik.LeftUsable ? "L" : "-");
         }
 
         /// <summary>
