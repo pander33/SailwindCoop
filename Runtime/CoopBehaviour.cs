@@ -373,6 +373,16 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Menu toggle failed", e, ref _menuFailures);
             }
 
+            try
+            {
+                EmoteId picked = _emoteWheel.Update(Plugin.Cfg.EmoteKey.Value, EmoteWheelAllowed());
+                if (picked != EmoteId.None) Players.StartEmote(picked);
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] Emote wheel failed", e, ref _emoteFailures);
+            }
+
             try { using (InteractionContext.Begin(InteractionSource.RemoteApply)) Net.PollEvents(); }
             catch (System.Exception e)
             {
@@ -831,6 +841,20 @@ namespace SailwindCoop.Runtime
         }
 
         private CoopLog.Repeat _guiFailures;
+        private CoopLog.Repeat _emoteFailures;
+        private readonly EmoteWheelUI _emoteWheel = new EmoteWheelUI();
+
+        /// <summary>
+        /// Колесо жестов доступно только в сессии, в загруженном мире и вне других меню. Уже
+        /// открытое колесо само выставляет inCursorMenu, поэтому для него этот флаг не считается.
+        /// </summary>
+        private bool EmoteWheelAllowed()
+        {
+            if (Net == null || Net.State != LinkState.Connected || Players == null) return false;
+            if (!GameState.playing || GameState.currentlyLoading || GameState.inBed != null) return false;
+            if (_menuUI != null && _menuUI.Visible) return false;
+            return _emoteWheel.IsOpen || !GameState.inCursorMenu;
+        }
 
         private void OnGUI()
         {
@@ -840,6 +864,7 @@ namespace SailwindCoop.Runtime
             {
                 if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
+                _emoteWheel.Draw();
                 if (_notifications != null) _notifications.Draw();
                 if (_overlayVisible) _overlay.Draw();
                 if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();

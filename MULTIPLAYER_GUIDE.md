@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.3.0) uses **protocol 84**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.3.0) uses **protocol 85**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Session Model
@@ -203,6 +203,15 @@ Best current practice: use one main boat for normal co-op sailing, and test ding
 - Skin changes are sent during the session.
 - The included `avatar.bundle` is the default fallback.
 - NPC-style skins can appear if the game has loaded suitable NPC models on that machine.
+
+### Gestures
+
+- Hold `G` during a session to open the gesture wheel, move the mouse to a gesture and release.
+  Release in the middle, or press `Esc`, to cancel.
+- Gestures: Wave, Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray. "Land ho!" and
+  "Point" aim where you are looking; "Land ho!" also shouts, and others hear it from your position.
+- Walking ends a gesture. You do not see your own gesture: the game is first person.
+- The key is `UI.EmoteKey` in the config file. Change it if `G` is bound to something else.
 
 If a selected NPC skin is not available on the other machine yet, the remote player may temporarily appear with the default avatar until the skin can be built.
 

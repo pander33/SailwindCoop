@@ -134,7 +134,8 @@ namespace SailwindCoop.Sync
             public Quaternion UpperBind, LowerBind;
             public float Side;            // +1 правая, -1 левая
             public bool Active;
-            public Vector3 Target;        // в кадре сетевого корня аватара
+            public Vector3 Target;        // в кадре сетевого корня аватара, либо от плеча (Relative)
+            public bool Relative;
             public Vector3 Smoothed;
             public bool HasSmoothed;
             public float Weight;
@@ -247,11 +248,17 @@ namespace SailwindCoop.Sync
             return null;
         }
 
-        public void SetTarget(bool right, bool active, Vector3 rootLocal)
+        /// <param name="target">Точка в кадре сетевого корня; при <paramref name="relative"/> —
+        /// вектор от плеча в долях длины руки (x — наружу от тела, y — вверх, z — вперёд).</param>
+        public void SetTarget(bool right, bool active, Vector3 target, bool relative = false)
         {
             Arm arm = right ? _right : _left;
             arm.Active = active;
-            if (active) arm.Target = rootLocal;
+            if (!active) return;
+            // Точка хвата и вектор жеста лежат в разных пространствах — сглаживать между ними нечего.
+            if (arm.Relative != relative) arm.HasSmoothed = false;
+            arm.Relative = relative;
+            arm.Target = target;
         }
 
         public void Solve()
@@ -279,7 +286,6 @@ namespace SailwindCoop.Sync
                 else arm.Smoothed = Vector3.Lerp(arm.Smoothed, arm.Target, 1f - Mathf.Exp(-14f * dt));
             }
 
-            Vector3 target = _root.TransformPoint(arm.Smoothed);
             Vector3 a = arm.Upper.position;
             Vector3 b = arm.Lower.position;
             Vector3 c = arm.Hand.position;
@@ -287,8 +293,13 @@ namespace SailwindCoop.Sync
             float lowerLen = Vector3.Distance(b, c);
             if (upperLen < 1e-4f || lowerLen < 1e-4f) return;
 
-            Vector3 toTarget = target - a;
             float reach = upperLen + lowerLen;
+            Vector3 target = arm.Relative
+                ? a + _root.right * (arm.Side * arm.Smoothed.x * reach)
+                    + _root.up * (arm.Smoothed.y * reach)
+                    + _root.forward * (arm.Smoothed.z * reach)
+                : _root.TransformPoint(arm.Smoothed);
+            Vector3 toTarget = target - a;
             // Дальняя цель — рука просто вытянута в её сторону; слишком близкая — не складываем в ноль.
             float dist = Mathf.Clamp(toTarget.magnitude, reach * 0.15f, reach * 0.999f);
             Vector3 dir = toTarget.sqrMagnitude > 1e-8f ? toTarget.normalized : _model.forward;

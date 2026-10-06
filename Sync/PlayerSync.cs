@@ -56,6 +56,9 @@ namespace SailwindCoop.Sync
             public AvatarRigDriver Rig;           // owns the arm IK; null on the primitive fallback
             public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft
             public Vector3 HandR, HandL;          // grip points in the avatar root's frame
+            public EmoteId Emote;
+            public long EmoteTick;                // host-clock start of the current emote
+            public long EmoteVoicedTick;          // start tick of the emote whose shout was played
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -610,6 +613,14 @@ namespace SailwindCoop.Sync
             if (_handProbe.HasLeft && ToHandLocal(_handProbe.LeftWorld, pl, out handL))
                 hands |= PlayerStateMsg.HandLeft;
 
+            if (_emote != EmoteId.None)
+            {
+                float emoteSecs = (tick - _emoteTick) / 1000f;
+                // Первые доли секунды шаг не считаем: иначе жест сбивала бы инерция остановки.
+                if (emoteSecs >= EmoteCatalog.Duration(_emote) || (emoteSecs > 0.3f && moveSpeed > EmoteCancelSpeed))
+                    _emote = EmoteId.None;
+            }
+
             _net.Broadcast(new PlayerStateMsg
             {
                 NetId = _net.MyNetId,
@@ -627,6 +638,8 @@ namespace SailwindCoop.Sync
                 Hands = hands,
                 HandR = handR,
                 HandL = handL,
+                Emote = (byte)_emote,
+                EmoteTick = _emote != EmoteId.None ? _emoteTick : 0L,
             }, LiteNetLib.DeliveryMethod.Unreliable);
         }
 
@@ -687,6 +700,25 @@ namespace SailwindCoop.Sync
         private bool _haveYaw;
 
         private readonly LocalHandProbe _handProbe = new LocalHandProbe();
+
+        private EmoteId _emote;
+        private long _emoteTick;
+
+        /// <summary>Шаг быстрее этого прерывает жест.</summary>
+        private const float EmoteCancelSpeed = 0.6f;
+
+        /// <summary>Выкрик звучит, только если жест начался не раньше этого (мс): вошедший посреди
+        /// жеста и запоздавший пакет его не повторяют.</summary>
+        private const long EmoteVoiceWindowMs = 1500;
+
+        /// <summary>Запустить жест локального игрока; новый жест заменяет идущий.</summary>
+        public void StartEmote(EmoteId id)
+        {
+            if (EmoteCatalog.Duration(id) <= 0f) return;
+            _emote = id;
+            _emoteTick = _net.Clock.ServerTick;
+            if (id == EmoteId.LandHo) EmoteAudio.PlayLandHoLocal();
+        }
 
         /// <summary>Дальше этого от игрока точка хвата не шлётся: рука всё равно не дотянется.</summary>
         private const float MaxHandReach = 4f;
@@ -760,6 +792,16 @@ namespace SailwindCoop.Sync
             a.Hands = msg.Hands;
             a.HandR = msg.HandR;
             a.HandL = msg.HandL;
+
+            var emote = (EmoteId)msg.Emote;
+            if (emote == EmoteId.LandHo && msg.EmoteTick != a.EmoteVoicedTick && a.Go != null &&
+                _net.Clock.ServerTick - msg.EmoteTick < EmoteVoiceWindowMs)
+            {
+                a.EmoteVoicedTick = msg.EmoteTick;
+                EmoteAudio.PlayLandHoAt(a.Go.transform);
+            }
+            a.Emote = emote;
+            a.EmoteTick = msg.EmoteTick;
         }
 
         // -----------------------------------------------------------------
@@ -853,6 +895,7 @@ namespace SailwindCoop.Sync
             _localCrouching = null;
             _haveLast = false;
             _handProbe.Clear();
+            _emote = EmoteId.None;
             foreach (var b in _bundleCache.Values)
                 if (b != null) b.Unload(false);
             _bundleCache.Clear();
@@ -1128,8 +1171,22 @@ namespace SailwindCoop.Sync
             AvatarArmIk ik = a.Rig != null ? a.Rig.Ik : null;
             if (ik != null)
             {
-                ik.SetTarget(true, (a.Hands & PlayerStateMsg.HandRight) != 0, a.HandR);
-                ik.SetTarget(false, (a.Hands & PlayerStateMsg.HandLeft) != 0, a.HandL);
+                bool right = (a.Hands & PlayerStateMsg.HandRight) != 0;
+                bool left = (a.Hands & PlayerStateMsg.HandLeft) != 0;
+                Vector3 rightTarget = a.HandR, leftTarget = a.HandL;
+                bool rightEmote = false, leftEmote = false;
+
+                // Жест берёт только те руки, которыми пользуется; вторая остаётся на предмете.
+                EmotePose pose;
+                if (a.Emote != EmoteId.None &&
+                    EmoteCatalog.Evaluate(a.Emote, (_net.Clock.ServerTick - a.EmoteTick) / 1000f, LookPitch(a), out pose))
+                {
+                    if (pose.Right) { right = rightEmote = true; rightTarget = pose.RightArm; }
+                    if (pose.Left) { left = leftEmote = true; leftTarget = pose.LeftArm; }
+                }
+
+                ik.SetTarget(true, right, rightTarget, rightEmote);
+                ik.SetTarget(false, left, leftTarget, leftEmote);
             }
 
             if (a.Head != null && !a.HeadDrivenByAnimator)
@@ -1143,9 +1200,14 @@ namespace SailwindCoop.Sync
         private void ApplyLookPitch(RemoteAvatar a)
         {
             if (a.PoseDriver == null) return;
+            a.PoseDriver.TargetPitch = Mathf.Clamp(LookPitch(a), -35f, 45f);
+        }
+
+        /// <summary>Наклон взгляда удалённого игрока относительно его корпуса, градусы (вверх — плюс).</summary>
+        private static float LookPitch(RemoteAvatar a)
+        {
             Vector3 localLook = Quaternion.Inverse(a.Go.transform.rotation) * (a.HeadWorldRot * Vector3.forward);
-            float pitch = Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg;
-            a.PoseDriver.TargetPitch = Mathf.Clamp(pitch, -35f, 45f);
+            return Mathf.Asin(Mathf.Clamp(localLook.y, -1f, 1f)) * Mathf.Rad2Deg;
         }
 
         private void ApplyVisualOffset(RemoteAvatar a)

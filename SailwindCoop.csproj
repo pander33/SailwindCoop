@@ -122,6 +122,8 @@
 
   <ItemGroup>
     <None Include="libs\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <!-- Emote voice lines, loaded at runtime from the "sounds" folder next to the plugin DLL. -->
+    <None Include="Sounds\landho.wav" Link="sounds\landho.wav" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
   <!--

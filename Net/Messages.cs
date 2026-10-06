@@ -340,6 +340,13 @@ namespace SailwindCoop.Net
         public Vector3 HandR;
         public Vector3 HandL;
 
+        // --- жест (Protocol 85) ---------------------------------------------------------
+        // Emote — значение Sync.EmoteId, 0 = жеста нет. EmoteTick — момент начала по часам хоста:
+        // получатель считает фазу жеста от него, поэтому жест идёт у всех одинаково, а потеря
+        // отдельных пакетов ничего не сбивает. Пишется в пакет только при ненулевом Emote.
+        public byte Emote;
+        public long EmoteTick;
+
         public MsgType Type => MsgType.PlayerState;
 
         public void Serialize(NetDataWriter w)
@@ -359,6 +366,8 @@ namespace SailwindCoop.Net
             w.Put(Hands);
             if ((Hands & HandRight) != 0) w.PutVector3(HandR);
             if ((Hands & HandLeft) != 0) w.PutVector3(HandL);
+            w.Put(Emote);
+            if (Emote != 0) w.Put(EmoteTick);
         }
 
         public void Deserialize(NetDataReader r)
@@ -378,6 +387,8 @@ namespace SailwindCoop.Net
             Hands = r.GetByte();
             HandR = (Hands & HandRight) != 0 ? r.GetVector3() : Vector3.zero;
             HandL = (Hands & HandLeft) != 0 ? r.GetVector3() : Vector3.zero;
+            Emote = r.GetByte();
+            EmoteTick = Emote != 0 ? r.GetLong() : 0L;
         }
     }
 

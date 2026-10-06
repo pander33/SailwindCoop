@@ -90,6 +90,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> EnableLogging;
         public readonly ConfigEntry<bool> EnableDebugPanel;
         public readonly ConfigEntry<KeyCode> MenuKey;
+        public readonly ConfigEntry<KeyCode> EmoteKey;
 
         public CoopConfig(ConfigFile c)
         {
@@ -125,6 +126,7 @@ namespace SailwindCoop
             EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
+            EmoteKey = c.Bind("UI", "EmoteKey", KeyCode.G, "Hold to open the emote wheel, move the mouse to a gesture and release. Works only in a co-op session. Change it if the key is bound to something else in the game.");
         }
     }
 }
