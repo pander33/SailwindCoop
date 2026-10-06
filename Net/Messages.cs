@@ -2111,9 +2111,10 @@ namespace SailwindCoop.Net
     /// <c>SaveLoadManager.gameVersion</c> so the client can refuse a mismatched save format.</summary>
     public sealed class SaveSnapshotBeginMsg : INetMessage
     {
-        public int TotalBytes;
+        public int TotalBytes;   // bytes on the wire (the sum of all chunks)
         public int ChunkCount;
         public int GameVersion;
+        public int RawBytes;     // size after gzip unpacking; 0 = the chunks are the save as it is
 
         public MsgType Type => MsgType.SaveSnapshotBegin;
 
@@ -2122,6 +2123,7 @@ namespace SailwindCoop.Net
             w.Put(TotalBytes);
             w.Put(ChunkCount);
             w.Put(GameVersion);
+            w.Put(RawBytes);
         }
 
         public void Deserialize(NetDataReader r)
@@ -2129,6 +2131,7 @@ namespace SailwindCoop.Net
             TotalBytes = r.GetInt();
             ChunkCount = r.GetInt();
             GameVersion = r.GetInt();
+            RawBytes = r.GetInt();
         }
     }
 

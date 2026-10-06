@@ -29,6 +29,11 @@ All notable user-facing changes are documented in this file.
 - The mod now ships two more files that must sit next to `SailwindCoop.dll`:
   `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.
 
+### Changed
+
+- **Joining over a slow connection pauses the host for less time.** The world sent to a joining
+  player is now compressed to about a quarter of its size.
+
 ### Fixed
 
 - **Goods no longer look like mission cargo on a guest.** A good the host got during the session
@@ -39,7 +44,7 @@ All notable user-facing changes are documented in this file.
 
 ### Network
 
-- **Everyone must update.** The wire protocol moved from `80` to `82`; `0.2.x` and `0.3.0` refuse
+- **Everyone must update.** The wire protocol moved from `80` to `83`; `0.2.x` and `0.3.0` refuse
   to connect to each other.
 
 Not yet verified in game: the comparison step, the menu section and the download; the Steam

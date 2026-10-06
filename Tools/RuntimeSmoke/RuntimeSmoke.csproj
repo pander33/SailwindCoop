@@ -13,6 +13,7 @@
     <Compile Include="..\..\Net\ModManifest.cs" Link="Net\ModManifest.cs" />
     <Compile Include="..\..\Sync\ModCatalog.cs" Link="ModCatalog.cs" />
     <Compile Include="..\..\Sync\ModTransfer.cs" Link="ModTransfer.cs" />
+    <Compile Include="..\..\Sync\SaveCompression.cs" Link="SaveCompression.cs" />
     <Compile Include="..\..\Runtime\PatchGuard.cs" Link="PatchGuard.cs" />
     <Compile Include="..\..\Runtime\PatchHookCatalog.cs" Link="PatchHookCatalog.cs" />
     <Compile Include="..\..\Runtime\PatchHealth.cs" Link="PatchHealth.cs" />

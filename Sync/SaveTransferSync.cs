@@ -43,6 +43,7 @@ namespace SailwindCoop.Sync
         private int _expectedChunks;
         private int _receivedChunks;
         private int _totalBytes;
+        private int _rawBytes;      // announced size after unpacking; 0 = not compressed
         private int _hostGameVersion;
         private bool _receiving;
 
@@ -68,12 +69,20 @@ namespace SailwindCoop.Sync
                 return;
             }
 
+            // The host stays frozen until the client has the whole snapshot, and a reliable channel
+            // moves a fixed amount per round trip: fewer bytes is a shorter freeze on a slow link.
+            int rawLength = bytes.Length;
+            byte[] packed = SaveCompression.Pack(bytes);
+            if (packed != null) bytes = packed;
+            else Plugin.Logger.LogWarning("[SaveTransfer] World snapshot not compressed, sending " + rawLength + " bytes as is");
+
             int count = (bytes.Length + ChunkSize - 1) / ChunkSize;
             peer.Send(new SaveSnapshotBeginMsg
             {
                 TotalBytes = bytes.Length,
                 ChunkCount = count,
                 GameVersion = HostGameVersion(),
+                RawBytes = packed != null ? rawLength : 0,
             }, DeliveryMethod.ReliableOrdered);
 
             for (int i = 0; i < count; i++)
@@ -87,7 +96,8 @@ namespace SailwindCoop.Sync
 
             peer.Send(new SaveSnapshotEndMsg { Ok = true }, DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[SaveTransfer] Sent host save to client: " + bytes.Length +
-                                  " bytes in " + count + " chunks");
+                                  " bytes in " + count + " chunks" +
+                                  (packed != null ? " (gzip of " + rawLength + ")" : ""));
         }
 
         /// <summary>Reads the host's current save file bytes (the world the client will join).</summary>
@@ -157,6 +167,7 @@ namespace SailwindCoop.Sync
 
             // Validate BEFORE allocating: these two numbers size arrays and arrive from the network.
             if (msg.TotalBytes <= 0 || msg.TotalBytes > MaxSaveBytes ||
+                msg.RawBytes < 0 || msg.RawBytes > MaxSaveBytes ||
                 msg.ChunkCount <= 0 || msg.ChunkCount > MaxChunkCount ||
                 // The sender always slices at ChunkSize, so the counts must agree.
                 msg.ChunkCount != (msg.TotalBytes + ChunkSize - 1) / ChunkSize)
@@ -172,12 +183,14 @@ namespace SailwindCoop.Sync
 
             _expectedChunks = msg.ChunkCount;
             _totalBytes = msg.TotalBytes;
+            _rawBytes = msg.RawBytes;
             _hostGameVersion = msg.GameVersion;
             _chunks = new byte[_expectedChunks][];
             _receivedChunks = 0;
             _receiving = true;
             Plugin.Logger.LogInfo("[SaveTransfer] Receiving host save: " + _totalBytes + " bytes, " +
-                                  _expectedChunks + " chunks (gameVersion=" + _hostGameVersion + ")");
+                                  _expectedChunks + " chunks" + (_rawBytes > 0 ? ", gzip of " + _rawBytes : "") +
+                                  " (gameVersion=" + _hostGameVersion + ")");
         }
 
         public void OnChunk(SaveSnapshotChunkMsg msg)
@@ -227,6 +240,8 @@ namespace SailwindCoop.Sync
                     return;
                 }
 
+                // A broken archive throws and lands in the catch below, like any unreadable save.
+                if (_rawBytes > 0) bytes = SaveCompression.Unpack(bytes, _rawBytes);
                 ApplyHostSave(bytes);
             }
             catch (Exception e)
@@ -387,6 +402,7 @@ namespace SailwindCoop.Sync
             _receivedChunks = 0;
             _expectedChunks = 0;
             _totalBytes = 0;
+            _rawBytes = 0;
         }
     }
 }

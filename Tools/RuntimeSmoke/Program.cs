@@ -57,6 +57,39 @@ internal static class Program
             ItemReliabilityTests.Run(Test);
             ModSharingTests.Run(Test);
             TunnelTests.Run(Test);
+            Test("world snapshot gzip round-trips and rejects a wrong length or a broken archive", () => {
+                var raw = new byte[300000];
+                for (int i = 0; i < raw.Length; i++) raw[i] = (byte)(i % 97 < 60 ? 0 : i * 31);
+                byte[] packed = SailwindCoop.Sync.SaveCompression.Pack(raw);
+                if (packed == null || packed.Length >= raw.Length) throw new Exception("not compressed");
+                byte[] back = SailwindCoop.Sync.SaveCompression.Unpack(packed, raw.Length);
+                for (int i = 0; i < raw.Length; i++) if (back[i] != raw[i]) throw new Exception("byte " + i + " differs");
+
+                var noise = new byte[4096];
+                new Random(5).NextBytes(noise);
+                if (SailwindCoop.Sync.SaveCompression.Pack(noise) != null) throw new Exception("incompressible data must be sent as is");
+                if (SailwindCoop.Sync.SaveCompression.Pack(new byte[0]) != null) throw new Exception("empty input");
+
+                // The last one is a header that announces far more than the received bytes can hold.
+                foreach (int wrong in new[] { raw.Length - 1, raw.Length + 1, 0, 256 * 1024 * 1024 })
+                {
+                    bool thrown = false;
+                    try { SailwindCoop.Sync.SaveCompression.Unpack(packed, wrong); } catch (Exception) { thrown = true; }
+                    if (!thrown) throw new Exception("accepted announced length " + wrong);
+                }
+                var broken = (byte[])packed.Clone();
+                for (int i = 20; i < 60; i++) broken[i] ^= 0x5A;
+                bool rejected = false;
+                try
+                {
+                    byte[] got = SailwindCoop.Sync.SaveCompression.Unpack(broken, raw.Length);
+                    for (int i = 0; i < raw.Length && !rejected; i++) rejected = got[i] != raw[i];
+                    if (!rejected) throw new Exception("a broken archive unpacked to the original");
+                    rejected = false;   // unpacked to other bytes without an error
+                }
+                catch (System.IO.InvalidDataException) { rejected = true; }
+                if (!rejected) throw new Exception("a broken archive was accepted");
+            });
             Test("boat configuration barrier holds future packets and discards old indices", () => {
                 var book = new BoatGenerationBook(); var queue = new BoatGenerationQueue<string>();
                 queue.Add(1, 2, "boat1 new rope"); queue.Add(2, 1, "boat2 unchanged"); queue.Add(1, 1, "boat1 old rope");
