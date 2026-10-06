@@ -214,8 +214,11 @@ internal static class ItemReliabilityTests
             var despawn = Method(items, "OnDespawnObject");
             Assert(!despawn.Body.Instructions.Any(instruction => instruction.Operand is MethodReference called && called.Name == "Contains"),
                 "tombstone became an early-return guard for cleanup");
-            int cleanup = despawn.Body.Instructions.ToList().FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "RemoveBindings");
-            Assert(cleanup >= 0 && despawn.Body.Instructions.Skip(cleanup + 1).Any(instruction => instruction.Operand is MethodReference called && called.Name == "Destroy"),
+            // The cleanup body is shared with the manifest-end prune, so it lives in DestroyClientEntry.
+            Assert(Calls(despawn, "DestroyClientEntry"), "despawn no longer runs the cleanup");
+            var destroy = Method(items, "DestroyClientEntry");
+            int cleanup = destroy.Body.Instructions.ToList().FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "RemoveBindings");
+            Assert(cleanup >= 0 && destroy.Body.Instructions.Skip(cleanup + 1).Any(instruction => instruction.Operand is MethodReference called && called.Name == "Destroy"),
                 "cleanup is missing or no longer precedes destroy");
             Assert(Methods(items).Any(method => method.HasBody && method.Name.Contains("ApplyOperationResult") && Calls(method, "OnDespawnObject")),
                 "compound consumed path does not invoke cleanup");

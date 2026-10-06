@@ -2048,6 +2048,16 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client) return;
             if (msg.Kind != (byte)NetObjKind.Item) return;
+            // InstanceId == 0 is the end of the host's item manifest (see SendManifest), not an item.
+            if (msg.InstanceId == 0)
+            {
+                // Only a packet from the host ends a manifest; an operation result replays despawns
+                // through this method with no peer, and a zero id there must not clear the world.
+                if (fromPeer == null) return;
+                try { PruneUnsharedItems(); }
+                catch (Exception ex) { Plugin.Logger.LogError("[ItemSync] role=Client removing leftover items failed: " + ex); }
+                return;
+            }
             _tombstones.Add(msg.InstanceId);
             _pendingStates.Remove(msg.InstanceId);
             _pendingSpawns.Remove(msg.InstanceId);
@@ -2075,11 +2085,84 @@ namespace SailwindCoop.Sync
 
                 return;
             }
+            DestroyClientEntry(e, msg.InstanceId);
+        }
+
+        /// <summary>
+        /// Client: the host finished naming its items (manifest end). The host's set is the whole shared
+        /// world, so a local item it did not name is a leftover — most visibly after a join from an
+        /// already loaded world, where our old copies used to stay next to the host's. Items in the belt
+        /// or without a stable identity are not in <c>_items</c> and are never touched.
+        /// </summary>
+        private void PruneUnsharedItems()
+        {
+            if (!_baselineReady) return;
+            RefreshItems(force: true);
+            var leftovers = new List<ItemEntry>();
+            foreach (var e in _items)
+            {
+                if (e.Item == null || _hostIds.Contains(e.InstanceId)) continue;
+                // Still on its way to a host id: a spawn that could not be resolved yet, an item we are
+                // authoring, or one in our hand.
+                if (_pendingSpawns.ContainsKey(e.InstanceId) || _pendingStates.ContainsKey(e.InstanceId) ||
+                    _localClaimed.Contains(e.InstanceId) || _pendingClientItems.Contains(e.Item) ||
+                    IsOperationCreated(e.Item) || e.Item == _pendingHeldItem || e.Item.held != null ||
+                    _localHeld.ContainsKey(e.Item)) continue;
+                leftovers.Add(e);
+            }
+            foreach (var e in leftovers)
+            {
+                RemoveCachedLocalItem(e.InstanceId);
+                // Destroy lands at the end of the frame; keep a rescan before that from finding it again.
+                _destroyingItems.Add(e.Item);
+                DestroyClientEntry(e, e.InstanceId);
+            }
+            // No host save was loaded in this session, so the world and its item caches are left over
+            // from an earlier one. A cached item of a far boat or house would come back later under an
+            // id the host no longer uses. After a normal join the caches hold the host's own save items
+            // and are matched through _saveIdentity when they load — those must stay.
+            int cached = _saveIdentity.Count == 0 ? RemoveCachedItemsNotShared() : 0;
+            Plugin.Logger.LogInfo("[ItemSync] role=Client host manifest complete: " + _hostIds.Count +
+                                  " host items, removed " + leftovers.Count + " local and " + cached +
+                                  " cached items the host does not have");
+        }
+
+        /// <summary>Client: drop every cached far-boat/house item whose id the host has not named.</summary>
+        private int RemoveCachedItemsNotShared()
+        {
+            int removed = 0;
+            try
+            {
+                if (_fBoatCachedItems == null)
+                    _fBoatCachedItems = typeof(BoatLocalItems).GetField("cachedItems", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (_fBoatCachedItems == null) return 0;
+                foreach (var localItems in UnityEngine.Object.FindObjectsOfType<BoatLocalItems>())
+                {
+                    var list = _fBoatCachedItems.GetValue(localItems) as List<SavePrefabData>;
+                    if (list == null) continue;
+                    for (int i = list.Count - 1; i >= 0; i--)
+                    {
+                        if (list[i] != null && _hostIds.Contains(list[i].instanceId)) continue;
+                        list.RemoveAt(i);
+                        removed++;
+                    }
+                    if (list.Count == 0) _fBoatCachedItems.SetValue(localItems, null);
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ItemSync] role=Client failed to clear stale cached items: " + e.Message);
+            }
+            return removed;
+        }
+
+        private void DestroyClientEntry(ItemEntry e, int instanceId)
+        {
             var item = e.Item;
             if (item != null) ItemComponents.RemoveBindings(item);
             _net.Registry.Remove(e.NetId);
             _items.Remove(e);
-            _byInstanceId.Remove(msg.InstanceId);
+            _byInstanceId.Remove(instanceId);
             if (item != null)
             {
                 _byItem.Remove(item);
@@ -2087,7 +2170,7 @@ namespace SailwindCoop.Sync
                 // Like vanilla DestroyItem: a destroyed prefab left in SaveLoadManager.currentPrefabs makes
                 // BoatLocalItems.CacheCurrentItems throw on it every frame once we leave its boat or house.
                 try { item.GetComponent<SaveablePrefab>()?.Unregister(); }
-                catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Despawn unregister id=" + msg.InstanceId + ": " + ex.Message); }
+                catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Despawn unregister id=" + instanceId + ": " + ex.Message); }
                 UnityEngine.Object.Destroy(item.gameObject);
             }
 
@@ -2907,10 +2990,24 @@ namespace SailwindCoop.Sync
 
             if (authorRequestId != 0) return null;
 
+            // A local item already carries this host id and prefab: we joined from a loaded world (a
+            // rejoin without going through the main menu), where our copies kept the ids the host gave
+            // them last time. Take it as the host's item instead of spawning a second one beside it.
+            if (_byInstanceId.TryGetValue(instanceId, out var same) && same.PrefabIndex == prefabIndex &&
+                same.Item != null && !_pendingClientItems.Contains(same.Item) && !IsOperationCreated(same.Item))
+            {
+                _baselineItems.Remove(same.Item);
+                _hostIds.Add(instanceId);
+                return same;
+            }
+
             // No local match. Only spawn for FREE items (allowSpawn): a held item's pose is the holder's
             // hand, so position matching can't work — defer; once it's dropped we match/spawn at rest.
             if (!allowSpawn) return null;
 
+            // The host's copy is the one we create now; a copy of the same id waiting in a far boat's
+            // or house's cache would otherwise load beside it later.
+            RemoveCachedLocalItem(instanceId);
             var spawned = SpawnClientItem(instanceId, prefabIndex, frame, boatIndex, wirePos,
                                           Quaternion.identity, amount, health, sold, nailed);
             if (spawned == null) return null;
@@ -2971,6 +3068,10 @@ namespace SailwindCoop.Sync
                 BroadcastSpawn(e, peer, snapshot: true);
                 n++;
             }
+            // Manifest end (InstanceId == 0, same sentinel idea as the ready ping): the client now knows
+            // the whole host set and drops local items that are not in it.
+            peer.Send(new DespawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = 0 },
+                      LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[ItemSync] Item manifest sent: " + n + " items");
         }
 

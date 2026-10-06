@@ -43,5 +43,6 @@ namespace SailwindCoop.Sync
         internal void Add(int id, int prefab) => prefabs[id] = prefab;
         internal bool Contains(int id, int prefab) => prefabs.TryGetValue(id, out var saved) && saved == prefab;
         internal void Clear() => prefabs.Clear();
+        internal int Count => prefabs.Count;
     }
 }

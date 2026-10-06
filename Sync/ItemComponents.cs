@@ -155,7 +155,14 @@ namespace SailwindCoop.Sync
             ApplyInstruments(item, state);
             item.UpdateLookText();
             if (food != null) FoodLookText?.Invoke(food, null);
-            if (item.itemRigidbodyC != null) item.itemRigidbodyC.UpdateMass();
+            // An item created in this frame (SpawnObject) has an ItemRigidbody whose Start has not run:
+            // UpdateMass throws there, which used to abort the item's first state — it stayed at its
+            // spawn pose under local physics. Its own Start sets the mass a frame later.
+            if (item.itemRigidbodyC != null)
+            {
+                try { item.itemRigidbodyC.UpdateMass(); }
+                catch (NullReferenceException) { }
+            }
         }
         internal static void ClearCookBinding(ShipItem item)
         {
