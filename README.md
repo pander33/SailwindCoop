@@ -38,7 +38,7 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
    - Extract to your Sailwind game folder
 
 #### Editions
-The mod comes in two editions. They use the same network protocol and can play together.
+The mod comes in two editions. They use the same network protocol and can play together. The Thunderstore edition is published at <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/> and installs through a mod manager.
 
 | | Thunderstore edition | Full edition |
 |---|---|---|
@@ -225,7 +225,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
    - Распакуйте в папку с игрой Sailwind
 
 #### Редакции
-Мод выходит в двух редакциях. Сетевой протокол у них один, играть вместе можно.
+Мод выходит в двух редакциях. Сетевой протокол у них один, играть вместе можно. Редакция Thunderstore опубликована на <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/> и ставится через менеджер модов.
 
 | | Редакция Thunderstore | Полная редакция |
 |---|---|---|

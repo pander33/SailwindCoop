@@ -10,7 +10,8 @@ earlier protocol builds. Most features added since 0.1.6 still await end-to-end 
 ## Editions
 
 The mod comes in two editions that use the same protocol and can play together. The **Thunderstore
-edition** plays over LAN or VPN and compares mods when joining. The **full edition** adds play over
+edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN or VPN and
+compares mods when joining. The **full edition** adds play over
 Steam and downloading missing mods from the host. The title of the status overlay shows the edition,
 for example `Sailwind Co-op 0.3.1 (Thunderstore)`. Sections below that apply to one edition say so.
 
