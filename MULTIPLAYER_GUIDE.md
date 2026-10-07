@@ -273,7 +273,8 @@ guest types the host's IP address. Steam mode needs no IP address, port forwardi
   this works only while the F8 menu is in Steam mode.
 - **Friends only / Anyone** (host): by default only your Steam friends can connect, and joining by
   IP is refused. **Anyone** lets in whoever knows your Steam ID, and LAN players can join the same
-  session by IP. The button works while the session is running; players already in stay.
+  session by IP. The **Who can join** row is in the F8 menu on the Steam tab before hosting and in
+  the session block while hosting; a change applies at once, and players already in stay.
 - A Steam player removed with **Kick** stays out until you host again.
 - A guest who is not on a **Friends only** host's friends list gets no answer and sees the
   connection time out.

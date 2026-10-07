@@ -49,6 +49,7 @@ namespace SailwindCoop.Runtime
         private bool _steamInitTried;
         private bool _steamReady;
         private bool _steamFriendsOnly;
+        private bool _hostingOverSteam;
         private string _steamError = "";
         private string _steamSelf = "";
         private ulong _steamMyId;
@@ -398,6 +399,7 @@ namespace SailwindCoop.Runtime
                              : _net.SteamFriendsOnly ? "Steam friends only (" + _net.TransportStatus + ")"
                              : "LAN and Steam (" + _net.TransportStatus + ")") +
                             ", guests: " + _net.PeerCount, _muted);
+            if (_hostingOverSteam) DrawSteamAdmission();
 #else
             GUILayout.Label("LAN, guests: " + _net.PeerCount, _muted);
 #endif
@@ -672,6 +674,9 @@ namespace SailwindCoop.Runtime
         {
 #if !THUNDERSTORE
             _steamMode = _steamModeWanted;
+            // Snapshotted for the layout: the admission row adds controls to the hosting screen.
+            _hostingOverSteam = _net.Role == Role.Host && _net.OverSteam;
+            _steamFriendsOnly = Plugin.Cfg.SteamFriendsOnly.Value;
             if (!_steamMode) return;
             // Steam is started only here: on the first frame the menu is shown in Steam mode.
             if (!_steamInitTried)
@@ -711,6 +716,35 @@ namespace SailwindCoop.Runtime
 #endif
         }
 
+#if !THUNDERSTORE
+        /// <summary>
+        /// Who a Steam host lets in. Both choices are always visible, and the row is drawn before
+        /// hosting and during it: the rule applies to a running session at once.
+        /// </summary>
+        private void DrawSteamAdmission()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Who can join", _muted, GUILayout.Width(CaptionWidth));
+            if (GUILayout.Button("Friends only", _steamFriendsOnly ? _tabOn : _tab, GUILayout.Width(96f), GUILayout.Height(22f)))
+                SetSteamFriendsOnly(true);
+            if (GUILayout.Button("Anyone", _steamFriendsOnly ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f)))
+                SetSteamFriendsOnly(false);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            GUILayout.Label(_steamFriendsOnly ? "Steam friends only; joining by IP is refused."
+                                              : "Anyone who knows your Steam ID, and LAN players by IP.", _muted);
+        }
+
+        private void SetSteamFriendsOnly(bool friendsOnly)
+        {
+            if (_steamFriendsOnly == friendsOnly) return;
+            Plugin.Cfg.SteamFriendsOnly.Value = friendsOnly;
+            _net.SetSteamFriendsOnly(friendsOnly);   // a running Steam session follows at once
+            _status = friendsOnly ? "Hosting accepts Steam friends only; the LAN port is closed"
+                                  : "Hosting accepts anyone: by Steam ID and on the LAN port";
+        }
+#endif
+
         private void DrawSteam()
         {
 #if !THUNDERSTORE
@@ -727,15 +761,8 @@ namespace SailwindCoop.Runtime
                 GUIUtility.systemCopyBuffer = _steamMyId.ToString();
                 _status = "Your Steam ID is in the clipboard";
             }
-            if (GUILayout.Button(_steamFriendsOnly ? "Friends only" : "Anyone", _steamFriendsOnly ? _tabOn : _tab,
-                                 GUILayout.Width(96f), GUILayout.Height(22f)))
-            {
-                Plugin.Cfg.SteamFriendsOnly.Value = !_steamFriendsOnly;
-                _net.SetSteamFriendsOnly(!_steamFriendsOnly);   // a running Steam session follows at once
-                _status = !_steamFriendsOnly ? "Hosting accepts Steam friends only; the LAN port is closed"
-                                             : "Hosting accepts anyone: by Steam ID and on the LAN port";
-            }
             GUILayout.EndHorizontal();
+            DrawSteamAdmission();
 
             GUILayout.Label(_friends.Length == 0
                 ? "No Steam friends are in Sailwind right now. A friend not listed here can still be joined by Host ID."
