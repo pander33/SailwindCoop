@@ -975,6 +975,29 @@ namespace SailwindCoop.Net
             }
         }
 
+        /// <summary>Host: the clients that have loaded the world.</summary>
+        public uint[] ReadyClientIds()
+        {
+            var ids = new List<uint>();
+            if (Role == Role.Host)
+                foreach (var s in _sessions.Values)
+                    if (s.HandshakeDone && s.JoinState == MemberJoinState.Ready) ids.Add(s.PlayerNetId);
+            return ids.ToArray();
+        }
+
+        /// <summary>Host: send to one client that has loaded the world. False when there is no such client.</summary>
+        public bool SendToPlayer(uint netId, INetMessage msg, DeliveryMethod method)
+        {
+            if (Role != Role.Host) return false;
+            foreach (var s in _sessions.Values)
+            {
+                if (!s.HandshakeDone || s.PlayerNetId != netId || s.JoinState != MemberJoinState.Ready) continue;
+                s.Peer.Send(msg, method);
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>Host-only: forward a message to every handshaked client except the sender.</summary>
         public void RelayExcept(INetMessage msg, NetPeer except, DeliveryMethod method)
         {

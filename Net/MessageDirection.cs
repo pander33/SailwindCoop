@@ -44,6 +44,7 @@ namespace SailwindCoop.Net
                 case MsgType.AnchorRequest:
                 case MsgType.ModSyncResult:
                 case MsgType.ModFileRequest:
+                case MsgType.WalletDelta:
                     return MsgFlow.ToHost;
 
                 case MsgType.HelloAck:
@@ -84,6 +85,7 @@ namespace SailwindCoop.Net
                 case MsgType.ModManifest:
                 case MsgType.ModFileChunk:
                 case MsgType.ModFileEnd:
+                case MsgType.WalletState:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.
@@ -96,6 +98,9 @@ namespace SailwindCoop.Net
                 case MsgType.AvatarChange:
                 case MsgType.RodState:
                 case MsgType.HouseDoor:
+                case MsgType.MoneyTransfer:
+                case MsgType.MoneyOffer:
+                case MsgType.ShopTaken:
                     return MsgFlow.Both;
 
                 default:

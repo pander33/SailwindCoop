@@ -103,6 +103,11 @@ namespace SailwindCoop.Net
         ModFileChunk = 110,     // host -> client : one chunk of a requested mod file
         ModFileEnd = 111,       // host -> client : requested file complete or refused
         SleepPresence = 112,    // client -> host : in bed / wants to sleep / rested (ReliableOrdered, on change)
+        MoneyTransfer = 113,    // client -> host -> client : one player gives money to another (ReliableOrdered)
+        MoneyOffer = 114,       // client -> host -> client : a hand held out with money, its withdrawal, or its taking
+        WalletState = 115,      // host -> client : shared wallet on/off and the host's balance (ReliableOrdered, on change)
+        WalletDelta = 116,      // client -> host : what the client spent from or added to the shared wallet
+        ShopTaken = 117,        // buyer -> host -> others : this shelf place of a shop was bought out
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -2042,6 +2047,176 @@ namespace SailwindCoop.Net
             GoodPrefabIndex = r.GetInt();
             DestinationName = r.GetString();
             ExpectedReward = r.GetInt();
+        }
+    }
+
+    /// <summary>
+    /// One player gives money from their own wallet to another. The giver has already taken the amount
+    /// out of its wallet; the receiver adds it. A client sends it to the host, which credits itself or
+    /// passes it on. <see cref="Returned"/> marks money coming back to the giver because the receiver
+    /// was not there to take it.
+    /// </summary>
+    public sealed class MoneyTransferMsg : INetMessage
+    {
+        public uint FromNetId;
+        public uint ToNetId;
+        public byte Currency;
+        public int Amount;
+        public bool Returned;
+
+        public MsgType Type => MsgType.MoneyTransfer;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(FromNetId);
+            w.Put(ToNetId);
+            w.Put(Currency);
+            w.Put(Amount);
+            w.Put(Returned);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            FromNetId = r.GetUInt();
+            ToNetId = r.GetUInt();
+            Currency = r.GetByte();
+            Amount = r.GetInt();
+            Returned = r.GetBool();
+        }
+    }
+
+    /// <summary>
+    /// Host → one client. With <see cref="Shared"/> the crew uses the host's wallet: Currency is its
+    /// balance and <see cref="AckSeq"/> the last <see cref="WalletDeltaMsg"/> of this client that the
+    /// balance already includes. Without it the client goes back to its own wallet.
+    /// </summary>
+    public sealed class WalletStateMsg : INetMessage
+    {
+        public const int MaxCurrencies = 16;
+
+        public bool Shared;
+        public uint AckSeq;
+        public int[] Currency = new int[0];
+
+        public MsgType Type => MsgType.WalletState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Shared);
+            w.Put(AckSeq);
+            WalletWire.Put(w, Currency);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Shared = r.GetBool();
+            AckSeq = r.GetUInt();
+            Currency = WalletWire.Get(r);
+        }
+    }
+
+    /// <summary>Client → host: a change the client made to the shared wallet, per currency.</summary>
+    public sealed class WalletDeltaMsg : INetMessage
+    {
+        public uint Seq;
+        public int[] Delta = new int[0];
+
+        public MsgType Type => MsgType.WalletDelta;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Seq);
+            WalletWire.Put(w, Delta);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Seq = r.GetUInt();
+            Delta = WalletWire.Get(r);
+        }
+    }
+
+    internal static class WalletWire
+    {
+        public static void Put(NetDataWriter w, int[] values)
+        {
+            int count = values != null ? System.Math.Min(values.Length, WalletStateMsg.MaxCurrencies) : 0;
+            w.Put((byte)count);
+            for (int i = 0; i < count; i++) w.Put(values[i]);
+        }
+
+        public static int[] Get(NetDataReader r)
+        {
+            int count = r.GetByte();
+            if (count > WalletStateMsg.MaxCurrencies) throw new System.FormatException("wallet currency count " + count);
+            var values = new int[count];
+            for (int i = 0; i < count; i++) values[i] = r.GetInt();
+            return values;
+        }
+    }
+
+    /// <summary>
+    /// A shop item was bought from its shelf. Every machine has its own copy of the shop's stock, so
+    /// the others take the item at the same shelf place off sale; the bought item itself reaches them
+    /// as an ordinary shared item. <see cref="Pos"/> is the shelf place in real space.
+    /// </summary>
+    public sealed class ShopTakenMsg : INetMessage
+    {
+        public int PrefabIndex;
+        public Vector3 Pos;
+
+        public MsgType Type => MsgType.ShopTaken;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(PrefabIndex);
+            w.PutVector3(Pos);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            PrefabIndex = r.GetInt();
+            Pos = r.GetVector3();
+        }
+    }
+
+    public enum MoneyOfferKind : byte
+    {
+        Offer = 0,      // the giver holds out Amount of Currency to ToNetId; repeated while it lasts
+        Withdraw = 1,   // the giver lowered the hand
+        Take = 2,       // ToNetId is the giver: FromNetId takes what that giver is offering
+    }
+
+    /// <summary>
+    /// Money handed over in person. An offer moves no money: the giver shows what it holds out, and
+    /// when the other player takes it the giver sends an ordinary <see cref="MoneyTransferMsg"/>.
+    /// </summary>
+    public sealed class MoneyOfferMsg : INetMessage
+    {
+        public uint FromNetId;
+        public uint ToNetId;
+        public MoneyOfferKind Kind;
+        public byte Currency;
+        public int Amount;
+
+        public MsgType Type => MsgType.MoneyOffer;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(FromNetId);
+            w.Put(ToNetId);
+            w.Put((byte)Kind);
+            w.Put(Currency);
+            w.Put(Amount);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            FromNetId = r.GetUInt();
+            ToNetId = r.GetUInt();
+            Kind = (MoneyOfferKind)r.GetByte();
+            Currency = r.GetByte();
+            Amount = r.GetInt();
         }
     }
 

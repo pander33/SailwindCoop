@@ -25,14 +25,14 @@ namespace SailwindCoop.Runtime
         private const float BackdropSize = 2f * Radius + 2f * BoxW;
 
         // Палитра: бумага и чернила судового журнала, латунь и свет фонаря.
-        private static readonly Color PaperTop = new Color(0.93f, 0.86f, 0.70f, 0.96f);
-        private static readonly Color PaperBottom = new Color(0.84f, 0.74f, 0.55f, 0.96f);
-        private static readonly Color PaperEdge = new Color(0.36f, 0.24f, 0.13f, 1f);
+        internal static readonly Color PaperTop = new Color(0.93f, 0.86f, 0.70f, 0.96f);
+        internal static readonly Color PaperBottom = new Color(0.84f, 0.74f, 0.55f, 0.96f);
+        internal static readonly Color PaperEdge = new Color(0.36f, 0.24f, 0.13f, 1f);
         private static readonly Color LampTop = new Color(1.00f, 0.92f, 0.66f, 1f);
         private static readonly Color LampBottom = new Color(0.96f, 0.76f, 0.38f, 1f);
         private static readonly Color LampEdge = new Color(0.47f, 0.22f, 0.08f, 1f);
-        private static readonly Color Ink = new Color(0.22f, 0.14f, 0.08f, 1f);
-        private static readonly Color InkHot = new Color(0.30f, 0.10f, 0.04f, 1f);
+        internal static readonly Color Ink = new Color(0.22f, 0.14f, 0.08f, 1f);
+        internal static readonly Color InkHot = new Color(0.30f, 0.10f, 0.04f, 1f);
         private static readonly Color Dusk = new Color(0.07f, 0.05f, 0.03f, 1f);
         private static readonly Color Brass = new Color(0.86f, 0.70f, 0.42f, 1f);
 
@@ -212,7 +212,7 @@ namespace SailwindCoop.Runtime
         /// менять размер только у динамических шрифтов, остальные не подходят. Не нашёлся —
         /// остаётся шрифт IMGUI по умолчанию.
         /// </summary>
-        private Font GameFont()
+        internal Font GameFont()
         {
             if (_fontSearched) return _gameFont;
             _fontSearched = true;
@@ -245,7 +245,7 @@ namespace SailwindCoop.Runtime
         /// Табличка со скруглёнными углами для девятичастной растяжки: заливка светлеет кверху,
         /// по краю — тёмная кайма, по бумаге — лёгкое зерно.
         /// </summary>
-        private static Texture2D Plate(Color top, Color bottom, Color edge, float edgeWidth)
+        internal static Texture2D Plate(Color top, Color bottom, Color edge, float edgeWidth)
         {
             const int size = 48;
             const float corner = 11f;

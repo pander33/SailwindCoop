@@ -105,6 +105,11 @@ namespace SailwindCoop.Sync
             bool run = true;
             PatchGuard.Run(() => {
                 string name = __originalMethod.Name;
+                // The alternative action on an item that is still for sale is its purchase
+                // (ShipItem.OnAltActivate -> Shopkeeper.TryToSellItem), not the item's own operation.
+                // A capture opened here would absorb the report of the bought item, and the host
+                // would never learn about it.
+                if (name == "OnAltActivate" && __instance is ShipItem bought && !bought.sold) return;
                 bool completion = name == "Drink" || name == "EatFood" || name == "DrinkOrSpill" || name == "FinishCast";
                 if (name == "InsertFuel" || name == "InsertIntoCookTrigger")
                 {

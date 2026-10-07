@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.3.1) uses **protocol 86**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.4.0) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Editions
@@ -13,7 +13,7 @@ The mod comes in two editions that use the same protocol and can play together. 
 edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN or VPN and
 compares mods when joining. The **full edition** adds play over
 Steam and downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.3.1 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.4.0 (Thunderstore)`. Sections below that apply to one edition say so.
 
 ## Session Model
 
@@ -39,13 +39,28 @@ version: the network protocol changes between releases and mismatched builds ref
 
 ## Economy
 
-Economy uses a separate-money model.
+The host chooses between two money models in the co-op menu (F8, **Money** row of the SESSION
+card): **Personal** (the default) or **Shared**. The choice can be changed during a session.
+
+**Shared.** The whole crew uses the host's money. Every purchase, sale, shipyard order and reward
+of any player changes the host's wallet, and everyone sees the same balance. A guest's own money
+is not touched: it is kept in the guest's profile and comes back when the guest leaves or when the
+host switches to Personal. Mission rewards are not divided, and money cannot be handed from player
+to player. Two players spending at the same moment can take the balance below zero.
+
+**Personal.** Each player has a wallet of their own:
 
 - Each player pays with their own wallet.
 - Each player receives money into their own wallet.
 - Buying an item creates or claims a shared physical item so both players can see and use it.
 - Selling an item removes the shared physical item from the world.
 - Currency exchange and trade UI browsing are local UI actions.
+- You can hand money to a player standing next to you. Look at them and hold `H`: your avatar holds
+  out a hand with a coin, and a note on screen shows the amount. The mouse wheel changes the amount,
+  the middle mouse button changes the currency. The other player looks at you and presses `H` to
+  take it. Release `H` to lower your hand without giving anything. The key is `UI.GiveKey` in the
+  config file; change it if `H` is bound to something else. Money can only be handed over in
+  person; there is no way to send it to a player who is somewhere else.
 
 Example: if the guest buys a good at a market, the guest pays locally. The bought item is then shared through item sync so the host can see it and interact with it.
 
@@ -56,7 +71,7 @@ Missions are shared through the host world, with personal reward handling.
 - The host's mission journal is the authoritative shared journal.
 - Clients can view mission-related UI locally.
 - Mission accept/abandon actions are sent to the host.
-- Mission rewards are mirrored so the client receives the payout in their own wallet when appropriate.
+- A delivery reward is divided equally between the players who are in the world, each part going to that player's own wallet. What does not divide stays with the host. Reputation is given to everyone in full.
 - Mission offers can differ between machines, so the mod sends the mission details instead of relying on a local offer index.
 
 If mission UI looks different between host and client, trust the shared journal and the host-side result.

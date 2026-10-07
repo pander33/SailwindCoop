@@ -10,8 +10,8 @@
 
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
-**Current Version:** 0.3.1
-**Wire Protocol:** 86. Use the same build on every machine. Most new features still await end-to-end in-game validation; see the release notes.
+**Current Version:** 0.4.0
+**Wire Protocol:** 89. Use the same build on every machine. Most new features still await end-to-end in-game validation; see the release notes.
 **Requirements:** BepInEx 5.x, Sailwind 0.39
 
 ### ✨ Features
@@ -48,13 +48,13 @@ The mod comes in two editions. They use the same network protocol and can play t
 | Missing mods downloaded from the host | no | yes |
 | Files | `SailwindCoop.dll`, `LiteNetLib.dll`, `avatar.bundle`, `sounds/` | the same plus `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` |
 
-The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.3.1 (Thunderstore)`.
+The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.4.0 (Thunderstore)`.
 
 #### Mod Installation
 1. Download the latest release archive
 2. Extract every file of the archive to: `Sailwind/BepInEx/plugins/SailwindCoop/` (see the table above for the files of each edition)
-3. If you use a custom avatar, replace the included `avatar.bundle` with your compatible bundle
-4. Launch the game
+3. Launch the game
+4. To change your avatar, press **F8**, open **Settings** and click **Avatar**
 
 ### 🎮 How to Play
 
@@ -178,7 +178,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 
 ### 📝 Notes
 
-- This mod is in early development (v0.3.1). Expect bugs!
+- This mod is in early development (v0.4.0). Expect bugs!
 - Only works with players who have the mod installed, and **every machine must run the same version** — the network protocol changes between releases, so mismatched builds refuse to connect
 - The client loads the host's streamed world save into a dedicated co-op slot, while guest character progress is kept in a local co-op profile
 - The host's game state is authoritative
@@ -198,8 +198,8 @@ Visit: https://github.com/pander33/SailwindCoop
 
 Sailwind LAN Co-op — это мод, добавляющий мультиплеер в игру Sailwind. Позволяет играть с друзьями по локальной сети (LAN) или через VPN/туннелирование.
 
-**Текущая версия:** 0.3.1
-**Сетевой протокол:** 86. На всех компьютерах должна быть одна сборка. Большинство новых функций ещё ожидает проверки в игре; см. описание релиза.
+**Текущая версия:** 0.4.0
+**Сетевой протокол:** 89. На всех компьютерах должна быть одна сборка. Большинство новых функций ещё ожидает проверки в игре; см. описание релиза.
 **Требования:** BepInEx 5.x, Sailwind 0.39 (Steam версия)
 
 ### ✨ Особенности
@@ -235,13 +235,13 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | Скачивание недостающих модов с хоста | нет | да |
 | Файлы | `SailwindCoop.dll`, `LiteNetLib.dll`, `avatar.bundle`, `sounds/` | те же и `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` |
 
-Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.3.1 (Thunderstore)`.
+Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.4.0 (Thunderstore)`.
 
 #### Установка мода
 1. Скачайте последний архив релиза
 2. Распакуйте все файлы архива в: `Sailwind/BepInEx/plugins/SailwindCoop/` (состав файлов каждой редакции — в таблице выше)
-3. Если используете свой аватар, замените комплектный `avatar.bundle` на совместимый bundle
-4. Запустите игру
+3. Запустите игру
+4. Чтобы сменить аватар, нажмите **F8**, откройте **Settings** и нажмите **Avatar**
 
 ### 🎮 Как играть
 
@@ -356,7 +356,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 ### 📝 Примечания
 
-- Мод в ранней разработке (v0.3.1). Возможны баги!
+- Мод в ранней разработке (v0.4.0). Возможны баги!
 - Работает только с игроками, у которых установлен мод, и **у всех должна быть одна и та же версия** — сетевой протокол меняется между релизами, разные сборки не соединятся
 - Клиент загружает полученный от хоста сейв мира в отдельный co-op слот, а прогресс персонажа гостя хранится в локальном co-op профиле
 - Состояние игры хоста является авторитетным

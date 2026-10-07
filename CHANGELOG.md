@@ -2,6 +2,34 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.4.0] - 2026-10-07
+
+**Everyone must update.** Protocol 89: this build cannot play with 0.3.1 or earlier.
+
+### Added
+
+- **Hand money to another player.** Look at a crewmate standing next to you and hold `H`: your
+  avatar holds out a hand with a coin. The mouse wheel changes the amount, the middle mouse button
+  changes the currency. The other player looks at you and presses `H` to take it; release the key
+  to cancel. The key is `UI.GiveKey` in the config file.
+
+- **Shared wallet.** The host can switch **Money** to **Shared** in the co-op menu (F8) while
+  hosting: the whole crew then spends and earns the host's money and sees one balance. A guest's
+  own money is kept and comes back when the guest leaves or the host switches back to
+  **Personal**.
+
+### Fixed
+
+- An item bought in a shop stayed on the shelf for the other players, who could buy it again.
+- A guest who bought an elixir, snake oil, oakum or a lamp kept it only for themselves: the host
+  never saw the item, and for the guest it hung in the air after being put down.
+
+### Changed
+
+- **Mission rewards are divided.** A delivery reward is split equally between the players who are
+  in the world; what does not divide stays with the host. Before, every player received the whole
+  reward. Reputation is still given to everyone in full.
+
 ## [0.3.1] - 2026-10-07
 
 ### Added

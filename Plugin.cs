@@ -14,7 +14,7 @@ namespace SailwindCoop
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.3.1";
+        public const string Version = "0.4.0";
         /// <summary>Which of the two builds this is; see the Edition property in SailwindCoop.csproj.</summary>
 #if THUNDERSTORE
         public const string Edition = "Thunderstore";
@@ -99,6 +99,9 @@ namespace SailwindCoop
         public readonly ConfigEntry<KeyCode> MenuKey;
         public readonly ConfigEntry<KeyCode> EmoteKey;
         public readonly ConfigEntry<bool> EmoteHintShown;
+        public readonly ConfigEntry<bool> SharedWallet;
+        public readonly ConfigEntry<KeyCode> GiveKey;
+        public readonly ConfigEntry<bool> GiveHintShown;
 
         public CoopConfig(ConfigFile c)
         {
@@ -139,6 +142,9 @@ namespace SailwindCoop
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");
             EmoteKey = c.Bind("UI", "EmoteKey", KeyCode.G, "Hold to open the emote wheel, move the mouse to a gesture and release. Works only in a co-op session. Change it if the key is bound to something else in the game.");
+            SharedWallet = c.Bind("Economy", "SharedWallet", false, "Host: the whole crew uses the host's money. Every purchase, sale and reward of any player changes the host's wallet, and everyone sees the same balance. Guests' own money stays in their profiles and comes back when they leave or when this is turned off. Off: every player has a personal wallet and mission rewards are divided equally. Toggle it in the co-op menu (F8) while hosting.");
+            GiveKey = c.Bind("UI", "GiveKey", KeyCode.H, "Look at a crewmate standing next to you and hold this key to hold out money: the mouse wheel changes the amount, the middle mouse button changes the currency. The other player looks at you and presses the same key to take it. Change it if the key is bound to something else in the game.");
+            GiveHintShown = c.Bind("UI", "GiveHintShown", false, "The one-time on-screen hint about handing money over has been shown. Set to false to see it again.");
             EmoteHintShown = c.Bind("UI", "EmoteHintShown", false, "The one-time on-screen hint about the emote wheel has been shown. Set to false to see it again in the next session.");
         }
     }

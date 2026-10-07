@@ -57,6 +57,18 @@ internal static class Program
             ItemReliabilityTests.Run(Test);
             ModSharingTests.Run(Test);
             TunnelTests.Run(Test);
+            Test("a mission reward is divided equally and nothing is created or lost", () => {
+                foreach (int total in new[] { 0, 1, 3, 4, 100, 101, 999, 12345 })
+                    for (int players = 1; players <= 5; players++)
+                    {
+                        int each = SailwindCoop.Sync.WalletShare.Each(total, players);
+                        int host = SailwindCoop.Sync.WalletShare.HostKeeps(total, players);
+                        if (host + each * (players - 1) != total) throw new Exception("sum differs: " + total + "/" + players);
+                        if (host < each || host - each >= players) throw new Exception("uneven: " + total + "/" + players);
+                    }
+                if (SailwindCoop.Sync.WalletShare.Each(100, 4) != 25 || SailwindCoop.Sync.WalletShare.HostKeeps(101, 4) != 26)
+                    throw new Exception("known values");
+            });
             Test("world snapshot gzip round-trips and rejects a wrong length or a broken archive", () => {
                 var raw = new byte[300000];
                 for (int i = 0; i < raw.Length; i++) raw[i] = (byte)(i % 97 < 60 ? 0 : i * 31);

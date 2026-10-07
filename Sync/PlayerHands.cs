@@ -154,6 +154,10 @@ namespace SailwindCoop.Sync
         /// </summary>
         public bool RestoreBind;
 
+        /// <summary>Кость правой кисти или null.</summary>
+        public Transform RightHand => _right.Hand;
+        /// <summary>Кость правого предплечья (локоть) или null.</summary>
+        public Transform RightForearm => _right.Lower;
         public bool RightUsable => _right.Usable;
         public bool LeftUsable => _left.Usable;
         public float RightWeight => _right.Weight;

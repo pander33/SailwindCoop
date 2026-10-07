@@ -57,6 +57,7 @@ namespace SailwindCoop.Sync
             public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft / Lying
             public Vector3 LieHead, LieDir;       // last bed pose, in the frame of the player pose (boat or real)
             public Vector3 HandR, HandL;          // grip points in the avatar root's frame
+            public GameObject Coin;               // shown in the hand while the player offers money
             public EmoteId Emote;
             public long EmoteTick;                // host-clock start of the current emote
             public long EmoteVoicedTick;          // start tick of the emote whose shout was played
@@ -677,7 +678,8 @@ namespace SailwindCoop.Sync
             {
                 float emoteSecs = (tick - _emoteTick) / 1000f;
                 // Первые доли секунды шаг не считаем: иначе жест сбивала бы инерция остановки.
-                if (emoteSecs >= EmoteCatalog.Duration(_emote) || (emoteSecs > 0.3f && moveSpeed > EmoteCancelSpeed))
+                if (emoteSecs >= EmoteCatalog.Duration(_emote) ||
+                    (_emote != EmoteId.Offer && emoteSecs > 0.3f && moveSpeed > EmoteCancelSpeed))
                     _emote = EmoteId.None;
             }
 
@@ -772,6 +774,97 @@ namespace SailwindCoop.Sync
         /// <summary>Выкрик звучит, только если жест начался не раньше этого (мс): вошедший посреди
         /// жеста и запоздавший пакет его не повторяют.</summary>
         private const long EmoteVoiceWindowMs = 1500;
+
+        /// <summary>Держать жест, пока вызывается каждый кадр: запускает его, если он не идёт.</summary>
+        public void SustainEmote(EmoteId id)
+        {
+            if (_emote != id) StartEmote(id);
+        }
+
+        /// <summary>Снять жест, если идёт именно он.</summary>
+        public void StopEmote(EmoteId id)
+        {
+            if (_emote == id) _emote = EmoteId.None;
+        }
+
+        /// <summary>
+        /// The remote player the local camera looks at from close by: within
+        /// <paramref name="maxDistance"/> metres and <paramref name="maxAngleDeg"/> of the view axis.
+        /// </summary>
+        public bool TryAimedRemote(float maxDistance, float maxAngleDeg, out uint netId)
+        {
+            netId = 0;
+            Camera cam = PickRenderCamera();
+            if (cam == null) return false;
+            Vector3 eye = cam.transform.position, look = cam.transform.forward;
+            float best = maxAngleDeg;
+            foreach (var kv in _remotes)
+            {
+                RemoteAvatar a = kv.Value;
+                if (a.Go == null) continue;
+                // Chest height: the root of an avatar is at its feet.
+                Vector3 to = a.Go.transform.position + a.Go.transform.up * 1.2f - eye;
+                if (to.magnitude > maxDistance) continue;
+                float angle = Vector3.Angle(look, to);
+                if (angle >= best) continue;
+                best = angle;
+                netId = kv.Key;
+            }
+            return netId != 0;
+        }
+
+        /// <summary>Distance from the local camera to a remote player's chest, or -1 when it is not drawn.</summary>
+        public float DistanceToRemote(uint netId)
+        {
+            Camera cam = PickRenderCamera();
+            if (cam == null || !_remotes.TryGetValue(netId, out RemoteAvatar a) || a.Go == null) return -1f;
+            return Vector3.Distance(cam.transform.position, a.Go.transform.position + a.Go.transform.up * 1.2f);
+        }
+
+        private static Material _coinMaterial;
+
+        /// <summary>A coin in the right hand while the player holds out money.</summary>
+        private static void ShowCoin(RemoteAvatar a, AvatarArmIk ik, bool show)
+        {
+            if (!show || ik == null || ik.RightHand == null)
+            {
+                if (a.Coin != null && a.Coin.activeSelf) a.Coin.SetActive(false);
+                return;
+            }
+            if (a.Coin == null)
+            {
+                a.Coin = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                a.Coin.name = "CoopOfferCoin";
+                Object.DestroyImmediate(a.Coin.GetComponent<Collider>());   // at once: a collider would push things for a frame
+                a.Coin.layer = a.Go.layer;
+                a.Coin.transform.SetParent(a.Go.transform, false);
+                if (_coinMaterial == null)
+                    _coinMaterial = new Material(Shader.Find("Sprites/Default")) { color = new Color(0.95f, 0.76f, 0.22f) };
+                a.Coin.GetComponent<Renderer>().sharedMaterial = _coinMaterial;
+            }
+            if (!a.Coin.activeSelf) a.Coin.SetActive(true);
+            Transform root = a.Go.transform;
+            // The hand bone is the wrist. The coin lies further out, on the palm: along the forearm,
+            // by a part of its length, so the offset fits a model of any size. Bone axes and scale
+            // differ between models, hence world space.
+            Vector3 wrist = ik.RightHand.position;
+            Vector3 along = root.forward;
+            float forearm = 0.26f;
+            if (ik.RightForearm != null)
+            {
+                Vector3 bone = wrist - ik.RightForearm.position;
+                if (bone.sqrMagnitude > 1e-6f)
+                {
+                    forearm = bone.magnitude;
+                    along = bone / forearm;
+                }
+            }
+            a.Coin.transform.position = wrist + along * (forearm * 0.62f) + root.up * (forearm * 0.16f);
+            // Face up and tipped towards whoever stands in front, so it reads as a coin and not as a line.
+            a.Coin.transform.rotation = Quaternion.LookRotation(along, root.up) * Quaternion.Euler(-35f, 0f, 0f);
+            Vector3 s = root.lossyScale;
+            a.Coin.transform.localScale = new Vector3(0.06f / Mathf.Max(0.01f, s.x), 0.004f / Mathf.Max(0.01f, s.y), 0.06f / Mathf.Max(0.01f, s.z));
+        }
 
         /// <summary>Запустить жест локального игрока; новый жест заменяет идущий.</summary>
         public void StartEmote(EmoteId id)
@@ -1319,6 +1412,7 @@ namespace SailwindCoop.Sync
 
                 ik.SetTarget(true, right, rightTarget, rightEmote);
                 ik.SetTarget(false, left, leftTarget, leftEmote);
+                ShowCoin(a, ik, rightEmote && a.Emote == EmoteId.Offer);
             }
 
             if (a.Head != null && !a.HeadDrivenByAnimator && !lying)

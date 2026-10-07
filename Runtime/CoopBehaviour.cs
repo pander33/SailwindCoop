@@ -39,6 +39,7 @@ namespace SailwindCoop.Runtime
         public WeatherStormSync Storms { get; private set; }
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
+        public WalletSync Wallet { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
         public SaveTransferSync SaveTransfer { get; private set; }
         public ModSync Mods { get; private set; }
@@ -161,6 +162,7 @@ namespace SailwindCoop.Runtime
             Storms = new WeatherStormSync(Net);
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
+            Wallet = new WalletSync(Net);
             Shipyard = new ShipyardSync(Net);
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); };
@@ -257,6 +259,7 @@ namespace SailwindCoop.Runtime
                 WindTotem.ClearRemoteActor(netId);
                 Damage.ClearRemoteActor(netId);
                 Sleep.ClearRemoteActor(netId);
+                Wallet.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
                 Mods.ClearRemoteActor(netId);
                 Pause.Release(netId);
@@ -337,6 +340,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Storms.Tick", () => Storms.Tick(_dt)),
                 new SyncStep("Sleep.Tick", () => Sleep.Tick(Time.unscaledDeltaTime)),
                 new SyncStep("Missions.Tick", () => Missions.Tick(_dt)),
+                new SyncStep("Wallet.Tick", () => Wallet.Tick()),
                 new SyncStep("Controls.Tick", () => Controls.Tick(_dt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
                 new SyncStep("Anchor.Tick", () => Anchor.Tick(_dt)),
@@ -389,6 +393,21 @@ namespace SailwindCoop.Runtime
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Emote wheel failed", e, ref _emoteFailures);
+            }
+
+            try
+            {
+                bool handAllowed = EmoteWheelAllowed() && !_emoteWheel.IsOpen && Players.RemoteCount > 0 && !Wallet.Shared;
+                _moneyHand.Update(Plugin.Cfg.GiveKey.Value, handAllowed, Net, Wallet, Players);
+                if (handAllowed && WalletSync.Ready && !Plugin.Cfg.GiveHintShown.Value && _notifications != null)
+                {
+                    _notifications.Add("Look at a crewmate next to you and hold " + Plugin.Cfg.GiveKey.Value + " to hand them money", 10f);
+                    Plugin.Cfg.GiveHintShown.Value = true;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] Money hand failed", e, ref _moneyHandFailures);
             }
 
 #if !THUNDERSTORE
@@ -592,6 +611,21 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.MissionReward:
                     Missions.OnMissionReward((MissionRewardMsg)msg, fromPeer);
+                    break;
+                case MsgType.MoneyTransfer:
+                    Wallet.OnMoneyTransfer((MoneyTransferMsg)msg, fromPeer);
+                    break;
+                case MsgType.MoneyOffer:
+                    Wallet.OnMoneyOffer((MoneyOfferMsg)msg, fromPeer);
+                    break;
+                case MsgType.WalletState:
+                    Wallet.OnWalletState((WalletStateMsg)msg);
+                    break;
+                case MsgType.WalletDelta:
+                    Wallet.OnWalletDelta((WalletDeltaMsg)msg, fromPeer);
+                    break;
+                case MsgType.ShopTaken:
+                    Shop.OnShopTaken((ShopTakenMsg)msg, fromPeer);
                     break;
                 case MsgType.MissionAccept:
                     Missions.OnMissionAccept((MissionAcceptMsg)msg, fromPeer);
@@ -862,6 +896,8 @@ namespace SailwindCoop.Runtime
         private CoopLog.Repeat _guiFailures;
         private CoopLog.Repeat _emoteFailures;
         private readonly EmoteWheelUI _emoteWheel = new EmoteWheelUI();
+        private CoopLog.Repeat _moneyHandFailures;
+        private readonly MoneyHandUI _moneyHand = new MoneyHandUI();
 
         /// <summary>
         /// Колесо жестов доступно только в сессии, в загруженном мире и вне других меню. Уже
@@ -884,6 +920,7 @@ namespace SailwindCoop.Runtime
                 if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
                 _emoteWheel.Draw();
+                _moneyHand.Draw(_emoteWheel);
                 if (_notifications != null) _notifications.Draw();
                 if (_overlayVisible) _overlay.Draw();
                 if (Plugin.Cfg.EnableDebugPanel.Value) _debugPanel.Draw();
@@ -923,6 +960,7 @@ namespace SailwindCoop.Runtime
             Mods?.Reset();
             Shipyard?.Clear();
             Missions?.Clear();
+            Wallet?.Clear();
             Sleep?.Clear();
             Shop?.Clear();
             WindTotem?.Clear();
@@ -1179,6 +1217,7 @@ namespace SailwindCoop.Runtime
             _notifications?.Clear();
             Shipyard.Clear();
             Missions.Clear();
+            Wallet.Clear();
             Sleep.Clear();
             Shop.Clear();
             WindTotem.Clear();

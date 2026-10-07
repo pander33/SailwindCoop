@@ -125,6 +125,11 @@ namespace ProtocolSmoke
                 new SleepPresenceMsg { Flags = SleepPresenceMsg.InBed | SleepPresenceMsg.Wants | SleepPresenceMsg.Timeskip },
                 new ResyncRequestMsg { BoatIndex = 7, Domain = ResyncDomain.Damage },
                 new HouseDoorMsg { Door = 0x2A03, Open = true },
+                new MoneyTransferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Currency = 3, Amount = 1250, Returned = true },
+                new WalletStateMsg { Shared = true, AckSeq = 0x01020304, Currency = new[] { 120, 0, -5, 99999 } },
+                new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
+                new ShopTakenMsg { PrefabIndex = 137, Pos = new UnityEngine.Vector3(218.3f, 5.7f, -356f) },
+                new MoneyOfferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Kind = MoneyOfferKind.Take, Currency = 2, Amount = 75 },
                 new ModManifestMsg { DownloadAllowed = true, Mods = new[] {
                     new ModEntry { Folder = "SeaLifeMod", Downloadable = true,
                         Plugins = new[] { new ModPlugin { Guid = "com.example.sealife", Name = "Sea Life", Version = "1.2.0" } },

@@ -14,6 +14,8 @@ namespace SailwindCoop.Sync
         Shrug = 6,
         Hooray = 7,
         Point = 8,
+        /// <summary>Рука протянута с деньгами. Не из колеса: держится, пока игрок предлагает деньги.</summary>
+        Offer = 9,
     }
 
     /// <summary>Цели рук жеста в один момент времени.</summary>
@@ -67,6 +69,8 @@ namespace SailwindCoop.Sync
                 case EmoteId.Shrug: return 1.6f;
                 case EmoteId.Hooray: return 2.4f;
                 case EmoteId.Point: return 2.5f;
+                // Держится, пока его не снимет отправитель; предел — на случай потерянного снятия.
+                case EmoteId.Offer: return 120f;
                 default: return 0f;
             }
         }
@@ -98,6 +102,12 @@ namespace SailwindCoop.Sync
                 case EmoteId.Point:
                     pose.Right = true;
                     pose.RightArm = Pointing(lookPitchDeg);
+                    return true;
+
+                case EmoteId.Offer:
+                    // Ладонь вперёд на уровне груди, чуть покачивается.
+                    pose.Right = true;
+                    pose.RightArm = new Vector3(0.04f, -0.06f + 0.02f * Mathf.Sin(t * 2.5f), 0.82f);
                     return true;
 
                 case EmoteId.Salute:

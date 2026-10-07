@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using HarmonyLib;
 using SailwindCoop.Net;
+using UnityEngine;
 
 namespace SailwindCoop.Sync
 {
@@ -45,6 +46,95 @@ namespace SailwindCoop.Sync
         {
             ItemSync.Instance?.NotifySold(instanceId, prefabIndex);
             Remember("sold id=" + instanceId);
+        }
+
+        // -----------------------------------------------------------------
+        // Shelf stock. Each machine builds a shop's stock for itself, so an item bought on one machine
+        // would stay for sale on the others, next to the bought one.
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// How far apart the same shelf place may be measured on two machines. Kept below the gap
+        /// between neighbouring items of one kind (about 0.2 m on a crowded shelf): when the right
+        /// item is already gone here, its neighbour must not be taken instead.
+        /// </summary>
+        private const float ShelfTolerance = 0.15f;
+
+        private static readonly FieldInfo _fShopPos = typeof(ShipItem).GetField("shopPos", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo _fShopArea = typeof(ShipItem).GetField("shopArea", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        /// <summary>
+        /// The shelf place of an item that is for sale, in real space. The place, not where the item is
+        /// now: a player may be carrying an unsold item around the shop.
+        /// </summary>
+        public static bool ShelfPlace(ShipItem item, out Vector3 real)
+        {
+            real = Vector3.zero;
+            try
+            {
+                if (item == null || _fShopPos == null || _fShopArea == null) return false;
+                var area = _fShopArea.GetValue(item) as ShopArea;
+                if (area == null) return false;
+                real = CoordSpace.LocalToReal(area.transform.TransformPoint((Vector3)_fShopPos.GetValue(item)));
+                return true;
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ShopSync] shelf place unavailable: " + e.Message);
+                return false;
+            }
+        }
+
+        /// <summary>The local player bought the item of this shelf place: the others take theirs off sale.</summary>
+        public void OnShelfBought(int prefabIndex, Vector3 realPlace)
+        {
+            if (_net.Role == Role.None || _net.State != LinkState.Connected) return;
+            _net.Broadcast(new ShopTakenMsg { PrefabIndex = prefabIndex, Pos = realPlace }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
+
+        public void OnShopTaken(ShopTakenMsg msg, LiteNetLib.NetPeer fromPeer)
+        {
+            try
+            {
+                if (_net.Role == Role.Host) _net.RelayExcept(msg, fromPeer, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                ShipItem match = null;
+                ShopArea matchArea = null;
+                float best = ShelfTolerance;
+                foreach (ShopArea area in UnityEngine.Object.FindObjectsOfType<ShopArea>())
+                {
+                    if (area.itemsForSale == null) continue;
+                    foreach (ShipItem item in area.itemsForSale)
+                    {
+                        if (item == null || item.sold) continue;
+                        var prefab = item.GetComponent<SaveablePrefab>();
+                        if (prefab == null || prefab.prefabIndex != msg.PrefabIndex) continue;
+                        Vector3 place;
+                        if (!ShelfPlace(item, out place)) continue;
+                        float d = Vector3.Distance(place, msg.Pos);
+                        if (d >= best) continue;
+                        best = d;
+                        match = item;
+                        matchArea = area;
+                    }
+                }
+                if (match == null)
+                {
+                    // The island is not loaded here, or the place is already empty: nothing to take off.
+                    Plugin.Logger.LogInfo("[ShopSync] role=" + _net.Role + " shelf place not found prefab=" + msg.PrefabIndex);
+                    return;
+                }
+                matchArea.itemsForSale.Remove(match);
+                // This player may be looking the item over in hand: let go of it before it disappears,
+                // or the hand keeps a destroyed object.
+                if (match.held != null)
+                {
+                    try { match.held.DropItem(); }
+                    catch (Exception e) { Plugin.Logger.LogWarning("[ShopSync] drop before removal: " + e.Message); }
+                }
+                Remember("shelf item taken off sale '" + match.name + "' prefab=" + msg.PrefabIndex);
+                UnityEngine.Object.Destroy(match.gameObject);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShopSync] OnShopTaken: " + e.Message); }
         }
 
         public void Clear() { _last = "—"; }
@@ -93,17 +183,38 @@ namespace SailwindCoop.Sync
             }
         }
 
-        // Buy: record whether the good was already sold so the postfix can detect a fresh purchase.
-        private static void PreBuy(ShipItem item, out bool __state)
+        private sealed class BuyState
         {
-            __state = item != null && item.sold;
+            public bool WasSold;
+            public bool HasPlace;
+            public Vector3 Place;
+            public int PrefabIndex;
         }
 
-        private static void PostBuy(ShipItem item, bool __state)
+        // Buy: record whether the good was already sold so the postfix can detect a fresh purchase,
+        // and its shelf place, which the purchase forgets.
+        private static void PreBuy(ShipItem item, out BuyState __state)
+        {
+            __state = new BuyState { WasSold = true };
+            try
+            {
+                if (item == null) return;
+                __state.WasSold = item.sold;
+                var prefab = item.GetComponent<SaveablePrefab>();
+                if (prefab == null) return;
+                __state.PrefabIndex = prefab.prefabIndex;
+                __state.HasPlace = ShopSync.ShelfPlace(item, out __state.Place);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] PreBuy: " + e.Message); }
+        }
+
+        private static void PostBuy(ShipItem item, BuyState __state)
         {
             try
             {
-                if (item != null && item.sold && !__state) ShopSync.Instance?.OnBought(item);
+                if (item == null || !item.sold || __state == null || __state.WasSold) return;
+                ShopSync.Instance?.OnBought(item);
+                if (__state.HasPlace) ShopSync.Instance?.OnShelfBought(__state.PrefabIndex, __state.Place);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] PostBuy: " + e.Message); }
         }

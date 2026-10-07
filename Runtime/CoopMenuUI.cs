@@ -32,6 +32,7 @@ namespace SailwindCoop.Runtime
         private uint _kickConfirmNetId;
         private float _kickConfirmUntil;
         private Vector2 _scroll;
+        private bool _sharedWallet;
         private Sync.ModSyncView _modView;
 #if !THUNDERSTORE
         private bool _modSharing;
@@ -199,6 +200,7 @@ namespace SailwindCoop.Runtime
             RefreshSteamView();
 #endif
             _drawRoster = _net.RosterSnapshot;
+            _sharedWallet = _net.Role == Role.Host ? Plugin.Cfg.SharedWallet.Value : _coop.Wallet.Shared;
             _modView = _coop.Mods.BuildView();
 #if !THUNDERSTORE
             _modSharing = Plugin.Cfg.ShareMods.Value;
@@ -403,6 +405,7 @@ namespace SailwindCoop.Runtime
 #else
             GUILayout.Label("LAN, guests: " + _net.PeerCount, _muted);
 #endif
+            DrawWalletMode();
             GUILayout.Space(4f);
             float half = Split(2);
             GUILayout.BeginHorizontal();
@@ -420,6 +423,27 @@ namespace SailwindCoop.Runtime
             GUILayout.EndHorizontal();
         }
 
+        /// <summary>Host: whose money the crew spends. Both choices are always visible.</summary>
+        private void DrawWalletMode()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Money", _text, GUILayout.Width(92f), GUILayout.Height(22f));
+            if (GUILayout.Button("Personal", _sharedWallet ? _tab : _tabOn, GUILayout.Width(96f), GUILayout.Height(22f)))
+                SetSharedWallet(false);
+            if (GUILayout.Button("Shared", _sharedWallet ? _tabOn : _tab, GUILayout.Width(78f), GUILayout.Height(22f)))
+                SetSharedWallet(true);
+            GUILayout.EndHorizontal();
+            GUILayout.Label(_sharedWallet ? "Everyone spends and earns your money; all see one balance."
+                                          : "Each player has a wallet; mission rewards are divided equally.", _muted);
+        }
+
+        private void SetSharedWallet(bool shared)
+        {
+            if (Plugin.Cfg.SharedWallet.Value == shared) return;
+            Plugin.Cfg.SharedWallet.Value = shared;   // the session follows on its next tick
+            _status = shared ? "The crew now uses your money" : "Every player uses a personal wallet again";
+        }
+
         private void DrawSessionJoined()
         {
             GUILayout.Label("SESSION", _caption);
@@ -431,6 +455,8 @@ namespace SailwindCoop.Runtime
             GUILayout.Label("Connected to " + _joinIp + ":" + _port, _text);
             GUILayout.Label("LAN", _muted);
 #endif
+            GUILayout.Label(_sharedWallet ? "Money: the crew shares the host's wallet. Your own money is kept for you."
+                                          : "Money: personal wallets; mission rewards are divided equally.", _muted);
             GUILayout.Space(4f);
             if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight)))
             {

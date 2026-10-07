@@ -90,7 +90,7 @@ namespace SailwindCoop.Sync
         {
             // Use the currency-array path (playerGold==0 makes LoadGame read playerCurrency).
             c.playerGold = 0;
-            Try("currency", () => { c.playerCurrency = PlayerGold.currency; c.currentCurrency = GameState.currentCurrency; });
+            Try("currency", () => { c.playerCurrency = WalletSync.WalletForProfile; c.currentCurrency = GameState.currentCurrency; });
             Try("reputation", () => c.playerReputation = PlayerReputation.GetSaveData());
             Try("knownPrices", () => c.playerKnownPrices = GameState.playerKnownPrices);
             Try("tradeReceipts", () => c.tradeReceipts = TradeReceiptsUI.instance.GetData());

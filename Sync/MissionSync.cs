@@ -277,13 +277,43 @@ namespace SailwindCoop.Sync
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionDeliverResult: " + ex.Message); }
         }
 
-        /// <summary>Host: a delivery just paid out — forward the same amount to the client's own wallet.</summary>
+        /// <summary>
+        /// Host: a delivery just paid the whole reward into the host's wallet. It is divided equally
+        /// between the players who are in the world: every guest's part leaves the host's wallet and
+        /// goes to that guest's own. Reputation is not divided.
+        /// </summary>
         public void ForwardReward(MissionRewardMsg reward)
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
             if (reward == null || reward.Amount <= 0 || reward.Region < 0) return;
-            _net.Broadcast(reward, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogInfo("[MissionSync] out reward region=" + reward.Region + " amount=" + reward.Amount +
+            uint[] guests = _net.ReadyClientIds();
+            if (guests.Length == 0) return;
+            if (WalletSync.Instance != null && WalletSync.Instance.Shared)
+            {
+                // One wallet: the reward stays where the game put it. Guests still get the message
+                // for reputation, the mission log and the notification; they add no money.
+                foreach (uint guest in guests)
+                    _net.SendToPlayer(guest, reward, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Plugin.Logger.LogInfo("[MissionSync] out reward region=" + reward.Region + " total=" + reward.Amount +
+                                      " shared wallet rep=" + reward.RepAmount);
+                return;
+            }
+            int total = reward.Amount;
+            int players = guests.Length + 1;
+            int each = WalletShare.Each(total, players);
+            int hostKeeps = WalletShare.HostKeeps(total, players);
+            if (each > 0 && PlayerGold.currency != null && reward.Region < PlayerGold.currency.Length)
+            {
+                PlayerGold.currency[reward.Region] -= total - hostKeeps;
+                // The game has just shown the whole reward; show what actually stays.
+                try { MoneyNotification.instance?.PlayNotif(hostKeeps, reward.Region); } catch { }
+            }
+            reward.Amount = each;
+            reward.ExpectedReward = WalletShare.Each(reward.ExpectedReward, players);
+            foreach (uint guest in guests)
+                _net.SendToPlayer(guest, reward, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Plugin.Logger.LogInfo("[MissionSync] out reward region=" + reward.Region + " total=" + total +
+                                  " players=" + players + " each=" + each + " hostKeeps=" + hostKeeps +
                                   " rep=" + reward.RepAmount);
         }
 
@@ -294,7 +324,9 @@ namespace SailwindCoop.Sync
             {
                 if (PlayerGold.currency != null && msg.Region >= 0 && msg.Region < PlayerGold.currency.Length && msg.Amount > 0)
                 {
-                    PlayerGold.currency[msg.Region] += msg.Amount;
+                    // With a shared wallet the money is already in it and arrives as its new balance.
+                    bool shared = WalletSync.Instance != null && WalletSync.Instance.Shared;
+                    if (!shared) PlayerGold.currency[msg.Region] += msg.Amount;
                     if (msg.RepAmount != 0)
                     {
                         if (msg.OriginRegion >= 0) PlayerReputation.ChangeReputation(msg.RepAmount, (PortRegion)msg.OriginRegion);
