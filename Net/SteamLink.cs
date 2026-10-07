@@ -30,9 +30,6 @@ namespace SailwindCoop.Net
         /// <summary>Sailwind's Steam application id.</summary>
         public const uint AppId = 1764530;
 
-        /// <summary>This build contains the Steam transport (the Thunderstore edition does not).</summary>
-        public static readonly bool Available = true;
-
         public static bool Ready { get; private set; }
         /// <summary>Why Steam is unavailable, in the player's terms; empty when it is ready.</summary>
         public static string Error { get; private set; } = "";
@@ -121,6 +118,15 @@ namespace SailwindCoop.Net
         /// <summary>Client: Steam has said the host cannot be reached at all, so waiting is pointless.</summary>
         public static bool FailureIsFinal => Ready && Guarded(FailureIsFinalCore, false);
 
+        /// <summary>
+        /// The host the player asked to join through Steam itself ("Join Game" in the friends list or
+        /// an accepted invite), once; 0 when there is no request.
+        /// </summary>
+        public static ulong TakeJoinRequest()
+        {
+            return Ready ? Guarded(TakeJoinRequestCore, 0UL) : 0UL;
+        }
+
         /// <summary>The last peer-to-peer failure Steam reported, once.</summary>
         public static string TakeFailure()
         {
@@ -168,6 +174,7 @@ namespace SailwindCoop.Net
         [MethodImpl(MethodImplOptions.NoInlining)] private static void CloseCore() => SteamNative.Close();
         [MethodImpl(MethodImplOptions.NoInlining)] private static string TakeFailureCore() => SteamNative.TakeFailure();
         [MethodImpl(MethodImplOptions.NoInlining)] private static bool FailureIsFinalCore() => SteamNative.FailureIsFinal();
+        [MethodImpl(MethodImplOptions.NoInlining)] private static ulong TakeJoinRequestCore() => SteamNative.TakeJoinRequest();
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetFriendsOnlyCore(bool friendsOnly) => SteamNative.SetFriendsOnly(friendsOnly);
         [MethodImpl(MethodImplOptions.NoInlining)] private static void AdvertiseCore(bool open) => SteamNative.Advertise(open);
         [MethodImpl(MethodImplOptions.NoInlining)] private static void BlockCore(ulong id) => SteamNative.Block(id);
@@ -183,6 +190,9 @@ namespace SailwindCoop.Net
         private static bool _owned;     // we started the Steam client, so we shut it down
         private static bool _hooked;
         private static SteamRelay _relay;
+        /// <summary>Steam's reserved rich presence key: its value is handed to whoever joins through Steam.</summary>
+        private const string ConnectKey = "connect";
+        private static ulong _joinRequest;
         private static string _failure;
         private static bool _failureFinal;
         // Peers whose refusal is already in the log: a refused peer asks again with every packet.
@@ -211,6 +221,7 @@ namespace SailwindCoop.Net
             SteamNetworking.AllowP2PPacketRelay(true);
             SteamNetworking.OnP2PSessionRequest += OnSessionRequest;
             SteamNetworking.OnP2PConnectionFailed += OnConnectionFailed;
+            SteamFriends.OnGameRichPresenceJoinRequested += OnJoinRequested;
             _hooked = true;
         }
 
@@ -285,7 +296,7 @@ namespace SailwindCoop.Net
             _failureFinal = false;
             _refusalLogged.Clear();
             _relay = new SteamRelay(hostId, friendsOnly);
-            if (hostId == 0UL) SteamFriends.SetRichPresence(PresenceKey, Protocol.Version.ToString());
+            if (hostId == 0UL) Publish(true);
             return _relay;
         }
 
@@ -294,7 +305,7 @@ namespace SailwindCoop.Net
             SteamRelay relay = _relay;
             _relay = null;
             if (relay == null) return;
-            if (relay.HostId == 0UL) SteamFriends.SetRichPresence(PresenceKey, "");
+            if (relay.HostId == 0UL) Publish(false);
             _closing.AddRange(relay.CloseAll());
             _closingSince.Restart();
         }
@@ -321,7 +332,33 @@ namespace SailwindCoop.Net
         {
             SteamRelay relay = _relay;
             if (relay == null || relay.HostId != 0UL) return;
+            Publish(open);
+        }
+
+        /// <summary>
+        /// What friends see of a hosted session: our own key for the co-op menu, and Steam's reserved
+        /// <c>connect</c> key, which makes Steam offer "Join Game" and "Invite to Game" for this host.
+        /// </summary>
+        private static void Publish(bool open)
+        {
             SteamFriends.SetRichPresence(PresenceKey, open ? Protocol.Version.ToString() : "");
+            SteamFriends.SetRichPresence(ConnectKey, open ? SteamJoinLink.Format(SteamClient.SteamId) : "");
+        }
+
+        public static ulong TakeJoinRequest()
+        {
+            ulong request = _joinRequest;
+            _joinRequest = 0UL;
+            return request;
+        }
+
+        /// <summary>The player pressed "Join Game" on a friend, or accepted that friend's invite.</summary>
+        private static void OnJoinRequested(Friend friend, string connect)
+        {
+            ulong host = SteamJoinLink.Parse(connect);
+            Plugin.Logger.LogInfo("[Steam] Join requested through Steam: " + friend.Name + " (" + (ulong)friend.Id +
+                                  ")" + (host == 0UL ? ", not a co-op session" : ""));
+            if (host != 0UL) _joinRequest = host;
         }
 
         public static void Block(ulong id)
@@ -353,6 +390,7 @@ namespace SailwindCoop.Net
             {
                 SteamNetworking.OnP2PSessionRequest -= OnSessionRequest;
                 SteamNetworking.OnP2PConnectionFailed -= OnConnectionFailed;
+                SteamFriends.OnGameRichPresenceJoinRequested -= OnJoinRequested;
                 _hooked = false;
             }
             if (_owned) SteamClient.Shutdown();

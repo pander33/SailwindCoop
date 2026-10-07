@@ -115,6 +115,21 @@ internal static class TunnelTests
 
     internal static void Run(Action<string, Action> test)
     {
+        test("steam join link survives the two ways Steam hands it back", () => {
+            const ulong host = 76561198000000001UL;
+            string connect = SteamJoinLink.Format(host);
+            Assert(SteamJoinLink.Parse(connect) == host, "the callback form");
+            Assert(SteamJoinLink.Parse(new[] { "Sailwind.exe", "-screen-fullscreen", "0", SteamJoinLink.Token, host.ToString() }) == host,
+                   "the command line form");
+            Assert(SteamJoinLink.Parse("  " + connect.ToUpperInvariant() + "  ") == host, "case and padding");
+            Assert(SteamJoinLink.Parse((string)null) == 0 && SteamJoinLink.Parse("") == 0, "nothing");
+            Assert(SteamJoinLink.Parse((string[])null) == 0 && SteamJoinLink.Parse(new[] { SteamJoinLink.Token }) == 0, "no id");
+            Assert(SteamJoinLink.Parse("+connect 127.0.0.1:7777") == 0, "another game's connect string");
+            Assert(SteamJoinLink.Parse(SteamJoinLink.Token + " 12345") == 0, "not a SteamID64");
+            Assert(SteamJoinLink.Parse(SteamJoinLink.Token + " -7656119800000000") == 0, "a signed number");
+            Assert(SteamJoinLink.Parse(SteamJoinLink.Token + " 7656119800000000x") == 0, "trailing text");
+        });
+
         test("tunnel carries a LiteNetLib session over a lossy relay next to a direct LAN client", () => {
             var hub = new Hub { Loss = 0.1 };
             using (var host = new Node())

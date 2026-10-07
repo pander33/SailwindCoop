@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.3.0) uses **protocol 86**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.3.1) uses **protocol 86**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Editions
@@ -12,7 +12,7 @@ earlier protocol builds. Most features added since 0.1.6 still await end-to-end 
 The mod comes in two editions that use the same protocol and can play together. The **Thunderstore
 edition** plays over LAN or VPN and compares mods when joining. The **full edition** adds play over
 Steam and downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.3.0 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.3.1 (Thunderstore)`. Sections below that apply to one edition say so.
 
 ## Session Model
 
@@ -265,6 +265,11 @@ guest types the host's IP address. Steam mode needs no IP address, port forwardi
 - **Guest:** stay in the main menu, switch to **Steam**. Friends who are in Sailwind are listed;
   press **Join** next to the one marked `hosting`. A host who is not listed can be joined by typing
   their Steam ID (17 digits) into **Host ID**; the host copies it with **Copy ID**.
+- **Join Game in Steam:** a friend who hosts over Steam also has **Join Game** in your Steam friends
+  list, and the host can send you **Invite to Game** from there. Be at the main menu: a request
+  that arrives while you are in a world or hosting is refused with a notice. If the game is not
+  running, Steam starts it and the join begins when the title screen appears. For a running game
+  this works only while the F8 menu is in Steam mode.
 - **Friends only / Anyone** (host): by default only your Steam friends can connect, and joining by
   IP is refused. **Anyone** lets in whoever knows your Steam ID, and LAN players can join the same
   session by IP. The button works while the session is running; players already in stay.

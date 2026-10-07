@@ -50,11 +50,11 @@
 
   <ItemGroup Condition="'$(Edition)'=='Thunderstore'">
     <Compile Remove="Net\SteamLink.cs" />
+    <Compile Remove="Net\SteamJoinLink.cs" />
     <Compile Remove="Sync\ModSync.Download.cs" />
     <Compile Remove="Sync\ModTransfer.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(Edition)'!='Thunderstore'">
-    <Compile Remove="Net\SteamLinkStub.cs" />
     <Compile Remove="Sync\ModSync.NoDownload.cs" />
   </ItemGroup>
 

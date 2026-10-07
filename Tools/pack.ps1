@@ -70,12 +70,15 @@ function Pack([string]$name) {
         foreach ($file in $forbiddenInThunderstore) {
             if (Get-ChildItem $stage -Recurse -Filter $file) { Fail "$file is in the Thunderstore archive" }
         }
-        # The edition must not even mention the Steam wrapper it was built without.
+        # The edition must not even mention the Steam wrapper it was built without...
         $dll = [System.IO.File]::ReadAllBytes((Join-Path $stage 'SailwindCoop.dll'))
         $text = [System.Text.Encoding]::ASCII.GetString($dll)
-        foreach ($word in 'Facepunch', 'Steamworks', 'ModUpload') {
+        foreach ($word in 'Facepunch', 'Steamworks', 'ModUpload', 'SteamLink') {
             if ($text.Contains($word)) { Fail "the Thunderstore SailwindCoop.dll contains '$word'" }
         }
+        # ...nor carry the menu and log text of the features that were left out.
+        & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'scan-strings.ps1') (Join-Path $stage 'SailwindCoop.dll')
+        if ($LASTEXITCODE -ne 0) { Fail 'the Thunderstore SailwindCoop.dll contains Steam or download text (see above)' }
     }
     else {
         $full = $manifest | ConvertTo-Json -Depth 5 | ConvertFrom-Json

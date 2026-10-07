@@ -2,6 +2,45 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.3.1] - 2026-10-07
+
+### Added
+
+- **Two editions.** The Thunderstore edition plays over LAN or VPN and compares mods when joining;
+  it has no Steam mode and does not download mods. The full edition has both. The editions use the
+  same protocol and can play together. The status overlay title shows the edition.
+- **Join through Steam itself** (full edition). A friend who hosts over Steam has **Join Game** in
+  your Steam friends list, and the host can send **Invite to Game**. Do it from the main menu; if
+  the game is not running, Steam starts it and the join begins at the title screen.
+
+### Changed
+
+- With the menu left in Steam mode, the mod now connects to Steam a few seconds after the game
+  starts instead of when the menu is first opened. Steam can pass a join request only to a game
+  that is connected to it.
+- **Friends only** on a Steam host now also closes the LAN port: only Steam friends can join.
+  **Anyone** accepts players by Steam ID and LAN players on the UDP port. The button applies to a
+  session that is already running; players who are in stay.
+- A Steam player removed with **Kick** cannot rejoin until the host starts a new session.
+- Sessions over Steam wait 12 seconds without packets before dropping a player, instead of 5.
+- A locked or full Steam session is no longer shown to friends as one they can join.
+
+### Fixed
+
+- A Steam host could stop hearing a player after a connection failure until hosting was restarted.
+- Joining over Steam now fails at once when Steam reports that the host is not in the game, does
+  not own it or is offline, instead of waiting half a minute.
+- Quitting the game during a Steam session is seen by the others at once, not after a timeout.
+- A guest refused by a **Friends only** host is told that this is a possible reason.
+
+### Network
+
+- **Everyone must update.** The protocol is still `86`, but `0.3.1` and `0.3.0` refuse each other
+  at the handshake because the mod version differs.
+
+Not yet verified in game: both editions after the split, and every Steam change above (it needs
+two PCs with different Steam accounts).
+
 ## [0.3.0] - 2026-10-06
 
 ### Added
@@ -22,16 +61,12 @@ All notable user-facing changes are documented in this file.
   mode the host is reachable by Steam ID, and a joining player sees Steam friends who are in the
   game, with **Join** next to a friend who is hosting. No port forwarding or VPN is needed. Steam
   must be running, and each player needs their own Steam account that owns Sailwind.
-- LAN play itself is unchanged and does not need Steam.
-- By default a Steam host accepts only Steam friends and nobody through its LAN port
-  (`Steam/FriendsOnly`, the **Friends only** button). Switched to **Anyone**, it accepts players by
-  Steam ID and LAN players on its UDP port. The button also applies to a session that is running.
-- A Steam player removed with **Kick** cannot rejoin until the host starts a new session.
+- A Steam host still accepts LAN players on its UDP port. LAN play itself is unchanged and does not
+  need Steam.
+- By default a Steam host accepts only Steam friends (`Steam/FriendsOnly`, the **Friends only**
+  button).
 - The mod now ships two more files that must sit next to `SailwindCoop.dll`:
   `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.
-- **Two editions.** The Thunderstore edition plays over LAN or VPN and compares mods when joining;
-  it has no Steam mode and does not download mods. The full edition has both. The editions use the
-  same protocol and can play together. The status overlay title shows the edition.
 - **Teleport to boat.** A button in the F8 menu puts you back on the deck: where you last stood,
   next to the crew, or amidships. For a player who fell overboard or was left ashore.
 

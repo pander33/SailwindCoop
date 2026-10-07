@@ -33,12 +33,15 @@ namespace SailwindCoop.Runtime
         private float _kickConfirmUntil;
         private Vector2 _scroll;
         private Sync.ModSyncView _modView;
+#if !THUNDERSTORE
         private bool _modSharing;
+#endif
         private bool _debugTools;
         private bool _logging;
         private bool _restartPending;
         private string _restartMods = "";
 
+#if !THUNDERSTORE
         // Steam section. Everything the layout depends on is snapshotted once per Layout pass.
         private const int MaxFriendRows = 8;
         private bool _steamModeWanted;
@@ -52,6 +55,7 @@ namespace SailwindCoop.Runtime
         private string _steamJoinId;
         private SteamFriendInfo[] _friends = new SteamFriendInfo[0];
         private float _friendsRefreshAt;
+#endif
 
         // What the window is made of is decided once per Layout pass and kept for the Repaint that
         // follows: a control count that differs between the two passes is Unity's "Getting control
@@ -110,8 +114,10 @@ namespace SailwindCoop.Runtime
             _joinIp = Plugin.Cfg.JoinIp.Value;
             _port = Plugin.Cfg.Port.Value.ToString();
             _playerName = Plugin.Cfg.PlayerName.Value;
-            _steamModeWanted = SteamLink.Available && Plugin.Cfg.UseSteam.Value;
-            _steamJoinId = SteamLink.Available ? Plugin.Cfg.SteamJoinId.Value ?? "" : "";
+#if !THUNDERSTORE
+            _steamModeWanted = Plugin.Cfg.UseSteam.Value;
+            _steamJoinId = Plugin.Cfg.SteamJoinId.Value ?? "";
+#endif
         }
 
         public bool Visible
@@ -155,7 +161,7 @@ namespace SailwindCoop.Runtime
         /// why. Large, coloured, and with the one action that moves the player forward.</summary>
         private void DrawRestartBanner()
         {
-#if !THUNDERSTORE   // not part of the Thunderstore edition
+#if !THUNDERSTORE
             GUILayout.BeginVertical(_alertBox);
             GUILayout.Label("RESTART THE GAME TO JOIN", _alertTitle);
             GUILayout.Label("The host's mods were downloaded: " + _restartMods + ".\n" +
@@ -175,7 +181,7 @@ namespace SailwindCoop.Runtime
         /// <summary>The same notice while the menu is closed, so it cannot be dismissed by accident.</summary>
         private void DrawRestartReminder()
         {
-#if !THUNDERSTORE   // not part of the Thunderstore edition
+#if !THUNDERSTORE
             float w = Mathf.Min(560f, Screen.width - 20f);
             var rect = new Rect((Screen.width - w) * 0.5f, 18f, w, 58f);
             GUI.Box(rect, GUIContent.none, _alertBox);
@@ -188,10 +194,14 @@ namespace SailwindCoop.Runtime
 
         private void Snapshot()
         {
+#if !THUNDERSTORE
             RefreshSteamView();
+#endif
             _drawRoster = _net.RosterSnapshot;
             _modView = _coop.Mods.BuildView();
-            _modSharing = Sync.ModSync.DownloadSupported && Plugin.Cfg.ShareMods.Value;
+#if !THUNDERSTORE
+            _modSharing = Plugin.Cfg.ShareMods.Value;
+#endif
             _debugTools = Plugin.Cfg.EnableDebugPanel.Value;
             _logging = Plugin.Logger.Enabled;
 
@@ -292,13 +302,12 @@ namespace SailwindCoop.Runtime
             GUILayout.BeginHorizontal();
             GUILayout.Label("SESSION", _caption);
             GUILayout.FlexibleSpace();
-            if (SteamLink.Available)
-            {
-                if (GUILayout.Button("LAN", _steamMode ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f)))
-                    SetSteamMode(false);
-                if (GUILayout.Button("Steam", _steamMode ? _tabOn : _tab, GUILayout.Width(70f), GUILayout.Height(22f)))
-                    SetSteamMode(true);
-            }
+#if !THUNDERSTORE
+            if (GUILayout.Button("LAN", _steamMode ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f)))
+                SetSteamMode(false);
+            if (GUILayout.Button("Steam", _steamMode ? _tabOn : _tab, GUILayout.Width(70f), GUILayout.Height(22f)))
+                SetSteamMode(true);
+#endif
             GUILayout.EndHorizontal();
             GUILayout.Space(4f);
 
@@ -307,7 +316,19 @@ namespace SailwindCoop.Runtime
             _playerName = GUILayout.TextField(_playerName, 32, _textField, GUILayout.Height(FieldHeight));
             GUILayout.EndHorizontal();
 
-            if (!_steamMode)
+#if !THUNDERSTORE
+            if (_steamMode && !_steamReady)
+            {
+                GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
+                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+                    _steamInitTried = false;
+            }
+            else if (_steamMode)
+            {
+                DrawSteam();
+            }
+            else
+#endif
             {
                 GUILayout.BeginHorizontal();
                 GUILayout.Label("Host IP", _muted, GUILayout.Width(CaptionWidth));
@@ -315,16 +336,6 @@ namespace SailwindCoop.Runtime
                 GUILayout.Label("Port", _muted, GUILayout.Width(34f));
                 _port = GUILayout.TextField(_port, 5, _textField, GUILayout.Width(62f), GUILayout.Height(FieldHeight));
                 GUILayout.EndHorizontal();
-            }
-            else if (!_steamReady)
-            {
-                GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
-                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
-                    _steamInitTried = false;
-            }
-            else
-            {
-                DrawSteam();
             }
 
             GUILayout.Space(6f);
@@ -343,8 +354,10 @@ namespace SailwindCoop.Runtime
             {
                 if (GameState.playing)
                     _status = "Return to the main menu before reconnecting";
+#if !THUNDERSTORE
                 else if (_steamMode)
                     JoinSteamFromField();
+#endif
                 else if (TryApplyConnectionFields(out int reconnectPort))
                 {
                     _coop.ReconnectSession(_joinIp.Trim(), reconnectPort);
@@ -362,8 +375,12 @@ namespace SailwindCoop.Runtime
         private void DrawSessionConnecting()
         {
             GUILayout.Label("SESSION", _caption);
+#if !THUNDERSTORE
             GUILayout.Label(_net.OverSteam ? "Connecting to " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")..."
                                            : "Connecting to " + _joinIp + ":" + _port + "...", _text);
+#else
+            GUILayout.Label("Connecting to " + _joinIp + ":" + _port + "...", _text);
+#endif
             GUILayout.Space(4f);
             if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(Split(3)), GUILayout.Height(ButtonHeight)))
             {
@@ -376,10 +393,14 @@ namespace SailwindCoop.Runtime
         {
             GUILayout.Label("SESSION", _caption);
             GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value + (_net.AcceptingClients ? "" : " - locked"), _text);
+#if !THUNDERSTORE
             GUILayout.Label((!_net.OverSteam ? "LAN"
                              : _net.SteamFriendsOnly ? "Steam friends only (" + _net.TransportStatus + ")"
                              : "LAN and Steam (" + _net.TransportStatus + ")") +
                             ", guests: " + _net.PeerCount, _muted);
+#else
+            GUILayout.Label("LAN, guests: " + _net.PeerCount, _muted);
+#endif
             GUILayout.Space(4f);
             float half = Split(2);
             GUILayout.BeginHorizontal();
@@ -400,9 +421,14 @@ namespace SailwindCoop.Runtime
         private void DrawSessionJoined()
         {
             GUILayout.Label("SESSION", _caption);
+#if !THUNDERSTORE
             GUILayout.Label(_net.OverSteam ? "Connected to " + _net.HostLabel + " over Steam"
                                            : "Connected to " + _joinIp + ":" + _port, _text);
             GUILayout.Label(_net.OverSteam ? _net.TransportStatus : "LAN", _muted);
+#else
+            GUILayout.Label("Connected to " + _joinIp + ":" + _port, _text);
+            GUILayout.Label("LAN", _muted);
+#endif
             GUILayout.Space(4f);
             if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight)))
             {
@@ -418,15 +444,17 @@ namespace SailwindCoop.Runtime
             GUILayout.Label(_modView.Text ?? "", _muted);
             if (_modView.Deciding)
             {
-                float third = Split(Sync.ModSync.DownloadSupported ? 3 : 2);
+#if !THUNDERSTORE
+                float third = Split(3);
                 GUILayout.BeginHorizontal();
-                if (Sync.ModSync.DownloadSupported)
-                {
-                    GUI.enabled = _modView.CanDownload;
-                    if (GUILayout.Button(_modView.DownloadLabel, _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
-                        _coop.Mods.Download();
-                    GUI.enabled = true;
-                }
+                GUI.enabled = _modView.CanDownload;
+                if (GUILayout.Button(_modView.DownloadLabel, _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+                    _coop.Mods.Download();
+                GUI.enabled = true;
+#else
+                float third = Split(2);
+                GUILayout.BeginHorizontal();
+#endif
                 if (GUILayout.Button("Join anyway", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
                     _coop.Mods.JoinAnyway();
                 if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
@@ -574,9 +602,9 @@ namespace SailwindCoop.Runtime
             GUILayout.BeginHorizontal();
             GUILayout.Label("MODS", _caption);
             GUILayout.FlexibleSpace();
+#if !THUNDERSTORE
             GUI.enabled = _net.Role != Role.Client;
-            if (Sync.ModSync.DownloadSupported &&
-                GUILayout.Button(_modSharing ? "Sharing: ON" : "Sharing: off", _modSharing ? _tabOn : _tab,
+            if (GUILayout.Button(_modSharing ? "Sharing: ON" : "Sharing: off", _modSharing ? _tabOn : _tab,
                                  GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
             {
                 Plugin.Cfg.ShareMods.Value = !_modSharing;
@@ -585,6 +613,7 @@ namespace SailwindCoop.Runtime
                     : "Joining players can no longer download your mods";
             }
             GUI.enabled = true;
+#endif
             GUILayout.EndHorizontal();
             GUILayout.Label(string.IsNullOrEmpty(_modView.Text) ? "Mods are compared with the host when you join." : _modView.Text, _muted);
             GUILayout.EndVertical();
@@ -641,6 +670,7 @@ namespace SailwindCoop.Runtime
 
         private void RefreshSteamView()
         {
+#if !THUNDERSTORE
             _steamMode = _steamModeWanted;
             if (!_steamMode) return;
             // Steam is started only here: on the first frame the menu is shown in Steam mode.
@@ -658,18 +688,32 @@ namespace SailwindCoop.Runtime
             _steamMyId = SteamLink.MyId;
             _steamSelf = SteamLink.MyName;
             _friends = SteamLink.FriendsInGame();
+#endif
         }
+
+#if !THUNDERSTORE
+        /// <summary>A join started outside the menu ("Join Game" in Steam): show it as the menu's own.</summary>
+        public void ShowSteamJoin(ulong hostId)
+        {
+            _steamModeWanted = true;
+            _steamJoinId = hostId.ToString();
+            _status = "Joining through Steam: " + (string.IsNullOrEmpty(_net.HostLabel) ? _steamJoinId : _net.HostLabel);
+            Visible = true;
+        }
+#endif
 
         private void SetSteamMode(bool steam)
         {
+#if !THUNDERSTORE
             _steamModeWanted = steam;
             Plugin.Cfg.UseSteam.Value = steam;
             if (steam) _steamInitTried = false;
+#endif
         }
 
         private void DrawSteam()
         {
-#if !THUNDERSTORE   // not part of the Thunderstore edition
+#if !THUNDERSTORE
             GUILayout.BeginHorizontal();
             GUILayout.Label("Host ID", _muted, GUILayout.Width(CaptionWidth));
             _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(FieldHeight));
@@ -718,7 +762,7 @@ namespace SailwindCoop.Runtime
 
         private void JoinSteamFromField()
         {
-#if !THUNDERSTORE   // not part of the Thunderstore edition
+#if !THUNDERSTORE
             string text = (_steamJoinId ?? "").Trim();
             if (!ulong.TryParse(text, out ulong hostId) || hostId == 0UL)
             {
@@ -735,18 +779,25 @@ namespace SailwindCoop.Runtime
         private void StartHost()
         {
             if (!TryApplyConnectionFields(out int port)) return;
+#if !THUNDERSTORE
             bool steam = _steamMode && _steamReady;
             _coop.StartHostSession(port, steam);
             _status = steam ? "Host started (Steam + LAN)" : "Host started";
+#else
+            _coop.StartHostSession(port);
+            _status = "Host started";
+#endif
         }
 
         private void Join()
         {
+#if !THUNDERSTORE
             if (_steamMode)
             {
                 JoinSteamFromField();
                 return;
             }
+#endif
             if (!TryApplyConnectionFields(out int port)) return;
             _coop.StartClientSession(_joinIp.Trim(), port);
             _status = "Connecting to " + _joinIp.Trim() + ":" + port;
@@ -763,9 +814,11 @@ namespace SailwindCoop.Runtime
             }
 
             string name = string.IsNullOrWhiteSpace(_playerName) ? "Player" : _playerName.Trim();
+#if !THUNDERSTORE
             // An untouched default name is replaced by the Steam persona name when Steam is in use.
             if (_steamMode && _steamReady && name == "Player" && !string.IsNullOrWhiteSpace(_steamSelf))
                 name = _steamSelf.Trim();
+#endif
             Plugin.Cfg.JoinIp.Value = ip;
             Plugin.Cfg.Port.Value = port;
             Plugin.Cfg.PlayerName.Value = name;

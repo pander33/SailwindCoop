@@ -391,6 +391,14 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Emote wheel failed", e, ref _emoteFailures);
             }
 
+#if !THUNDERSTORE
+            try { TickSteamJoin(); }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] Steam join request failed", e, ref _steamJoinFailures);
+            }
+#endif
+
             try { using (InteractionContext.Begin(InteractionSource.RemoteApply)) Net.PollEvents(); }
             catch (System.Exception e)
             {
@@ -936,7 +944,9 @@ namespace SailwindCoop.Runtime
             Pause?.Clear();
             HostPause?.Clear();
             Net?.Stop();
+#if !THUNDERSTORE
             SteamLink.Shutdown();
+#endif
             _notifications?.Clear();
             _harmony?.UnpatchSelf();
         }
@@ -945,7 +955,9 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("quit");
             Net?.Stop();
+#if !THUNDERSTORE
             SteamLink.Shutdown();
+#endif
         }
 
         private void SaveClientProfileBeforeStop(string reason)
@@ -1012,13 +1024,20 @@ namespace SailwindCoop.Runtime
         public void StartHostSession(int port, bool steam = false)
         {
             if (SessionBlocked()) return;
+#if !THUNDERSTORE
             Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
+#else
+            Plugin.Logger.LogInfo("[Coop] Starting host via UI");
+#endif
             TeardownSession("start-host", saveClientProfile: true);
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
+#if !THUNDERSTORE
             if (steam) Net.StartSteamHost(port, Plugin.Cfg.SteamFriendsOnly.Value);
-            else Net.StartHost(port);
+            else
+#endif
+            Net.StartHost(port);
             if (Net.Role == Role.Host) Mods.BeginHost();
             NoticeFaultedPatchSets();
         }
@@ -1036,6 +1055,86 @@ namespace SailwindCoop.Runtime
             NoticeFaultedPatchSets();
         }
 
+#if !THUNDERSTORE
+        // "Join Game" in the Steam friends list, or an accepted Steam invite. Steam gives the host's id
+        // to a running game through a callback, and to a game it starts as command line arguments.
+        private const float SteamStartDelay = 3f;      // let the game finish its own start-up first
+        private const float SteamJoinPatience = 120f;  // how long a request waits for the title screen
+        private bool _steamStartChecked;
+        private ulong _steamJoinHost;
+        private float _steamJoinSince;
+        private float _steamJoinNextTry;
+        private CoopLog.Repeat _steamJoinFailures;
+
+        private void TickSteamJoin()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (!_steamStartChecked && now >= SteamStartDelay)
+            {
+                _steamStartChecked = true;
+                ulong launched = SteamJoinLink.Parse(System.Environment.GetCommandLineArgs());
+                if (launched != 0UL)
+                {
+                    Plugin.Logger.LogInfo("[Coop] Started by Steam to join " + launched);
+                    _steamJoinHost = launched;
+                    _steamJoinSince = now;
+                }
+                // Steam can deliver a join request only to a game that talks to it. A player who uses
+                // the Steam mode gets that from the start, not from the first opening of the menu.
+                if (launched != 0UL || Plugin.Cfg.UseSteam.Value) SteamLink.EnsureReady();
+            }
+
+            ulong asked = SteamLink.TakeJoinRequest();
+            if (asked != 0UL)
+            {
+                _steamJoinHost = asked;
+                _steamJoinSince = now;
+                _steamJoinNextTry = 0f;
+            }
+            if (_steamJoinHost == 0UL || now < _steamJoinNextTry) return;
+            _steamJoinNextTry = now + 1f;
+
+            ulong host = _steamJoinHost;
+            if (Net.Role == Role.Host)
+            {
+                _steamJoinHost = 0UL;
+                Notice("You are hosting. Stop the session (" + Plugin.Cfg.MenuKey.Value + ") before joining a friend through Steam.");
+                return;
+            }
+            if (GameState.playing || GameState.currentlyLoading)
+            {
+                _steamJoinHost = 0UL;
+                Notice("Return to the main menu, then join your friend through Steam again.");
+                return;
+            }
+            // A game started by Steam is still on its way to the title screen.
+            if (UnityEngine.Object.FindObjectOfType<StartMenu>() == null)
+            {
+                if (now - _steamJoinSince > SteamJoinPatience)
+                {
+                    _steamJoinHost = 0UL;
+                    Notice("The Steam join request expired before the main menu appeared. Join from the co-op menu.");
+                }
+                return;
+            }
+
+            _steamJoinHost = 0UL;
+            if (!SteamLink.EnsureReady())
+            {
+                Notice("Cannot join through Steam: " + SteamLink.Error);
+                return;
+            }
+            Plugin.Cfg.UseSteam.Value = true;
+            Plugin.Cfg.SteamJoinId.Value = host.ToString();
+            // The same rule as the menu's Join: an untouched default name becomes the Steam name.
+            string persona = SteamLink.MyName;
+            if (Net.PlayerName == "Player" && !string.IsNullOrWhiteSpace(persona)) Net.PlayerName = persona.Trim();
+            Plugin.Logger.LogInfo("[Coop] Joining " + host + " on a request from Steam");
+            StartSteamClientSession(host);
+            // Not started when co-op is blocked or a restart is pending; that case has its own notice.
+            if (_menuUI != null && Net.Role == Role.Client) _menuUI.ShowSteamJoin(host);
+        }
+
         public void StartSteamClientSession(ulong hostSteamId)
         {
             if (SessionBlocked() || RestartPending()) return;
@@ -1048,6 +1147,7 @@ namespace SailwindCoop.Runtime
             Net.StartSteamClient(hostSteamId);
             NoticeFaultedPatchSets();
         }
+#endif
 
         public void ReconnectSession(string ip, int port)
         {

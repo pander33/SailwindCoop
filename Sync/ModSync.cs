@@ -86,8 +86,12 @@ namespace SailwindCoop.Sync
                 var mods = ModCatalog.Build(PluginsRoot, LoadedPlugins(), Excluded(),
                     text => Plugin.Logger.LogWarning("[Mods] role=Host " + text));
                 _hostMods = mods.ToArray();
+#if !THUNDERSTORE
                 Plugin.Logger.LogInfo("[Mods] role=Host manifest built: " + _hostMods.Length + " mods, sharing " +
                                       (HostOffersDownloads ? "on" : "off"));
+#else
+                Plugin.Logger.LogInfo("[Mods] role=Host manifest built: " + _hostMods.Length + " mods");
+#endif
             }
             catch (Exception e)
             {
@@ -201,6 +205,7 @@ namespace SailwindCoop.Sync
                 DropDownload();
                 _downloadAllowed = msg.DownloadAllowed;
                 var mods = new List<ModEntry>(msg.Mods);
+#if !THUNDERSTORE
                 foreach (ModEntry entry in mods)
                 {
                     string problem = ModPathRules.Validate(entry);
@@ -209,6 +214,7 @@ namespace SailwindCoop.Sync
                                              "' has an invalid " + problem + "; it cannot be downloaded");
                     entry.Downloadable = false;
                 }
+#endif
                 List<LoadedPlugin> local = LoadedPlugins();
                 _diffs = ModCatalog.Compare(mods, PluginsRoot, local);
                 _localOnly = ModCatalog.LocalOnly(mods, local, Excluded());
@@ -291,14 +297,21 @@ namespace SailwindCoop.Sync
 
         public ModSyncView BuildView()
         {
+#if !THUNDERSTORE
             var view = new ModSyncView { Text = _message ?? "", DownloadLabel = "Download" };
+#else
+            var view = new ModSyncView { Text = _message ?? "" };
+#endif
             if (_net.Role == Role.Host)
             {
+#if !THUNDERSTORE
                 view.Text = _hostMods.Length == 0 ? "No mods to tell joining players about."
                     : (HostOffersDownloads ? "Joining players can download: "
-                       : DownloadSupported ? "Joining players are told about (downloads off): "
-                       : "Joining players are told which of these they lack: ") +
-                      Names(_hostMods);
+                       : "Joining players are told about (downloads off): ") + Names(_hostMods);
+#else
+                view.Text = _hostMods.Length == 0 ? "No mods to tell joining players about."
+                    : "Joining players are told which of these they lack: " + Names(_hostMods);
+#endif
                 return view;
             }
             if (_phase == Phase.Downloading && DownloadProgress(out string progress))
@@ -306,12 +319,14 @@ namespace SailwindCoop.Sync
                 view.Text = progress;
                 return view;
             }
+#if !THUNDERSTORE
             if (_phase == Phase.RestartRequired)
             {
                 // The restart notice at the top of the menu carries the instructions.
                 view.Text = "Installed, waiting for a game restart: " + _installedNames;
                 return view;
             }
+#endif
             if (_phase != Phase.Deciding && _phase != Phase.Failed) return view;
 
             var text = new StringBuilder();
