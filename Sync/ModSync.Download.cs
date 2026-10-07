@@ -11,13 +11,10 @@ namespace SailwindCoop.Sync
     /// <summary>
     /// The file transfer half of <see cref="ModSync"/>: the host streams the files of a mod a client
     /// lacks, the client stages, checks and installs them. Full edition only; the Thunderstore edition
-    /// compiles <c>ModSync.NoDownload.cs</c> in its place and contains none of this.
+    /// does not compile this file and <c>ModSync.cs</c> calls into it only under <c>#if !THUNDERSTORE</c>.
     /// </summary>
     public sealed partial class ModSync
     {
-        /// <summary>This build can send and receive mod files.</summary>
-        public static readonly bool DownloadSupported = true;
-
         private static bool HostOffersDownloads => Plugin.Cfg.ShareMods.Value;
 
         private const int ChunksPerFrame = 8;
@@ -55,7 +52,7 @@ namespace SailwindCoop.Sync
                 if (!Plugin.Cfg.ShareMods.Value) throw new InvalidOperationException("mod sharing is off");
                 if (msg.Mod >= _hostMods.Length) throw new IndexOutOfRangeException("mod index " + msg.Mod);
                 ModEntry entry = _hostMods[msg.Mod];
-                if (!entry.Downloadable || msg.File >= entry.Files.Length)
+                if (!entry.Complete || msg.File >= entry.Files.Length)
                     throw new IndexOutOfRangeException("file index " + msg.File + " of mod " + msg.Mod);
                 string root = string.IsNullOrEmpty(entry.Folder) ? PluginsRoot : Path.Combine(PluginsRoot, entry.Folder);
                 string path = ModPathRules.Resolve(root, entry.Files[msg.File].Path);
@@ -117,7 +114,7 @@ namespace SailwindCoop.Sync
             {
                 var wanted = new List<KeyValuePair<int, ModEntry>>();
                 foreach (ModDiff diff in _diffs)
-                    if (diff.Kind == ModDiffKind.Missing && diff.Entry.Downloadable)
+                    if (diff.Kind == ModDiffKind.Missing && diff.Entry.Complete)
                         wanted.Add(new KeyValuePair<int, ModEntry>(diff.Index, diff.Entry));
                 _download = new ModDownload(StagingRoot, PluginsRoot, wanted);
                 _phase = Phase.Downloading;
@@ -197,7 +194,7 @@ namespace SailwindCoop.Sync
             mods = 0; bytes = 0;
             foreach (ModDiff diff in _diffs)
             {
-                if (diff.Kind != ModDiffKind.Missing || !diff.Entry.Downloadable) continue;
+                if (diff.Kind != ModDiffKind.Missing || !diff.Entry.Complete) continue;
                 mods++; bytes += diff.Entry.TotalBytes;
             }
             return mods > 0 && _downloadAllowed && Plugin.Cfg.AllowModDownload.Value;

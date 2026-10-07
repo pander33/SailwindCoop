@@ -19,7 +19,7 @@ namespace SailwindCoop.Sync
 
         /// <summary>Opens the file. Throws when it no longer has the size the manifest promised:
         /// the client would reject it by hash anyway, after downloading all of it.</summary>
-        public ModUpload(string path, ModFile file, ushort mod, ushort fileIndex)
+        public ModUpload(string path, ModListFile file, ushort mod, ushort fileIndex)
         {
             Mod = mod; File = fileIndex; _size = file.Size;
             _stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -80,7 +80,7 @@ namespace SailwindCoop.Sync
             foreach (var mod in wanted)
             {
                 string problem = ModPathRules.Validate(mod.Value);
-                if (problem == null && !mod.Value.Downloadable) problem = "not offered for download";
+                if (problem == null && !mod.Value.Complete) problem = "not offered for download";
                 if (problem == null && mod.Value.Files.Length == 0) problem = "no files";
                 if (problem != null) throw new InvalidDataException("mod '" + mod.Value.DisplayName + "': " + problem);
                 _mods.Add(mod);
@@ -111,7 +111,7 @@ namespace SailwindCoop.Sync
 
         public void OnChunk(ushort mod, ushort file, int index, byte[] data)
         {
-            ModFile expected = Current(mod, file);
+            ModListFile expected = Current(mod, file);
             int size = Math.Min(ModLimits.ChunkSize, expected.Size - _received);
             if (index != _nextChunk || data == null || data.Length != size || size == 0)
                 throw new InvalidDataException("unexpected chunk " + index + " of '" + expected.Path + "'");
@@ -124,7 +124,7 @@ namespace SailwindCoop.Sync
         /// or the bytes do not match the manifest.</summary>
         public void OnEnd(ushort mod, ushort file, bool ok)
         {
-            ModFile expected = Current(mod, file);
+            ModListFile expected = Current(mod, file);
             if (!ok) throw new InvalidDataException("the host could not send '" + expected.Path + "'");
             if (_received != expected.Size)
                 throw new InvalidDataException("'" + expected.Path + "' is incomplete (" + _received + " of " + expected.Size + " bytes)");
@@ -191,7 +191,7 @@ namespace SailwindCoop.Sync
 
         private string StageRoot(int position) => Path.Combine(_staging, position.ToString());
 
-        private ModFile Current(ushort mod, ushort file)
+        private ModListFile Current(ushort mod, ushort file)
         {
             if (_stream == null || _mod >= _mods.Count || _mods[_mod].Key != mod || _file != file)
                 throw new InvalidDataException("data for a file that was not requested (mod " + mod + ", file " + file + ")");

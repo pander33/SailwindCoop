@@ -41,7 +41,11 @@ namespace SailwindCoop.Sync
     /// </summary>
     public static class ModCatalog
     {
-        public const string MarkerFile = ".coop-installed.json";
+        /// <summary>Files this mod writes into another mod's folder start with this; never listed.</summary>
+        public const string MarkerPrefix = ".coop-";
+#if !THUNDERSTORE
+        public const string MarkerFile = MarkerPrefix + "installed.json";
+#endif
 
         /// <summary>Where a plugin's mod starts: its top-level folder under <paramref name="pluginsRoot"/>
         /// (<paramref name="folder"/> set), or the DLL itself when it sits directly in the root
@@ -88,7 +92,7 @@ namespace SailwindCoop.Sync
                 if (excludedUnits.Contains(unit.Key)) continue;
                 if (result.Count >= ModLimits.MaxMods)
                 {
-                    log?.Invoke("mod list is full (" + ModLimits.MaxMods + "); '" + unit.Key + "' is not shared");
+                    log?.Invoke("mod list is full (" + ModLimits.MaxMods + "); '" + unit.Key + "' is not listed");
                     continue;
                 }
                 try
@@ -107,7 +111,7 @@ namespace SailwindCoop.Sync
                 }
                 catch (Exception e)
                 {
-                    log?.Invoke("mod '" + unit.Key + "' could not be read and is not shared: " + e.Message);
+                    log?.Invoke("mod '" + unit.Key + "' could not be read and is not listed: " + e.Message);
                 }
             }
             return result;
@@ -121,8 +125,8 @@ namespace SailwindCoop.Sync
             return new ModEntry
             {
                 Folder = "",
-                Downloadable = true,
-                Files = new[] { new ModFile { Path = fileName, Size = (int)info.Length, Hash = HashFile(info.FullName) } },
+                Complete = true,
+                Files = new[] { new ModListFile { Path = fileName, Size = (int)info.Length, Hash = HashFile(info.FullName) } },
             };
         }
 
@@ -148,10 +152,10 @@ namespace SailwindCoop.Sync
             if (paths.Count > ModLimits.MaxFilesPerMod) reason = reason ?? paths.Count + " files";
             if (total > ModLimits.MaxModBytes) reason = reason ?? "total size";
 
-            var entry = new ModEntry { Folder = folder, Downloadable = reason == null };
+            var entry = new ModEntry { Folder = folder, Complete = reason == null };
             if (reason != null)
                 log?.Invoke("mod '" + folder + "' is listed for comparison only (" + reason + ")");
-            var files = new List<ModFile>();
+            var files = new List<ModListFile>();
             string[] order = paths.ToArray();
             long[] orderSizes = sizes.ToArray();
             Array.Sort(order, orderSizes, StringComparer.Ordinal);
@@ -160,7 +164,7 @@ namespace SailwindCoop.Sync
                 // Comparison-only entries keep just the DLLs: that is all the diff reads.
                 if (reason != null && (!IsDll(order[i]) || !ModPathRules.IsSafeRelativePath(order[i]) ||
                                        orderSizes[i] > ModLimits.MaxFileBytes)) continue;
-                files.Add(new ModFile
+                files.Add(new ModListFile
                 {
                     Path = order[i],
                     Size = (int)orderSizes[i],
@@ -229,7 +233,7 @@ namespace SailwindCoop.Sync
         {
             if (anchor == null || !TryUnit(pluginsRoot, anchor.Location, out string folder, out string relative)) return true;
             string anchorName = Path.GetFileName(anchor.Location);
-            foreach (ModFile file in entry.Files)
+            foreach (ModListFile file in entry.Files)
             {
                 if (!IsDll(file.Path)) continue;
                 try
@@ -278,11 +282,12 @@ namespace SailwindCoop.Sync
 
         public static bool IsDll(string path) => path != null && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
 
-        /// <summary>Files that never travel: debug symbols and our own install marker.</summary>
+        /// <summary>Files that are never listed: debug symbols and this mod's own marker files.</summary>
         private static bool Skipped(string relative)
         {
+            string name = relative.Substring(relative.LastIndexOfAny(new[] { '/', '\\' }) + 1);
             return relative.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase) ||
-                   relative.EndsWith(MarkerFile, StringComparison.OrdinalIgnoreCase);
+                   name.StartsWith(MarkerPrefix, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool Contains(ICollection<string> guids, string guid)

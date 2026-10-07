@@ -28,7 +28,7 @@ namespace SailwindCoop.Net
 
     /// <summary>One file of a shared mod. <see cref="Path"/> is relative to the mod's folder and
     /// uses '/' on the wire.</summary>
-    public sealed class ModFile
+    public sealed class ModListFile
     {
         public string Path = "";
         public int Size;
@@ -44,9 +44,9 @@ namespace SailwindCoop.Net
         public string Folder = "";
         /// <summary>False when the host listed the mod for comparison only (too large, too many
         /// files, an unsafe file name): <see cref="Files"/> then holds its DLLs alone.</summary>
-        public bool Downloadable;
+        public bool Complete;
         public ModPlugin[] Plugins = new ModPlugin[0];
-        public ModFile[] Files = new ModFile[0];
+        public ModListFile[] Files = new ModListFile[0];
 
         public string DisplayName
         {
@@ -109,11 +109,11 @@ namespace SailwindCoop.Net
         public static string Resolve(string root, string relativePath)
         {
             if (!IsSafeRelativePath(relativePath))
-                throw new InvalidDataException("unsafe mod file path: " + relativePath);
+                throw new InvalidDataException("unsafe path in the mod list: " + relativePath);
             string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string full = Path.GetFullPath(Path.Combine(fullRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
             if (!full.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("mod file path leaves its folder: " + relativePath);
+                throw new InvalidDataException("mod list path leaves its folder: " + relativePath);
             return full;
         }
 
@@ -127,11 +127,11 @@ namespace SailwindCoop.Net
             if (entry.Files == null || entry.Files.Length > ModLimits.MaxFilesPerMod) return "file count";
             bool single = string.IsNullOrEmpty(entry.Folder);
             if (!single && !IsSafeName(entry.Folder)) return "folder name";
-            if (single && entry.Downloadable && entry.Files.Length != 1) return "single-file mod with several files";
+            if (single && entry.Complete && entry.Files.Length != 1) return "single-file mod with several files";
             long total = 0;
             for (int i = 0; i < entry.Files.Length; i++)
             {
-                ModFile file = entry.Files[i];
+                ModListFile file = entry.Files[i];
                 if (file == null) return "empty file";
                 if (!IsSafeRelativePath(file.Path)) return "file path";
                 if (single && file.Path.IndexOf('/') >= 0) return "single-file mod in a subfolder";

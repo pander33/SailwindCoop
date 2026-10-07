@@ -39,8 +39,12 @@ namespace SailwindCoop.Runtime
 #endif
         private bool _debugTools;
         private bool _logging;
+#if !THUNDERSTORE
         private bool _restartPending;
         private string _restartMods = "";
+#else
+        private static readonly bool _restartPending = false;
+#endif
 
         // Steam section. Everything the layout depends on is snapshotted once per Layout pass.
         private const int MaxFriendRows = 8;
@@ -140,10 +144,12 @@ namespace SailwindCoop.Runtime
             // Snapshot once per layout pass: the banner adds controls to the window.
             if (Event.current.type == EventType.Layout)
             {
+#if !THUNDERSTORE
                 bool pending = _coop.Mods.RestartRequired;
                 if (pending && !_restartPending) _scroll = Vector2.zero; // the banner sits at the top
                 _restartPending = pending;
                 _restartMods = _coop.Mods.InstalledNames ?? "";
+#endif
             }
 
             if (_visible)

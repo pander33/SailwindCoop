@@ -130,14 +130,14 @@ namespace ProtocolSmoke
                 new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
                 new ShopTakenMsg { PrefabIndex = 137, Pos = new UnityEngine.Vector3(218.3f, 5.7f, -356f) },
                 new MoneyOfferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Kind = MoneyOfferKind.Take, Currency = 2, Amount = 75 },
-                new ModManifestMsg { DownloadAllowed = true, Mods = new[] {
-                    new ModEntry { Folder = "SeaLifeMod", Downloadable = true,
+                new ModManifestMsg { FilesOffered = true, Mods = new[] {
+                    new ModEntry { Folder = "SeaLifeMod", Complete = true,
                         Plugins = new[] { new ModPlugin { Guid = "com.example.sealife", Name = "Sea Life", Version = "1.2.0" } },
-                        Files = new[] { new ModFile { Path = "SeaLifeMod.dll", Size = 14336, Hash = SampleHash(1) },
-                                        new ModFile { Path = "data/assets", Size = 8376605, Hash = SampleHash(2) } } },
-                    new ModEntry { Folder = "", Downloadable = false,
+                        Files = new[] { new ModListFile { Path = "SeaLifeMod.dll", Size = 14336, Hash = SampleHash(1) },
+                                        new ModListFile { Path = "data/assets", Size = 8376605, Hash = SampleHash(2) } } },
+                    new ModEntry { Folder = "", Complete = false,
                         Plugins = new[] { new ModPlugin { Guid = "a", Name = "A", Version = "0.1" }, new ModPlugin { Guid = "b", Name = "B", Version = "2" } },
-                        Files = new[] { new ModFile { Path = "Lone.dll", Size = 1, Hash = SampleHash(3) } } } } },
+                        Files = new[] { new ModListFile { Path = "Lone.dll", Size = 1, Hash = SampleHash(3) } } } } },
                 new ModSyncResultMsg { Decision = ModSyncDecision.Abort, Missing = 3, Different = 1 },
                 new ModFileRequestMsg { Mod = 2, File = 511 },
                 new ModFileChunkMsg { Mod = 2, File = 511, Index = 77, Data = new byte[] { 1, 2, 3, 250 } },
@@ -325,7 +325,7 @@ namespace ProtocolSmoke
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
                 (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
-                 a is ModEntry || a is ModPlugin || a is ModFile))
+                 a is ModEntry || a is ModPlugin || a is ModListFile))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

@@ -102,7 +102,8 @@ function Pack([string]$name) {
         # The edition must not carry the code that sends, receives or installs mod files...
         $dll = [System.IO.File]::ReadAllBytes((Join-Path $stage 'SailwindCoop.dll'))
         $text = [System.Text.Encoding]::ASCII.GetString($dll)
-        foreach ($word in 'ModUpload', 'ModTransfer', 'ModFileRequest', 'ModFileChunk', 'ModFileEnd', 'AllowModDownload', 'ShareMods') {
+        # Type and member names, case-sensitive: 'Download' and 'Upload' cover every name built on them.
+        foreach ($word in 'Download', 'Upload', 'ModFile', 'ModTransfer', 'ShareMods', 'RestartRequired', 'InstalledNames') {
             if ($text.Contains($word)) { Fail "the Thunderstore SailwindCoop.dll contains '$word'" }
         }
         # ...nor the menu and log text of that feature.

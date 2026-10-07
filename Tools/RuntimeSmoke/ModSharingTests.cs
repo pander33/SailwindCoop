@@ -22,9 +22,9 @@ internal static class ModSharingTests
         });
 
         test("mod manifest entries are validated before use", () => {
-            Func<ModEntry> valid = () => new ModEntry { Folder = "Mod", Downloadable = true,
+            Func<ModEntry> valid = () => new ModEntry { Folder = "Mod", Complete = true,
                 Plugins = new[] { new ModPlugin { Guid = "g" } },
-                Files = new[] { new ModFile { Path = "Mod.dll", Size = 3, Hash = new byte[32] } } };
+                Files = new[] { new ModListFile { Path = "Mod.dll", Size = 3, Hash = new byte[32] } } };
             Assert(ModPathRules.Validate(valid()) == null, "valid entry refused");
             var e = valid(); e.Folder = "../Mod"; Assert(ModPathRules.Validate(e) != null, "folder traversal");
             e = valid(); e.Files[0].Path = "../../core/BepInEx.dll"; Assert(ModPathRules.Validate(e) != null, "file traversal");
@@ -32,7 +32,7 @@ internal static class ModSharingTests
             e = valid(); e.Files[0].Size = ModLimits.MaxFileBytes + 1; Assert(ModPathRules.Validate(e) != null, "oversized file");
             e = valid(); e.Files[0].Hash = new byte[4]; Assert(ModPathRules.Validate(e) != null, "short hash");
             e = valid(); e.Plugins = new ModPlugin[0]; Assert(ModPathRules.Validate(e) != null, "no plugins");
-            e = valid(); e.Files = new[] { e.Files[0], new ModFile { Path = "MOD.DLL", Size = 1, Hash = new byte[32] } };
+            e = valid(); e.Files = new[] { e.Files[0], new ModListFile { Path = "MOD.DLL", Size = 1, Hash = new byte[32] } };
             Assert(ModPathRules.Validate(e) != null, "duplicate path differing only by case");
             e = valid(); e.Folder = ""; e.Files[0].Path = "sub/Mod.dll"; Assert(ModPathRules.Validate(e) != null, "single-file mod in a subfolder");
         });
@@ -43,7 +43,7 @@ internal static class ModSharingTests
             List<ModEntry> mods = ModCatalog.Build(host, plugins, new[] { "personal.translator" }, log.Add);
             Assert(mods.Select(m => m.DisplayName).SequenceEqual(new[] { "Lone.dll", "SeaLife" }), "units: " + string.Join("|", mods.Select(m => m.DisplayName)));
             ModEntry sea = mods[1];
-            Assert(sea.Downloadable && sea.Plugins.Length == 2 && sea.Plugins[0].Guid == "sea.a" && sea.Plugins[1].Guid == "sea.b", "plugins of one folder");
+            Assert(sea.Complete && sea.Plugins.Length == 2 && sea.Plugins[0].Guid == "sea.a" && sea.Plugins[1].Guid == "sea.b", "plugins of one folder");
             Assert(sea.Files.Select(f => f.Path).SequenceEqual(new[] { "SeaLife.dll", "data/assets", "data/empty" }), "files: " + string.Join("|", sea.Files.Select(f => f.Path)));
             Assert(sea.Files[1].Size == 40000 && ModCatalog.Equal(sea.Files[1].Hash, ModCatalog.HashFile(Path.Combine(host, "SeaLife", "data", "assets"))), "size/hash");
             Assert(mods[0].Folder == "" && mods[0].Files.Length == 1 && mods.All(m => ModPathRules.Validate(m) == null), "lone DLL entry");
@@ -92,7 +92,7 @@ internal static class ModSharingTests
             }
             Assert(File.ReadAllText(Path.Combine(client, "SeaLife", "keep.txt")) == "mine", "existing folder was touched");
             string target = Path.Combine(client, "SeaLife (coop)");
-            foreach (ModFile file in mods[1].Files)
+            foreach (ModListFile file in mods[1].Files)
                 Assert(ModCatalog.Equal(ModCatalog.HashFile(Path.Combine(target, file.Path.Replace('/', Path.DirectorySeparatorChar))), file.Hash), "content of " + file.Path);
             Assert(File.ReadAllText(Path.Combine(target, ModCatalog.MarkerFile)).Contains("192.168.1.5"), "install marker");
             Assert(ModCatalog.Equal(ModCatalog.HashFile(Path.Combine(client, "Lone.dll")), mods[0].Files[0].Hash), "lone DLL content");
@@ -126,10 +126,10 @@ internal static class ModSharingTests
 
         test("mod download refuses unsafe or comparison-only entries and existing targets", () => WithDirs((host, client, staging) => {
             List<ModEntry> mods = ModCatalog.Build(host, HostFixture(host), new[] { "personal.translator" }, null);
-            var escape = new ModEntry { Folder = "X", Downloadable = true, Plugins = new[] { new ModPlugin { Guid = "x" } },
-                Files = new[] { new ModFile { Path = "../../core/evil.dll", Size = 1, Hash = new byte[32] } } };
+            var escape = new ModEntry { Folder = "X", Complete = true, Plugins = new[] { new ModPlugin { Guid = "x" } },
+                Files = new[] { new ModListFile { Path = "../../core/evil.dll", Size = 1, Hash = new byte[32] } } };
             ExpectFailure(() => new ModDownload(staging, client, new[] { new KeyValuePair<int, ModEntry>(0, escape) }));
-            mods[1].Downloadable = false;
+            mods[1].Complete = false;
             ExpectFailure(() => new ModDownload(staging, client, new[] { new KeyValuePair<int, ModEntry>(1, mods[1]) }));
 
             File.WriteAllText(Path.Combine(client, "Lone.dll"), "already here");
@@ -154,7 +154,7 @@ internal static class ModSharingTests
             for (int i = 0; i <= ModLimits.MaxFilesPerMod; i++) File.WriteAllBytes(Path.Combine(big, "f" + i + ".txt"), new byte[0]);
             var log = new List<string>();
             var mods = ModCatalog.Build(host, new[] { new LoadedPlugin { Guid = "big", Location = Path.Combine(big, "Big.dll") } }, new string[0], log.Add);
-            Assert(mods.Count == 1 && !mods[0].Downloadable && mods[0].Files.Length == 1 && mods[0].Files[0].Path == "Big.dll" && log.Count == 1, "comparison-only entry");
+            Assert(mods.Count == 1 && !mods[0].Complete && mods[0].Files.Length == 1 && mods[0].Files[0].Path == "Big.dll" && log.Count == 1, "comparison-only entry");
             Assert(ModPathRules.Validate(mods[0]) == null, "comparison-only entry must still validate");
         }));
     }

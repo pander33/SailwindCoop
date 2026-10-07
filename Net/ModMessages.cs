@@ -15,21 +15,21 @@ namespace SailwindCoop.Net
     public sealed class ModManifestMsg : INetMessage
     {
         /// <summary>The host lets clients download the listed files.</summary>
-        public bool DownloadAllowed;
+        public bool FilesOffered;
         public ModEntry[] Mods = new ModEntry[0];
 
         public MsgType Type => MsgType.ModManifest;
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(DownloadAllowed);
+            w.Put(FilesOffered);
             int mods = Math.Min(Mods.Length, ModLimits.MaxMods);
             w.Put((byte)mods);
             for (int i = 0; i < mods; i++)
             {
                 ModEntry mod = Mods[i];
                 w.Put(mod.Folder ?? "");
-                w.Put(mod.Downloadable);
+                w.Put(mod.Complete);
                 int plugins = Math.Min(mod.Plugins.Length, ModLimits.MaxPluginsPerMod);
                 w.Put((byte)plugins);
                 for (int p = 0; p < plugins; p++)
@@ -42,9 +42,9 @@ namespace SailwindCoop.Net
                 w.Put((ushort)files);
                 for (int f = 0; f < files; f++)
                 {
-                    ModFile file = mod.Files[f];
+                    ModListFile file = mod.Files[f];
                     if (file.Hash == null || file.Hash.Length != ModLimits.HashBytes)
-                        throw new InvalidDataException("mod file hash must be " + ModLimits.HashBytes + " bytes");
+                        throw new InvalidDataException("mod list hash must be " + ModLimits.HashBytes + " bytes");
                     w.Put(file.Path ?? "");
                     w.Put(file.Size);
                     w.Put(file.Hash);
@@ -54,13 +54,13 @@ namespace SailwindCoop.Net
 
         public void Deserialize(NetDataReader r)
         {
-            DownloadAllowed = r.GetBool();
+            FilesOffered = r.GetBool();
             int mods = r.GetByte();
             if (mods > ModLimits.MaxMods) throw new InvalidDataException("too many mods");
             Mods = new ModEntry[mods];
             for (int i = 0; i < mods; i++)
             {
-                var mod = new ModEntry { Folder = r.GetString(ModLimits.MaxPathChars), Downloadable = r.GetBool() };
+                var mod = new ModEntry { Folder = r.GetString(ModLimits.MaxPathChars), Complete = r.GetBool() };
                 int plugins = r.GetByte();
                 if (plugins > ModLimits.MaxPluginsPerMod) throw new InvalidDataException("too many plugins");
                 mod.Plugins = new ModPlugin[plugins];
@@ -75,12 +75,12 @@ namespace SailwindCoop.Net
                 // A file takes at least its hash on the wire: refuse a count the packet cannot hold
                 // before sizing the array from it.
                 if (files > ModLimits.MaxFilesPerMod || files * ModLimits.HashBytes > r.AvailableBytes)
-                    throw new InvalidDataException("too many mod files");
-                mod.Files = new ModFile[files];
+                    throw new InvalidDataException("too many files in a listed mod");
+                mod.Files = new ModListFile[files];
                 for (int f = 0; f < files; f++)
                 {
-                    var file = new ModFile { Path = r.GetString(ModLimits.MaxPathChars), Size = r.GetInt() };
-                    if (r.AvailableBytes < ModLimits.HashBytes) throw new InvalidDataException("truncated mod file hash");
+                    var file = new ModListFile { Path = r.GetString(ModLimits.MaxPathChars), Size = r.GetInt() };
+                    if (r.AvailableBytes < ModLimits.HashBytes) throw new InvalidDataException("truncated mod list hash");
                     file.Hash = new byte[ModLimits.HashBytes];
                     r.GetBytes(file.Hash, ModLimits.HashBytes);
                     mod.Files[f] = file;

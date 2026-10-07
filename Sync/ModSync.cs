@@ -15,8 +15,10 @@ namespace SailwindCoop.Sync
         public string Text;
         /// <summary>The join is waiting for the player's answer: show the decision buttons.</summary>
         public bool Deciding;
+#if !THUNDERSTORE
         public bool CanDownload;
         public string DownloadLabel;
+#endif
     }
 
     /// <summary>
@@ -31,12 +33,16 @@ namespace SailwindCoop.Sync
     /// client that declines still joins.</para>
     ///
     /// <para>The file transfer lives in <c>ModSync.Download.cs</c> and is not part of the Thunderstore
-    /// edition, which compiles <c>ModSync.NoDownload.cs</c> instead: that edition only compares the
-    /// lists and tells the player what is missing.</para>
+    /// edition: every call into it here sits under <c>#if !THUNDERSTORE</c>, and that edition only
+    /// compares the lists and tells the player what is missing.</para>
     /// </summary>
     public sealed partial class ModSync
     {
+#if !THUNDERSTORE
         private enum Phase { Idle, Deciding, Downloading, Failed, RestartRequired }
+#else
+        private enum Phase { Idle, Deciding }
+#endif
 
         private static readonly string[] BuiltInExcludes = { Plugin.Guid, "com.sailwind.coop.devconsole" };
 
@@ -55,18 +61,29 @@ namespace SailwindCoop.Sync
 
         // Client.
         private Phase _phase;
+#if !THUNDERSTORE
         private bool _downloadAllowed;
+        private string _installedNames = "";
+#endif
         private List<ModDiff> _diffs = new List<ModDiff>();
         private List<string> _localOnly = new List<string>();
         private string _message = "";
-        private string _installedNames = "";
 
+#if !THUNDERSTORE
         /// <summary>Client: mods were installed in this run of the game. Joining is pointless until the
         /// game is restarted — the loader has not read them, so the host would offer them again.</summary>
         public bool RestartRequired => _phase == Phase.RestartRequired;
         /// <summary>The mods installed in this run, for the restart notice.</summary>
         public string InstalledNames => _installedNames;
-
+        /// <summary>A finished install keeps its "restart the game" text across sessions.</summary>
+        private bool KeepsPhase => _phase == Phase.RestartRequired;
+        private bool AwaitingAnswer => _phase == Phase.Deciding || _phase == Phase.Downloading || _phase == Phase.Failed;
+        private bool CanAnswer => _phase == Phase.Deciding || _phase == Phase.Failed;
+#else
+        private bool KeepsPhase => false;
+        private bool AwaitingAnswer => _phase == Phase.Deciding;
+        private bool CanAnswer => _phase == Phase.Deciding;
+#endif
 
         public ModSync(CoopNet net) { _net = net; }
 
@@ -103,25 +120,29 @@ namespace SailwindCoop.Sync
         public void BeginClient()
         {
             Reset();
-            if (_phase != Phase.RestartRequired) { _phase = Phase.Idle; _message = ""; }
+            if (!KeepsPhase) { _phase = Phase.Idle; _message = ""; }
         }
 
         /// <summary>Session teardown. A finished install keeps its "restart the game" text.</summary>
         public void Reset()
         {
+#if !THUNDERSTORE
             DropUploads();
+            DropDownload();
+#endif
             _awaiting.Clear();
             _hostMods = new ModEntry[0];
-            DropDownload();
             _diffs = new List<ModDiff>();
             _localOnly = new List<string>();
-            if (_phase != Phase.RestartRequired) { _phase = Phase.Idle; _message = ""; }
+            if (!KeepsPhase) { _phase = Phase.Idle; _message = ""; }
         }
 
         public void ClearRemoteActor(uint netId)
         {
             _awaiting.Remove(netId);
+#if !THUNDERSTORE
             DropUpload(netId);
+#endif
         }
 
         // -----------------------------------------------------------------
@@ -135,8 +156,12 @@ namespace SailwindCoop.Sync
         {
             try
             {
-                session.Peer.Send(new ModManifestMsg { DownloadAllowed = HostOffersDownloads, Mods = _hostMods },
+#if !THUNDERSTORE
+                session.Peer.Send(new ModManifestMsg { FilesOffered = HostOffersDownloads, Mods = _hostMods },
                                   DeliveryMethod.ReliableOrdered);
+#else
+                session.Peer.Send(new ModManifestMsg { Mods = _hostMods }, DeliveryMethod.ReliableOrdered);
+#endif
                 _awaiting.Add(session.PlayerNetId);
                 _net.SetMemberState(session.PlayerNetId, MemberJoinState.CheckingMods);
             }
@@ -164,7 +189,7 @@ namespace SailwindCoop.Sync
             if (msg.Missing > 0 || msg.Different > 0)
             {
                 Plugin.Logger.LogWarning("[Mods] role=Host NetId=" + netId + " joins without " + msg.Missing +
-                                         " shared mods, " + msg.Different + " differ");
+                                         " of the host's mods, " + msg.Different + " differ");
                 CoopBehaviour.Notice(_net.GetPlayerName(netId) + " joined with a different mod set (" + msg.Missing +
                                      " missing, " + msg.Different + " different). Some things may not match.");
             }
@@ -177,17 +202,23 @@ namespace SailwindCoop.Sync
 
         public void Tick()
         {
+#if !THUNDERSTORE
             TickTransfers();
+#endif
 
-            if (_phase == Phase.Deciding || _phase == Phase.Downloading || _phase == Phase.Failed)
+            if (AwaitingAnswer)
             {
                 if (_net.Role != Role.Client || _net.State != LinkState.Connected)
                 {
+#if !THUNDERSTORE
                     DropDownload();
+#endif
                     _phase = Phase.Idle;
                     _message = "The connection ended before the mod check finished.";
                 }
+#if !THUNDERSTORE
                 else CheckStall();
+#endif
             }
         }
 
@@ -202,17 +233,17 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client) return;
             try
             {
-                DropDownload();
-                _downloadAllowed = msg.DownloadAllowed;
                 var mods = new List<ModEntry>(msg.Mods);
 #if !THUNDERSTORE
+                DropDownload();
+                _downloadAllowed = msg.FilesOffered;
                 foreach (ModEntry entry in mods)
                 {
                     string problem = ModPathRules.Validate(entry);
                     if (problem == null) continue;
                     Plugin.Logger.LogWarning("[Mods] role=Client host mod '" + entry.DisplayName +
                                              "' has an invalid " + problem + "; it cannot be downloaded");
-                    entry.Downloadable = false;
+                    entry.Complete = false;
                 }
 #endif
                 List<LoadedPlugin> local = LoadedPlugins();
@@ -226,7 +257,7 @@ namespace SailwindCoop.Sync
                 {
                     _phase = Phase.Idle;
                     _message = _localOnly.Count == 0 ? ""
-                        : "You have mods the host does not share: " + string.Join(", ", _localOnly.ToArray()) + ".";
+                        : "You have mods the host does not have: " + string.Join(", ", _localOnly.ToArray()) + ".";
                     SendResult(ModSyncDecision.Proceed);
                     return;
                 }
@@ -246,8 +277,10 @@ namespace SailwindCoop.Sync
         /// <summary>Menu: join with the mods this machine already has.</summary>
         public void JoinAnyway()
         {
-            if (_phase != Phase.Deciding && _phase != Phase.Failed) return;
+            if (!CanAnswer) return;
+#if !THUNDERSTORE
             DropDownload();
+#endif
             Count(out int missing, out int different);
             _phase = Phase.Idle;
             _message = "Joined with a different mod set (" + missing + " missing, " + different +
@@ -258,8 +291,10 @@ namespace SailwindCoop.Sync
         /// <summary>Menu: do not join.</summary>
         public void Cancel()
         {
-            if (_phase != Phase.Deciding && _phase != Phase.Failed) return;
+            if (!CanAnswer) return;
+#if !THUNDERSTORE
             DropDownload();
+#endif
             _phase = Phase.Idle;
             _message = "";
             SendResult(ModSyncDecision.Abort);
@@ -314,12 +349,12 @@ namespace SailwindCoop.Sync
 #endif
                 return view;
             }
+#if !THUNDERSTORE
             if (_phase == Phase.Downloading && DownloadProgress(out string progress))
             {
                 view.Text = progress;
                 return view;
             }
-#if !THUNDERSTORE
             if (_phase == Phase.RestartRequired)
             {
                 // The restart notice at the top of the menu carries the instructions.
@@ -327,10 +362,12 @@ namespace SailwindCoop.Sync
                 return view;
             }
 #endif
-            if (_phase != Phase.Deciding && _phase != Phase.Failed) return view;
+            if (!CanAnswer) return view;
 
             var text = new StringBuilder();
+#if !THUNDERSTORE
             if (_phase == Phase.Failed) text.Append(_message).Append('\n');
+#endif
             text.Append("Host ").Append(_net.HostLabel).Append(" uses mods that differ from yours:");
             foreach (ModDiff diff in _diffs)
             {
@@ -341,10 +378,13 @@ namespace SailwindCoop.Sync
                 {
                     text.Append("  + ").Append(entry.DisplayName).Append(' ')
                         .Append(entry.Plugins.Length > 0 ? entry.Plugins[0].Version : "");
-                    if (DownloadSupported && entry.Downloadable)
+#if !THUNDERSTORE
+                    if (entry.Complete)
                         text.Append(" (").Append(Megabytes(entry.TotalBytes)).Append(" MB, ").Append(entry.Files.Length)
                             .Append(" files, sha256 ").Append(MainHash(entry)).Append(')');
-                    else text.Append(" (install it yourself)");
+                    else
+#endif
+                    text.Append(" (install it yourself)");
                 }
                 else text.Append("  ~ ").Append(entry.DisplayName).Append(": ").Append(diff.Detail).Append(" (update it yourself)");
             }
@@ -352,11 +392,11 @@ namespace SailwindCoop.Sync
                 text.Append("\nOnly you have: ").Append(string.Join(", ", _localOnly.ToArray()));
 
             view.Deciding = true;
-            view.CanDownload = CanDownload(out int mods, out long bytes);
 #if THUNDERSTORE
             text.Append("\nInstall the missing mods yourself, restart the game and join again. " +
                         "\"Join anyway\" joins with the mods you have now.");
 #else
+            view.CanDownload = CanDownload(out int mods, out long bytes);
             if (mods > 0)
             {
                 view.DownloadLabel = "Download " + mods + " (" + Megabytes(bytes) + " MB)";
@@ -370,12 +410,14 @@ namespace SailwindCoop.Sync
             return view;
         }
 
+#if !THUNDERSTORE
         private static string MainHash(ModEntry entry)
         {
-            foreach (ModFile file in entry.Files)
+            foreach (ModListFile file in entry.Files)
                 if (ModCatalog.IsDll(file.Path)) return ModCatalog.ShortHash(file.Hash);
             return entry.Files.Length > 0 ? ModCatalog.ShortHash(entry.Files[0].Hash) : "";
         }
+#endif
 
         private static string Names(ModEntry[] mods)
         {
@@ -384,8 +426,10 @@ namespace SailwindCoop.Sync
             return string.Join(", ", names);
         }
 
+#if !THUNDERSTORE
         private static string Megabytes(long bytes) =>
             (bytes / (1024f * 1024f)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+#endif
 
         // -----------------------------------------------------------------
         // Loader

@@ -62,9 +62,6 @@
     <Compile Remove="Sync\ModSync.Download.cs" />
     <Compile Remove="Sync\ModTransfer.cs" />
   </ItemGroup>
-  <ItemGroup Condition="'$(Edition)'!='Thunderstore'">
-    <Compile Remove="Sync\ModSync.NoDownload.cs" />
-  </ItemGroup>
 
   <ItemGroup>
     <!-- BCL reference assemblies so net46 builds without the targeting pack installed.
