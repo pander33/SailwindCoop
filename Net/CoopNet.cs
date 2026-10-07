@@ -732,11 +732,10 @@ namespace SailwindCoop.Net
                 detail = "server " + Protocol.Version + ", client " + h.ProtocolVersion;
                 return RejectReason.ProtocolMismatch;
             }
+            // A different mod version is not a reason to refuse: the protocol number alone says whether
+            // two builds understand each other (F1). Hosts up to 0.4.2 answered ModVersionMismatch here.
             if (!string.IsNullOrEmpty(ModVersion) && !string.IsNullOrEmpty(h.ModVersion) && h.ModVersion != ModVersion)
-            {
-                detail = "server " + ModVersion + ", client " + h.ModVersion;
-                return RejectReason.ModVersionMismatch;
-            }
+                _log("[CoopNet] Client runs mod " + h.ModVersion + ", host " + ModVersion + ": same protocol, accepted");
             if (!AcceptingClients)
             {
                 detail = "the host closed this session to new players";

@@ -134,7 +134,7 @@ namespace SailwindCoop.Net
     {
         None = 0,
         ProtocolMismatch = 1,
-        ModVersionMismatch = 2,
+        ModVersionMismatch = 2,   // sent only by hosts up to 0.4.2; later hosts accept any version of the same protocol
         WorldMismatch = 3,
         ServerFull = 4,
         AlreadyConnected = 5,

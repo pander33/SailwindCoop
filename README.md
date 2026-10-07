@@ -181,7 +181,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 ### 📝 Notes
 
 - This mod is in early development (v0.4.3). Expect bugs!
-- Only works with players who have the mod installed, and **every machine must run the same version** — the network protocol changes between releases, so mismatched builds refuse to connect
+- Only works with players who have the mod installed, and **every machine must use the same wire protocol** — builds with different protocol numbers refuse to connect. Since 0.4.3 the mod version itself may differ; a host on 0.4.2 or earlier still requires the exact same version
 - The client loads the host's streamed world save into a dedicated co-op slot, while guest character progress is kept in a local co-op profile
 - The host's game state is authoritative
 - The default avatar bundle ships with the release and must sit next to the plugin DLL
@@ -338,7 +338,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - Убедитесь, что порт 7777 (или ваш порт) открыт в брандмауэре
 - Для интернета: настройте проброс портов на роутере
 - Попробуйте временно отключить антивирус/брандмауэр
-- Убедитесь, что все используют одинаковую версию мода
+- Убедитесь, что у всех один и тот же номер протокола (Wire Protocol). С 0.4.3 сама версия мода может отличаться; хост на 0.4.2 и старше требует точно такую же версию
 
 **Проблема: Игра вылетает при запуске**
 - Проверьте, что BepInEx установлен правильно

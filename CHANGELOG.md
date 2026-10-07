@@ -4,12 +4,15 @@ All notable user-facing changes are documented in this file.
 
 ## [0.4.3] - 2026-10-07
 
-**Everyone must update.** The protocol is still 89, but players with different versions of the mod
-cannot connect to each other.
+The protocol is still 89. Hosts should update: a host on 0.4.2 or earlier still refuses players
+with another version.
 
 ### Changed
 
-- No gameplay changes. Internal cleanup of the mod list check.
+- **Different versions can play together when the protocol is the same.** A host on 0.4.3 or later
+  accepts a player with any version of the mod that uses the same protocol number (shown as
+  **Wire Protocol** in the README). Before, the versions had to match exactly.
+- Internal cleanup of the mod list check.
 
 ## [0.4.2] - 2026-10-07
 

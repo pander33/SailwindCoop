@@ -4,8 +4,8 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.4.3) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
-earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
+Every machine needs a build with the same protocol number. The current build (0.4.3) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
+earlier protocol builds. A host on 0.4.3 or later accepts other versions of the mod that use the same protocol; a host on 0.4.2 or earlier requires the exact same version. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 <!--full-->
 ## Editions
@@ -37,8 +37,8 @@ The client writes the received world into the co-op save slot (`CoopSaveSlot`, s
 about before a long session.
 
 Joining a host means loading a save file that host sends you, so **only join people you trust** — the same
-caution you would apply to any save file someone hands you. Every machine must also run the same mod
-version: the network protocol changes between releases and mismatched builds refuse to connect.
+caution you would apply to any save file someone hands you. Every machine must also run a build with
+the same protocol number: builds with different protocol numbers refuse to connect.
 
 ## Economy
 
