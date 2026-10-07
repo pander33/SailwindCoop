@@ -34,8 +34,18 @@
                                 dotnet build SailwindCoop.csproj -c Release -p:Edition=Thunderstore
                                 Builds into bin\Thunderstore\.
       Both speak the same protocol and can play together.
+
+      In Visual Studio the edition is the solution configuration: Debug and Release build the full
+      edition, Thunderstore builds the Thunderstore one (the same as the command above).
     -->
+    <Configurations>Debug;Release;Thunderstore</Configurations>
+    <Edition Condition="'$(Edition)'=='' And '$(Configuration)'=='Thunderstore'">Thunderstore</Edition>
     <Edition Condition="'$(Edition)'==''">Full</Edition>
+  </PropertyGroup>
+
+  <!-- A configuration the SDK does not know gets no optimisation by default; this one is a release build. -->
+  <PropertyGroup Condition="'$(Configuration)'=='Thunderstore'">
+    <Optimize>true</Optimize>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Edition)'=='Thunderstore'">
