@@ -7,6 +7,7 @@ The short rule is: the host owns the world, while each player keeps their own ch
 Use the same build on every machine. The current build (0.4.1) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
+<!--full-->
 ## Editions
 
 The mod comes in two editions that use the same protocol and can play together. The **Thunderstore
@@ -14,6 +15,8 @@ edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays 
 compares mods when joining. The **full edition** adds
 downloading missing mods from the host. The title of the status overlay shows the edition,
 for example `Sailwind Co-op 0.4.1 (Thunderstore)`. Sections below that apply to one edition say so.
+
+<!--/full-->
 
 ## Session Model
 
@@ -270,8 +273,10 @@ Before a long session, make a normal backup of important Sailwind saves.
 
 ## Playing Over Steam
 
+<!--full-->
 Both editions.
 
+<!--/full-->
 The F8 menu has a **LAN / Steam** switch in the **Connection** section. LAN works as before: the
 guest types the host's IP address. Steam mode needs no IP address, port forwarding or VPN.
 
@@ -304,30 +309,42 @@ Right after connecting, and before the world is sent, the host tells the joining
 BepInEx mods it runs. Nothing happens when both sides have the same ones.
 
 If the joining player lacks some of the host's mods, or has another version, the F8 menu opens with a
-**Mods** section listing the differences and its buttons. The Thunderstore edition has no
+**Mods** section listing the differences and its buttons.<!--thunderstore: Install the missing mods
+yourself, restart the game and join again.-->
+<!--full-->
+The Thunderstore edition has no
 **Download** button: install the missing mods yourself, restart the game and join again. A host
 running the Thunderstore edition does not offer downloads either.
+<!--/full-->
 
+<!--full-->
 - **Download** (full edition) — fetch the missing mods from the host. Available while the host has
   **Sharing: ON** in its F8 menu (`ShareMods`, on by default). The files are checked against the host's
   list and placed into `BepInEx/plugins`; the session then ends and **the game must be restarted** before
   joining again. Existing files and folders are never overwritten.
+<!--/full-->
 - **Join anyway** — join with your current mods. Things those mods change may not match the host.
 - **Cancel** — do not join.
 
+<!--full-->
 Mods are programs: a downloaded mod runs on your PC with your rights. **Download only from a host you
 trust.** The checksum shown in the list guards against a damaged transfer, not against a dishonest host.
 
+<!--/full-->
 Details:
 
+<!--full-->
 - Only missing mods are downloaded. A mod you already have in another version is reported, but you
   update it yourself.
 - A downloaded folder contains `.coop-installed.json`, which lists what was installed and from which host.
   Delete the folder to remove the mod.
-- `ModSyncExclude` in the config lists plugin GUIDs that are never compared or shared. By default it
+<!--/full-->
+- `ModSyncExclude` in the config lists plugin GUIDs that are never compared<!--full--> or shared<!--/full-->. By default it
   holds the XUnity translator; add personal or host-only mods there.
+<!--full-->
 - Hosts (full edition): sharing is on by default, so anyone who joins can download your listed mods. Press
   **Sharing** under **Settings** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
+<!--/full-->
 
 ## Crew Status And Session Access
 

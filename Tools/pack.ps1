@@ -50,6 +50,35 @@ $iconWidth = BigEndianInt $icon 16
 $iconHeight = BigEndianInt $icon 20
 if ($iconWidth -ne 256 -or $iconHeight -ne 256) { Fail "icon.png is ${iconWidth}x${iconHeight}, Thunderstore needs 256x256" }
 
+# The documents hold both editions' text. <!--full--> ... <!--/full--> is left out of the Thunderstore
+# archive; <!--thunderstore: ... --> is text only that archive gets. The full archive keeps the first
+# and drops the second. Mod download must not be described on the Thunderstore page.
+$forbiddenInThunderstoreDocs = '(?i)full edition|полн\w+ редакци|sharing|ShareMods|AllowModDownload|\*\*Download\*\*|coop-installed|mods?\b.{0,60}download|download.{0,60}\bmods?\b|скач\w*.{0,40}мод|мод\w*.{0,40}скач'
+
+function EditionDocument([string]$source, [string]$target, [string]$name) {
+    $text = [System.IO.File]::ReadAllText($source)
+    if ($name -eq 'Thunderstore') {
+        # A marker alone on its line takes the line with it; one inside a line leaves the line break.
+        $text = [regex]::Replace($text, '(?ms)^<!--full-->\r?\n.*?^<!--/full-->\r?\n', '')
+        $text = [regex]::Replace($text, '(?s)<!--full-->.*?<!--/full-->', '')
+        $text = [regex]::Replace($text, '(?s)<!--thunderstore:(.*?)-->', '$1')
+    }
+    else {
+        $text = [regex]::Replace($text, '(?m)^<!--/?full-->\r?\n', '')
+        $text = [regex]::Replace($text, '<!--/?full-->', '')
+        $text = [regex]::Replace($text, '(?s)<!--thunderstore:.*?-->', '')
+    }
+    if ($text -match '<!--/?full-->|<!--thunderstore:') { Fail "unbalanced edition marker in $source" }
+    if ($name -eq 'Thunderstore') {
+        $number = 0
+        foreach ($line in ($text -split '\r?\n')) {
+            $number++
+            if ($line -match $forbiddenInThunderstoreDocs) { Fail "the Thunderstore $(Split-Path -Leaf $source) line $number describes mod download or the full edition: $line" }
+        }
+    }
+    [System.IO.File]::WriteAllText($target, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Pack([string]$name) {
     $stage = Join-Path $dist "stage\$name"
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
@@ -61,7 +90,10 @@ function Pack([string]$name) {
     Get-ChildItem $stage -Filter *.pdb | Remove-Item -Force
 
     Copy-Item (Join-Path $repo 'Avatars\avatar.bundle') $stage
-    foreach ($file in 'README.md', 'CHANGELOG.md', 'MULTIPLAYER_GUIDE.md', 'LICENSE', 'icon.png') {
+    foreach ($file in 'README.md', 'CHANGELOG.md', 'MULTIPLAYER_GUIDE.md') {
+        EditionDocument (Join-Path $repo $file) (Join-Path $stage $file) $name
+    }
+    foreach ($file in 'LICENSE', 'icon.png') {
         Copy-Item (Join-Path $repo $file) $stage
     }
 
@@ -70,7 +102,7 @@ function Pack([string]$name) {
         # The edition must not carry the code that sends, receives or installs mod files...
         $dll = [System.IO.File]::ReadAllBytes((Join-Path $stage 'SailwindCoop.dll'))
         $text = [System.Text.Encoding]::ASCII.GetString($dll)
-        foreach ($word in 'ModUpload', 'ModTransfer') {
+        foreach ($word in 'ModUpload', 'ModTransfer', 'ModFileRequest', 'ModFileChunk', 'ModFileEnd', 'AllowModDownload', 'ShareMods') {
             if ($text.Contains($word)) { Fail "the Thunderstore SailwindCoop.dll contains '$word'" }
         }
         # ...nor the menu and log text of that feature.

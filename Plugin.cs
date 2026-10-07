@@ -83,9 +83,11 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> PauseHostOnJoin;
 
         // Mod sharing (the host lists its mods before the world transfer; a client may download them).
-        // The download entries are null in the Thunderstore edition: the feature is absent.
+        // The download entries do not exist in the Thunderstore edition: the feature is absent.
+#if !THUNDERSTORE
         public readonly ConfigEntry<bool> ShareMods;
         public readonly ConfigEntry<bool> AllowModDownload;
+#endif
         public readonly ConfigEntry<string> ModSyncExclude;
 
         // Steam transport (an alternative to typing an IP address; the LAN port keeps working).

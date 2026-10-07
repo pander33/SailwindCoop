@@ -37,6 +37,7 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
    - If not installed, download from: https://github.com/BepInEx/BepInEx/releases
    - Extract to your Sailwind game folder
 
+<!--full-->
 #### Editions
 The mod comes in two editions. They use the same network protocol and can play together. The Thunderstore edition is published at <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/> and installs through a mod manager.
 
@@ -50,9 +51,10 @@ The mod comes in two editions. They use the same network protocol and can play t
 
 The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.4.1 (Thunderstore)`.
 
+<!--/full-->
 #### Mod Installation
 1. Download the latest release archive
-2. Extract every file of the archive to: `Sailwind/BepInEx/plugins/SailwindCoop/` (see the table above for the files of each edition)
+2. Extract every file of the archive to: `Sailwind/BepInEx/plugins/SailwindCoop/`<!--full--> (see the table above for the files of each edition)<!--/full-->
 3. Launch the game
 4. To change your avatar, press **F8**, open **Settings** and click **Avatar**
 
@@ -224,6 +226,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
    - Если не установлен, скачайте: https://github.com/BepInEx/BepInEx/releases
    - Распакуйте в папку с игрой Sailwind
 
+<!--full-->
 #### Редакции
 Мод выходит в двух редакциях. Сетевой протокол у них один, играть вместе можно. Редакция Thunderstore опубликована на <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/> и ставится через менеджер модов.
 
@@ -237,9 +240,10 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.4.1 (Thunderstore)`.
 
+<!--/full-->
 #### Установка мода
 1. Скачайте последний архив релиза
-2. Распакуйте все файлы архива в: `Sailwind/BepInEx/plugins/SailwindCoop/` (состав файлов каждой редакции — в таблице выше)
+2. Распакуйте все файлы архива в: `Sailwind/BepInEx/plugins/SailwindCoop/`<!--full--> (состав файлов каждой редакции — в таблице выше)<!--/full-->
 3. Запустите игру
 4. Чтобы сменить аватар, нажмите **F8**, откройте **Settings** и нажмите **Avatar**
 

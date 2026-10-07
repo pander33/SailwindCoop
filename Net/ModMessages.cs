@@ -118,6 +118,7 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r) { Decision = (ModSyncDecision)r.GetByte(); Missing = r.GetByte(); Different = r.GetByte(); }
     }
 
+#if !THUNDERSTORE
     /// <summary>Client -> host: send me file <see cref="File"/> of mod <see cref="Mod"/>, both
     /// indices into the manifest the host sent.</summary>
     public sealed class ModFileRequestMsg : INetMessage
@@ -170,4 +171,5 @@ namespace SailwindCoop.Net
         public void Serialize(NetDataWriter w) { w.Put(Mod); w.Put(File); w.Put(Ok); }
         public void Deserialize(NetDataReader r) { Mod = r.GetUShort(); File = r.GetUShort(); Ok = r.GetBool(); }
     }
+#endif
 }

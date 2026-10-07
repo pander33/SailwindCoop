@@ -471,12 +471,14 @@ namespace SailwindCoop.Runtime
                     Mods.OnManifest((ModManifestMsg)msg); break;
                 case MsgType.ModSyncResult:
                     Mods.OnResult((ModSyncResultMsg)msg, fromPeer); break;
+#if !THUNDERSTORE
                 case MsgType.ModFileRequest:
                     Mods.OnFileRequest((ModFileRequestMsg)msg, fromPeer); break;
                 case MsgType.ModFileChunk:
                     Mods.OnFileChunk((ModFileChunkMsg)msg); break;
                 case MsgType.ModFileEnd:
                     Mods.OnFileEnd((ModFileEndMsg)msg); break;
+#endif
                 case MsgType.PlayerState:
                     Players.OnPlayerState((PlayerStateMsg)msg, fromPeer);
                     break;
@@ -1041,10 +1043,14 @@ namespace SailwindCoop.Runtime
         /// again. The menu shows the restart notice; this keeps every join path behind it.</summary>
         private bool RestartPending()
         {
+#if !THUNDERSTORE
             if (!Mods.RestartRequired) return false;
             Plugin.Logger.LogWarning("[Coop] role=None join refused: mods were installed, the game must be restarted first");
             if (_menuUI != null) _menuUI.Visible = true;
             return true;
+#else
+            return false;
+#endif
         }
 
         private static void NoticeFaultedPatchSets()

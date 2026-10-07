@@ -13,7 +13,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Path,
     # Download wording in any case; the two captions exactly as the full edition shows them.
-    [string]$Pattern = '(?i:download)|Sharing:|RESTART THE GAME'
+    [string]$Pattern = '(?i:download)|Sharing:|RESTART THE GAME|mod chunk|mods were installed'
 )
 
 $ErrorActionPreference = 'Stop'

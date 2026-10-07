@@ -150,9 +150,11 @@ namespace SailwindCoop.Net
                 case MsgType.MissionDeliverResult: return new MissionDeliverResultMsg();
                 case MsgType.ModManifest: return new ModManifestMsg();
                 case MsgType.ModSyncResult: return new ModSyncResultMsg();
+#if !THUNDERSTORE
                 case MsgType.ModFileRequest: return new ModFileRequestMsg();
                 case MsgType.ModFileChunk: return new ModFileChunkMsg();
                 case MsgType.ModFileEnd: return new ModFileEndMsg();
+#endif
                 // Stage 1+ message bodies are registered here as they land.
                 default: return null;
             }

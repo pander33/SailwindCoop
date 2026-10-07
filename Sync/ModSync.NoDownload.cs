@@ -1,12 +1,11 @@
-using LiteNetLib;
-using SailwindCoop.Net;
 
 namespace SailwindCoop.Sync
 {
     /// <summary>
     /// Thunderstore edition: <see cref="ModSync"/> without the file transfer. Mods are compared and the
     /// player is told what is missing; nothing is sent, received or installed. Compiled instead of
-    /// <c>ModSync.Download.cs</c> and <c>ModTransfer.cs</c>.
+    /// <c>ModSync.Download.cs</c> and <c>ModTransfer.cs</c>. The file messages (109-111) do not exist
+    /// in this edition: one that arrives is dropped by <c>Protocol</c> as an unknown type.
     /// </summary>
     public sealed partial class ModSync
     {
@@ -15,16 +14,6 @@ namespace SailwindCoop.Sync
 
         private static bool HostOffersDownloads => false;
 
-        /// <summary>A full-edition client asked for a file: answer at once, so it does not wait for a stall.</summary>
-        public void OnFileRequest(ModFileRequestMsg msg, NetPeer peer)
-        {
-            if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(peer) == 0) return;
-            if (msg.Mod == ushort.MaxValue && msg.File == ushort.MaxValue) return;   // a cancel
-            peer.Send(new ModFileEndMsg { Mod = msg.Mod, File = msg.File, Ok = false }, DeliveryMethod.ReliableOrdered);
-        }
-
-        public void OnFileChunk(ModFileChunkMsg msg) { }
-        public void OnFileEnd(ModFileEndMsg msg) { }
         public void Download() { }
 
         private bool CanDownload(out int mods, out long bytes)

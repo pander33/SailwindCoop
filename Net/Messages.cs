@@ -99,9 +99,12 @@ namespace SailwindCoop.Net
         // --- mod sharing (ReliableOrdered) — between HelloAck and the world transfer ---
         ModManifest = 107,      // host -> client : the host's shared mods (plugins, files, hashes)
         ModSyncResult = 108,    // client -> host : proceed with the join / leaving
+#if !THUNDERSTORE
+        // 109-111 are not compiled into the Thunderstore edition; the numbers stay reserved there.
         ModFileRequest = 109,   // client -> host : send file F of mod M (manifest indices)
         ModFileChunk = 110,     // host -> client : one chunk of a requested mod file
         ModFileEnd = 111,       // host -> client : requested file complete or refused
+#endif
         SleepPresence = 112,    // client -> host : in bed / wants to sleep / rested (ReliableOrdered, on change)
         MoneyTransfer = 113,    // client -> host -> client : one player gives money to another (ReliableOrdered)
         MoneyOffer = 114,       // client -> host -> client : a hand held out with money, its withdrawal, or its taking

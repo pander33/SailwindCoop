@@ -43,7 +43,9 @@ namespace SailwindCoop.Net
                 case MsgType.ResyncRequest:
                 case MsgType.AnchorRequest:
                 case MsgType.ModSyncResult:
+#if !THUNDERSTORE
                 case MsgType.ModFileRequest:
+#endif
                 case MsgType.WalletDelta:
                     return MsgFlow.ToHost;
 
@@ -83,8 +85,10 @@ namespace SailwindCoop.Net
                 case MsgType.InstrumentState:
                 case MsgType.RefitState:
                 case MsgType.ModManifest:
+#if !THUNDERSTORE
                 case MsgType.ModFileChunk:
                 case MsgType.ModFileEnd:
+#endif
                 case MsgType.WalletState:
                     return MsgFlow.ToClient;
 

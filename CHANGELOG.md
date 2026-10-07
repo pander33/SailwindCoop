@@ -10,9 +10,9 @@ cannot connect to each other.
 ### Changed
 
 - **The Thunderstore edition can play over Steam.** It now has the **LAN / Steam** switch, the
-  friends list and **Join Game** in Steam, the same as the full edition, and its archive carries
-  `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`. The only difference left between the
-  editions is that the full edition can download missing mods from the host.
+  friends list and **Join Game** in Steam<!--full-->, the same as the full edition<!--/full-->, and its archive carries
+  `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.<!--full--> The only difference left between the
+  editions is that the full edition can download missing mods from the host.<!--/full-->
 
 ## [0.4.0] - 2026-10-07
 
@@ -46,10 +46,12 @@ cannot connect to each other.
 
 ### Added
 
+<!--full-->
 - **Two editions.** The Thunderstore edition plays over LAN or VPN and compares mods when joining;
   it has no Steam mode and does not download mods. The full edition has both. The editions use the
   same protocol and can play together. The status overlay title shows the edition.
-- **Join through Steam itself** (full edition). A friend who hosts over Steam has **Join Game** in
+<!--/full-->
+- **Join through Steam itself**<!--full--> (full edition)<!--/full-->. A friend who hosts over Steam has **Join Game** in
   your Steam friends list, and the host can send **Invite to Game**. Do it from the main menu; if
   the game is not running, Steam starts it and the join begins at the title screen.
 
@@ -78,7 +80,7 @@ cannot connect to each other.
 - **Everyone must update.** The protocol is still `86`, but `0.3.1` and `0.3.0` refuse each other
   at the handshake because the mod version differs.
 
-Not yet verified in game: both editions after the split, and every Steam change above (it needs
+Not yet verified in game: <!--full-->both editions after the split, and <!--/full-->every Steam change above (it needs
 two PCs with different Steam accounts).
 
 ## [0.3.0] - 2026-10-06
@@ -87,15 +89,18 @@ two PCs with different Steam accounts).
 
 - **Other mods are compared when joining.** Before the world is sent, the host tells the joining
   player which other BepInEx mods it runs. With the same mods nothing changes. Otherwise the F8 menu
-  opens a **Mods** section listing what is missing or different, with **Download**, **Join anyway**
+  opens a **Mods** section listing what is missing or different, with <!--full-->**Download**, <!--/full-->**Join anyway**
   and **Cancel**.
+<!--full-->
 - **Missing mods can be downloaded from the host.** The files are checked against the host's list
   (size and SHA-256) and placed into `BepInEx/plugins`; the game must then be restarted. Existing
   files and folders are never overwritten, and a mod you already have in another version is only
   reported. Mods run code on your PC: download only from a host you trust.
 - Host sharing is **on by default**; the **Sharing** button in the F8 menu (`ShareMods`) turns it
-  off. `AllowModDownload` disables downloading on the client, and `ModSyncExclude` lists plugin
-  GUIDs that are never compared or shared (the XUnity translator by default).
+  off. `AllowModDownload` disables downloading on the client.
+<!--/full-->
+- `ModSyncExclude` lists plugin
+  GUIDs that are never compared<!--full--> or shared<!--/full--> (the XUnity translator by default).
 - The crew list shows `Mods` while a joining player is comparing mods.
 - **Play over Steam without an IP address.** The F8 menu has a **LAN / Steam** switch. In Steam
   mode the host is reachable by Steam ID, and a joining player sees Steam friends who are in the
@@ -113,7 +118,7 @@ two PCs with different Steam accounts).
 ### Changed
 
 - **The F8 menu was redesigned.** It now shows only the session (connection settings, or the
-  running session), the crew and **Teleport to boat**. Avatar, mod sharing, the status overlay,
+  running session), the crew and **Teleport to boat**. Avatar, <!--full-->mod sharing, <!--/full-->the status overlay,
   logging, reports and the debug panel moved under a **Settings** section that is collapsed by
   default. The window is as tall as its content.
 - **Joining over a slow connection pauses the host for less time.** The world sent to a joining
@@ -145,7 +150,7 @@ two PCs with different Steam accounts).
 - **Everyone must update.** The wire protocol moved from `80` to `86`; `0.2.x` and `0.3.0` refuse
   to connect to each other.
 
-Not yet verified in game: the comparison step, the menu section and the download; the Steam
+Not yet verified in game: the comparison step and the menu section<!--full-->, the download<!--/full-->; the Steam
 connection (it needs two PCs with different Steam accounts).
 
 ## [0.2.1] - 2026-10-05
