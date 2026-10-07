@@ -2,6 +2,18 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.4.1] - 2026-10-07
+
+**Everyone must update.** The protocol is still 89, but players with different versions of the mod
+cannot connect to each other.
+
+### Changed
+
+- **The Thunderstore edition can play over Steam.** It now has the **LAN / Steam** switch, the
+  friends list and **Join Game** in Steam, the same as the full edition, and its archive carries
+  `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`. The only difference left between the
+  editions is that the full edition can download missing mods from the host.
+
 ## [0.4.0] - 2026-10-07
 
 **Everyone must update.** Protocol 89: this build cannot play with 0.3.1 or earlier.

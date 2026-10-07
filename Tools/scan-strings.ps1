@@ -3,7 +3,7 @@
   Lists the string literals of a .NET assembly that match a pattern.
 
 .DESCRIPTION
-  Used by Tools/pack.ps1 to prove that the Thunderstore edition carries no text of the features it
+  Used by Tools/pack.ps1 to prove that the Thunderstore edition carries no text of the mod download it
   was built without. Reads the #US (user string) heap, where every literal of the code lives.
   Exits with status 1 when something matches.
 
@@ -12,8 +12,8 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Path,
-    # Steam and download wording in any case; the two captions exactly as the full edition shows them.
-    [string]$Pattern = '(?i:steam|download)|Sharing:|RESTART THE GAME'
+    # Download wording in any case; the two captions exactly as the full edition shows them.
+    [string]$Pattern = '(?i:download)|Sharing:|RESTART THE GAME'
 )
 
 $ErrorActionPreference = 'Stop'

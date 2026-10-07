@@ -410,13 +410,11 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Money hand failed", e, ref _moneyHandFailures);
             }
 
-#if !THUNDERSTORE
             try { TickSteamJoin(); }
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Steam join request failed", e, ref _steamJoinFailures);
             }
-#endif
 
             try { using (InteractionContext.Begin(InteractionSource.RemoteApply)) Net.PollEvents(); }
             catch (System.Exception e)
@@ -982,9 +980,7 @@ namespace SailwindCoop.Runtime
             Pause?.Clear();
             HostPause?.Clear();
             Net?.Stop();
-#if !THUNDERSTORE
             SteamLink.Shutdown();
-#endif
             _notifications?.Clear();
             _harmony?.UnpatchSelf();
         }
@@ -993,9 +989,7 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("quit");
             Net?.Stop();
-#if !THUNDERSTORE
             SteamLink.Shutdown();
-#endif
         }
 
         private void SaveClientProfileBeforeStop(string reason)
@@ -1062,19 +1056,13 @@ namespace SailwindCoop.Runtime
         public void StartHostSession(int port, bool steam = false)
         {
             if (SessionBlocked()) return;
-#if !THUNDERSTORE
             Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
-#else
-            Plugin.Logger.LogInfo("[Coop] Starting host via UI");
-#endif
             TeardownSession("start-host", saveClientProfile: true);
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
-#if !THUNDERSTORE
             if (steam) Net.StartSteamHost(port, Plugin.Cfg.SteamFriendsOnly.Value);
             else
-#endif
             Net.StartHost(port);
             if (Net.Role == Role.Host) Mods.BeginHost();
             NoticeFaultedPatchSets();
@@ -1093,7 +1081,6 @@ namespace SailwindCoop.Runtime
             NoticeFaultedPatchSets();
         }
 
-#if !THUNDERSTORE
         // "Join Game" in the Steam friends list, or an accepted Steam invite. Steam gives the host's id
         // to a running game through a callback, and to a game it starts as command line arguments.
         private const float SteamStartDelay = 3f;      // let the game finish its own start-up first
@@ -1185,7 +1172,6 @@ namespace SailwindCoop.Runtime
             Net.StartSteamClient(hostSteamId);
             NoticeFaultedPatchSets();
         }
-#endif
 
         public void ReconnectSession(string ip, int port)
         {

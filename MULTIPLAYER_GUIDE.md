@@ -4,16 +4,16 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.4.0) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.4.1) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 ## Editions
 
 The mod comes in two editions that use the same protocol and can play together. The **Thunderstore
-edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN or VPN and
-compares mods when joining. The **full edition** adds play over
-Steam and downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.4.0 (Thunderstore)`. Sections below that apply to one edition say so.
+edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN, VPN or Steam and
+compares mods when joining. The **full edition** adds
+downloading missing mods from the host. The title of the status overlay shows the edition,
+for example `Sailwind Co-op 0.4.1 (Thunderstore)`. Sections below that apply to one edition say so.
 
 ## Session Model
 
@@ -270,7 +270,7 @@ Before a long session, make a normal backup of important Sailwind saves.
 
 ## Playing Over Steam
 
-Full edition only. The Thunderstore edition has no **LAN / Steam** switch and does not use Steam.
+Both editions.
 
 The F8 menu has a **LAN / Steam** switch in the **Connection** section. LAN works as before: the
 guest types the host's IP address. Steam mode needs no IP address, port forwarding or VPN.

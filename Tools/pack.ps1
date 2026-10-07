@@ -3,7 +3,7 @@
   Builds a release archive of one or both editions into dist\.
 
 .DESCRIPTION
-  Thunderstore  dist\SailwindCoop-<version>-thunderstore.zip   no Steam transport, no mod download
+  Thunderstore  dist\SailwindCoop-<version>-thunderstore.zip   no mod download
   Full          dist\SailwindCoop-<version>-full.zip           everything; published outside Thunderstore
 
   Each edition is built into its own staging folder under dist\stage\, so the game's plugin folder
@@ -24,10 +24,10 @@ $repo = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $repo 'dist'
 
 # manifest.json in the repository describes the Thunderstore edition; the full archive gets this text.
-$fullDescription = 'Play Sailwind with friends over Steam, LAN or VPN. Shared sailing, mod sharing, gestures and crew sleep.'
+$fullDescription = 'Play Sailwind with friends over Steam, LAN or VPN. Shared sailing, mod sharing, shared wallet, gestures and crew sleep.'
 
-# Files that must never reach Thunderstore.
-$forbiddenInThunderstore = @('steam_api64.dll', 'Facepunch.Steamworks.Win64.dll')
+# The Steam libraries. Both editions carry them: Thunderstore allows them (support, 2026-10-07).
+$steamLibraries = @('steam_api64.dll', 'Facepunch.Steamworks.Win64.dll')
 
 function Fail([string]$message) { throw "pack: $message" }
 
@@ -67,29 +67,23 @@ function Pack([string]$name) {
 
     if ($name -eq 'Thunderstore') {
         Copy-Item $manifestPath $stage
-        foreach ($file in $forbiddenInThunderstore) {
-            if (Get-ChildItem $stage -Recurse -Filter $file) { Fail "$file is in the Thunderstore archive" }
-        }
-        # The edition must not even mention the Steam wrapper it was built without...
+        # The edition must not carry the code that sends, receives or installs mod files...
         $dll = [System.IO.File]::ReadAllBytes((Join-Path $stage 'SailwindCoop.dll'))
         $text = [System.Text.Encoding]::ASCII.GetString($dll)
-        foreach ($word in 'Facepunch', 'Steamworks', 'ModUpload', 'SteamLink') {
+        foreach ($word in 'ModUpload', 'ModTransfer') {
             if ($text.Contains($word)) { Fail "the Thunderstore SailwindCoop.dll contains '$word'" }
         }
-        # ...nor carry the menu and log text of the features that were left out.
+        # ...nor the menu and log text of that feature.
         & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'scan-strings.ps1') (Join-Path $stage 'SailwindCoop.dll')
-        if ($LASTEXITCODE -ne 0) { Fail 'the Thunderstore SailwindCoop.dll contains Steam or download text (see above)' }
+        if ($LASTEXITCODE -ne 0) { Fail 'the Thunderstore SailwindCoop.dll contains mod download text (see above)' }
     }
     else {
         $full = $manifest | ConvertTo-Json -Depth 5 | ConvertFrom-Json
         $full.description = $fullDescription
         $full | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $stage 'manifest.json') -Encoding utf8NoBOM
-        foreach ($file in $forbiddenInThunderstore) {
-            if (-not (Test-Path (Join-Path $stage $file))) { Fail "$file is missing from the full archive" }
-        }
     }
 
-    foreach ($file in 'SailwindCoop.dll', 'LiteNetLib.dll', 'sounds\landho.wav') {
+    foreach ($file in @('SailwindCoop.dll', 'LiteNetLib.dll', 'sounds\landho.wav') + $steamLibraries) {
         if (-not (Test-Path (Join-Path $stage $file))) { Fail "$file is missing from the $name archive" }
     }
 

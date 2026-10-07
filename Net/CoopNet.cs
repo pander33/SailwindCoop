@@ -72,12 +72,10 @@ namespace SailwindCoop.Net
         private NetPeer _hostPeer;            // client side: the host
         private DatagramTunnel _tunnel;       // Steam transport: carries this session's datagrams
         private LagRelay _lag;                // Debug link simulation: the tunnel ends in a delaying UDP relay
-#if !THUNDERSTORE
         private bool _steamFriendsOnly;       // Steam host: Steam friends only, the LAN port refuses everyone
         private bool _steamAdvertised;        // Steam host: the session is shown in friends' menus
         // A Steam route can go quiet for longer than a LAN link while Steam switches relays.
         private const int SteamDisconnectTimeoutMs = 12000;
-#endif
         private long _lastTimeSyncTick;
         private SessionMemberInfo[] _roster = new SessionMemberInfo[0];
         private int _rosterRevision;
@@ -124,23 +122,15 @@ namespace SailwindCoop.Net
         /// <summary>The session's datagrams also travel over Steam (host) or only over Steam (client).</summary>
         public bool OverSteam => _tunnel != null && _lag == null;
         /// <summary>Steam host: only Steam friends are admitted, and nobody through the LAN port.</summary>
-#if !THUNDERSTORE
         public bool SteamFriendsOnly => Role == Role.Host && OverSteam && _steamFriendsOnly;
-#else
-        public bool SteamFriendsOnly => false;
-#endif
         /// <summary>Client: this session's datagrams pass through the Debug link simulation.</summary>
         public bool LinkSimulated => _lag != null;
         /// <summary>Client: who we are joining, for messages — an address or a Steam name.</summary>
         public string HostLabel { get; private set; } = "";
-#if !THUNDERSTORE
         public string TransportStatus => !OverSteam ? "" :
             "steam out=" + _tunnel.SentToRelay + " in=" + _tunnel.ReceivedFromRelay +
             (Role == Role.Host ? " links=" + _tunnel.LinkCount : "") +
             (string.IsNullOrEmpty(_tunnel.LastError) ? "" : " err=" + _tunnel.LastError);
-#else
-        public string TransportStatus => "";
-#endif
         public double RttMs => Clock.RttMs;
         public SessionMemberInfo[] RosterSnapshot => (SessionMemberInfo[])_roster.Clone();
 
@@ -170,7 +160,6 @@ namespace SailwindCoop.Net
             BroadcastNotice(accepting ? GameplayNoticeKind.SessionOpened : GameplayNoticeKind.SessionLocked, MyNetId);
         }
 
-#if !THUNDERSTORE
         /// <summary>Steam host: change the admission rule of the running session. Players already in stay.</summary>
         public void SetSteamFriendsOnly(bool friendsOnly)
         {
@@ -182,9 +171,6 @@ namespace SailwindCoop.Net
         }
 
         private static string Origin(PeerSession session) => session.SteamId != 0UL ? "Steam " + session.SteamId : "LAN";
-#else
-        private static string Origin(PeerSession session) => "LAN";
-#endif
 
         public void SetMemberState(uint netId, MemberJoinState state)
         {
@@ -220,10 +206,8 @@ namespace SailwindCoop.Net
                 session.Kicked = true;
                 session.Peer.Send(msg, DeliveryMethod.ReliableOrdered);
                 session.Peer.Disconnect(Protocol.Write(msg));
-#if !THUNDERSTORE
                 // A removed Steam player stays out until the host starts a new session.
                 if (session.SteamId != 0UL) SteamLink.Block(session.SteamId);
-#endif
                 return true;
             }
             return false;
@@ -261,7 +245,6 @@ namespace SailwindCoop.Net
                  " port " + port + " (protocol " + Protocol.Version + ")");
         }
 
-#if !THUNDERSTORE
         /// <summary>
         /// Host over Steam as well as the LAN port: the same LiteNetLib host, plus a tunnel that feeds it
         /// the datagrams of Steam peers through loopback. If Steam is unavailable the LAN host stays up.
@@ -309,7 +292,6 @@ namespace SailwindCoop.Net
             Connect("127.0.0.1", port, attempts, string.IsNullOrEmpty(name) ? "Steam " + hostSteamId : name);
         }
 
-#endif
 
         public void StartClient(string ip, int port)
         {
@@ -339,9 +321,7 @@ namespace SailwindCoop.Net
             HostLabel = hostLabel ?? "";
             _net = NewManager();
             _net.MaxConnectAttempts = Math.Max(1, attempts);
-#if !THUNDERSTORE
             if (OverSteam) _net.DisconnectTimeout = Math.Max(_net.DisconnectTimeout, SteamDisconnectTimeoutMs);
-#endif
             if (!_net.Start())
             {
                 State = LinkState.Failed;
@@ -353,11 +333,7 @@ namespace SailwindCoop.Net
             State = LinkState.Connecting;
             LastError = "";
             LastDisconnectReason = "";
-#if !THUNDERSTORE
             _log("[CoopNet] Connecting to " + (OverSteam ? HostLabel + " over Steam" : ip + ":" + port) + " ...");
-#else
-            _log("[CoopNet] Connecting to " + ip + ":" + port + " ...");
-#endif
             _net.Connect(ip, port, ConnKey);   // Hello is sent once the peer connects
         }
 
@@ -374,14 +350,10 @@ namespace SailwindCoop.Net
                 _tunnel.Stop();
                 _tunnel = null;
                 if (_lag != null) { _lag.Dispose(); _lag = null; }
-#if !THUNDERSTORE
                 else SteamLink.CloseRelay();
-#endif
             }
-#if !THUNDERSTORE
             _steamFriendsOnly = false;
             _steamAdvertised = false;
-#endif
             _sessions.Clear();
             // Names and our own id belong to the session that just ended: leaving them behind made the
             // next session start with stale labels and, on a client, a NetId from the previous host.
@@ -421,13 +393,9 @@ namespace SailwindCoop.Net
 
         public void PollEvents()
         {
-#if !THUNDERSTORE
             SteamLink.Tick();   // free unless Steam was started
-#endif
             if (_net == null) return;
-#if !THUNDERSTORE
             if (OverSteam && TickSteam()) return;
-#endif
             _net.PollEvents();
 
             // Client drives TimeSync at ~3 Hz once connected.
@@ -443,7 +411,6 @@ namespace SailwindCoop.Net
             }
         }
 
-#if !THUNDERSTORE
         /// <summary>Steam bookkeeping of a session that runs over Steam. True when the session was ended here.</summary>
         private bool TickSteam()
         {
@@ -468,7 +435,6 @@ namespace SailwindCoop.Net
             _log("[CoopNet] " + LastError);
             return true;
         }
-#endif
 
         // -----------------------------------------------------------------
         // LiteNetLib callbacks
@@ -477,7 +443,6 @@ namespace SailwindCoop.Net
         private void OnConnectionRequest(ConnectionRequest request)
         {
             if (Role != Role.Host) { request.Reject(); return; }
-#if !THUNDERSTORE
             // Friends only: the LAN port admits nobody. A Steam player arrives from one of the tunnel's
             // own loopback sockets, and Steam has already checked the friendship.
             if (SteamFriendsOnly && !_tunnel.TryGetPeer(request.RemoteEndPoint, out _))
@@ -490,7 +455,6 @@ namespace SailwindCoop.Net
                 }));
                 return;
             }
-#endif
             // Cap concurrent clients per config (Server/MaxClients).
             if (_sessions.Count >= Math.Max(1, MaxClients)) { request.Reject(); return; }
             request.AcceptIfKey(ConnKey);
@@ -518,9 +482,7 @@ namespace SailwindCoop.Net
             else // Host
             {
                 var session = new PeerSession { Peer = peer };
-#if !THUNDERSTORE
                 if (OverSteam) _tunnel.TryGetPeer(new IPEndPoint(peer.Address, peer.Port), out session.SteamId);
-#endif
                 _sessions[peer.Id] = session;
                 _log("[CoopNet] Client connected (peer " + peer.Id + ", " + Origin(session) + "), waiting for Hello");
             }
@@ -555,12 +517,10 @@ namespace SailwindCoop.Net
                     LastError = string.IsNullOrEmpty(LastDisconnectReason)
                         ? "Disconnected: " + info.Reason
                         : LastDisconnectReason;
-#if !THUNDERSTORE
                     // Steam knows why the host could not be reached; "ConnectionFailed" does not.
                     string steamFailure = OverSteam ? SteamLink.TakeFailure() : null;
                     if (!string.IsNullOrEmpty(steamFailure) && string.IsNullOrEmpty(LastDisconnectReason))
                         LastError = steamFailure;
-#endif
                 }
                 _log("[CoopNet] Disconnected from host: " + info.Reason);
             }
