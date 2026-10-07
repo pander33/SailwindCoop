@@ -24,7 +24,7 @@ namespace SailwindCoop.Runtime
 
             const float w = 360f, h = 800f;
             var rect = new Rect(12, 12, w, h);
-            GUI.Box(rect, "Sailwind Co-op " + Plugin.Version, _box);
+            GUI.Box(rect, "Sailwind Co-op " + Plugin.Version + " (" + Plugin.Edition + ")", _box);
 
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 26, w - 20, h - 34));
 

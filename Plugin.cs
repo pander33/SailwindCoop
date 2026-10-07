@@ -15,6 +15,12 @@ namespace SailwindCoop
     {
         public const string Guid = "com.sailwind.coop";
         public const string Version = "0.3.0";
+        /// <summary>Which of the two builds this is; see the Edition property in SailwindCoop.csproj.</summary>
+#if THUNDERSTORE
+        public const string Edition = "Thunderstore";
+#else
+        public const string Edition = "Full";
+#endif
 
         internal static Plugin Instance { get; private set; }
 
@@ -38,7 +44,7 @@ namespace SailwindCoop
             Cfg.EnableLogging.SettingChanged += (_, __) => Logger.Enabled = Cfg.EnableLogging.Value;
             Avatar.AvatarCatalog.Initialize();
 
-            Logger.LogInfo("Sailwind LAN Co-op " + Version + " loading...");
+            Logger.LogInfo("Sailwind LAN Co-op " + Version + " (" + Edition + " edition) loading...");
 
             var go = new GameObject("SailwindCoop");
             DontDestroyOnLoad(go);
@@ -77,6 +83,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> PauseHostOnJoin;
 
         // Mod sharing (the host lists its mods before the world transfer; a client may download them).
+        // The download and Steam entries are null in the Thunderstore edition: the features are absent.
         public readonly ConfigEntry<bool> ShareMods;
         public readonly ConfigEntry<bool> AllowModDownload;
         public readonly ConfigEntry<string> ModSyncExclude;
@@ -116,14 +123,18 @@ namespace SailwindCoop
             ForceHostSaveOnJoin = c.Bind("Save", "ForceHostSaveOnJoin", true, "When a client joins, the host makes a fresh save so the client receives the current world (economy/objects/position). Disable to send the latest autosave without forcing a save.");
             PauseHostOnJoin = c.Bind("Save", "PauseHostOnJoin", true, "While the client loads the host world, the host world is paused (timeScale=0, like the settings menu) so items/anchor/moorings/waves match the snapshot on the client. The pause is lifted when the client reports loaded, disconnects, or after a 120 s timeout.");
 
+#if !THUNDERSTORE
             ShareMods = c.Bind("Mods", "ShareMods", true, "Host: let joining players download the mods they lack straight from this PC. On by default; toggle it in the co-op menu (F8 -> Mods -> Sharing). When off, joining players are still told which of your mods they are missing, but must install them themselves. Share only mods whose authors allow redistribution.");
             AllowModDownload = c.Bind("Mods", "AllowModDownload", true, "Client: allow downloading missing mods from a host that offers them. Nothing is ever installed without a click in the co-op menu, and the game must be restarted afterwards. Mods run code on your PC - download only from a host you trust.");
+#endif
             ModSyncExclude = c.Bind("Mods", "ModSyncExclude", "gravydevsupreme.xunity.autotranslator,gravydevsupreme.xunity.resourceredirector", "Comma-separated plugin GUIDs that are never listed, compared or shared (personal mods such as a UI translator, or mods only the host needs). A folder containing an excluded plugin is skipped whole. Applied on both host and client.");
 
-            UseSteam = c.Bind("Steam", "UseSteam", false, "The co-op menu opens in Steam mode: host for Steam friends and join them without an IP address. Steam must be running and own Sailwind. Switch it in the co-op menu (F8 -> Connection). A Steam host still accepts LAN clients on its UDP port.");
-            SteamFriendsOnly = c.Bind("Steam", "FriendsOnly", true, "Host: accept Steam connections only from players on your Steam friends list. Turn off to let anyone who knows your Steam ID join.");
+#if !THUNDERSTORE
+            UseSteam = c.Bind("Steam", "UseSteam", false, "The co-op menu opens in Steam mode: host for Steam friends and join them without an IP address. Steam must be running and own Sailwind. Switch it in the co-op menu (F8 -> Connection). With Steam/FriendsOnly off a Steam host also accepts LAN clients on its UDP port.");
+            SteamFriendsOnly = c.Bind("Steam", "FriendsOnly", true, "Steam host: accept only players on your Steam friends list, and nobody through the LAN port. Turn off to let in anyone: by your Steam ID and on the LAN port. A host started in LAN mode is not affected.");
             SteamJoinId = c.Bind("Steam", "JoinId", "", "SteamID64 of the host joined last (17 digits). Filled in from the co-op menu.");
 
+#endif
             EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");

@@ -48,6 +48,9 @@ namespace SailwindCoop.Net
 
         private readonly IDatagramRelay _relay;
         private readonly List<Link> _links = new List<Link>();   // tunnel thread only
+        // The local endpoint of every link, for the main thread: to the LiteNetLib host a relayed peer
+        // is nothing but that endpoint.
+        private readonly Dictionary<IPEndPoint, ulong> _linkPeers = new Dictionary<IPEndPoint, ulong>();
         private Thread _thread;
         private volatile bool _running;
         private bool _hostMode;
@@ -69,6 +72,21 @@ namespace SailwindCoop.Net
         public long SentToRelay => Interlocked.Read(ref _toRelay);
         public long ReceivedFromRelay => Interlocked.Read(ref _fromRelay);
         public int LinkCount => _linkCount;
+
+        /// <summary>
+        /// Host: the relay id behind an endpoint the LiteNetLib host sees. False for an endpoint that is
+        /// not one of this tunnel's links, which is how a relayed peer is told from a LAN one. Any thread.
+        /// </summary>
+        public bool TryGetPeer(IPEndPoint endPoint, out ulong peer)
+        {
+            peer = 0UL;
+            if (endPoint == null) return false;
+            // A runtime that reports the sender as an IPv4-mapped IPv6 address must not turn every
+            // relayed peer into a stranger: with friends-only hosting that would lock everyone out.
+            if (endPoint.Address.IsIPv4MappedToIPv6)
+                endPoint = new IPEndPoint(endPoint.Address.MapToIPv4(), endPoint.Port);
+            lock (_linkPeers) return _linkPeers.TryGetValue(endPoint, out peer);
+        }
 
         /// <summary>Host: forward every relayed peer to the LiteNetLib host listening on <paramref name="server"/>.</summary>
         public void StartHost(IPEndPoint server)
@@ -112,6 +130,7 @@ namespace SailwindCoop.Net
             }
             foreach (Link link in _links) CloseQuietly(link.Socket);
             _links.Clear();
+            lock (_linkPeers) _linkPeers.Clear();
             _linkCount = 0;
             CloseQuietly(_client);
             _client = null;
@@ -240,6 +259,9 @@ namespace SailwindCoop.Net
             Socket socket = NewSocket(IPAddress.IsLoopback(_server.Address) ? IPAddress.Loopback : _server.Address);
             socket.Connect(_server);
             var link = new Link { Peer = peer, Socket = socket, LastSeen = Now };
+            // Recorded before the first datagram is forwarded: the host asks about this endpoint as
+            // soon as that datagram arrives.
+            lock (_linkPeers) _linkPeers[(IPEndPoint)socket.LocalEndPoint] = peer;
             _links.Add(link);
             _linkCount = _links.Count;
             return link;
@@ -255,6 +277,7 @@ namespace SailwindCoop.Net
             {
                 Link link = _links[i];
                 if (now - link.LastSeen < IdleMs) continue;
+                try { lock (_linkPeers) _linkPeers.Remove((IPEndPoint)link.Socket.LocalEndPoint); } catch { }
                 CloseQuietly(link.Socket);
                 _links.RemoveAt(i);
                 _relay.Close(link.Peer);

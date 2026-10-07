@@ -7,6 +7,13 @@ The short rule is: the host owns the world, while each player keeps their own ch
 Use the same build on every machine. The current build (0.3.0) uses **protocol 86**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
+## Editions
+
+The mod comes in two editions that use the same protocol and can play together. The **Thunderstore
+edition** plays over LAN or VPN and compares mods when joining. The **full edition** adds play over
+Steam and downloading missing mods from the host. The title of the status overlay shows the edition,
+for example `Sailwind Co-op 0.3.0 (Thunderstore)`. Sections below that apply to one edition say so.
+
 ## Session Model
 
 - The host loads the real world save.
@@ -247,18 +254,23 @@ Before a long session, make a normal backup of important Sailwind saves.
 
 ## Playing Over Steam
 
+Full edition only. The Thunderstore edition has no **LAN / Steam** switch and does not use Steam.
+
 The F8 menu has a **LAN / Steam** switch in the **Connection** section. LAN works as before: the
 guest types the host's IP address. Steam mode needs no IP address, port forwarding or VPN.
 
 - Steam must be running on every PC, and each player needs their own Steam account that owns
   Sailwind. Two copies of the game on one PC cannot connect to each other over Steam.
-- **Host:** load the world, switch to **Steam**, press **Host**. LAN players can still join the same
-  session by IP.
+- **Host:** load the world, switch to **Steam**, press **Host**.
 - **Guest:** stay in the main menu, switch to **Steam**. Friends who are in Sailwind are listed;
   press **Join** next to the one marked `hosting`. A host who is not listed can be joined by typing
   their Steam ID (17 digits) into **Host ID**; the host copies it with **Copy ID**.
-- **Friends only / Anyone** (host): by default only your Steam friends can connect. **Anyone** lets
-  in whoever knows your Steam ID.
+- **Friends only / Anyone** (host): by default only your Steam friends can connect, and joining by
+  IP is refused. **Anyone** lets in whoever knows your Steam ID, and LAN players can join the same
+  session by IP. The button works while the session is running; players already in stay.
+- A Steam player removed with **Kick** stays out until you host again.
+- A guest who is not on a **Friends only** host's friends list gets no answer and sees the
+  connection time out.
 - `hosting, other version` means that friend runs a different build of the mod; update both sides.
 - The first connection can take up to half a minute while Steam finds a route.
 - If the menu says Steam is unavailable, start Steam and press **Retry Steam**. LAN play does not
@@ -270,9 +282,11 @@ Right after connecting, and before the world is sent, the host tells the joining
 BepInEx mods it runs. Nothing happens when both sides have the same ones.
 
 If the joining player lacks some of the host's mods, or has another version, the F8 menu opens with a
-**Mods** section listing the differences and three buttons:
+**Mods** section listing the differences and its buttons. The Thunderstore edition has no
+**Download** button: install the missing mods yourself, restart the game and join again. A host
+running the Thunderstore edition does not offer downloads either.
 
-- **Download** — fetch the missing mods from the host. Available while the host has
+- **Download** (full edition) — fetch the missing mods from the host. Available while the host has
   **Sharing: ON** in its F8 menu (`ShareMods`, on by default). The files are checked against the host's
   list and placed into `BepInEx/plugins`; the session then ends and **the game must be restarted** before
   joining again. Existing files and folders are never overwritten.
@@ -290,7 +304,7 @@ Details:
   Delete the folder to remove the mod.
 - `ModSyncExclude` in the config lists plugin GUIDs that are never compared or shared. By default it
   holds the XUnity translator; add personal or host-only mods there.
-- Hosts: sharing is on by default, so anyone who joins can download your listed mods. Press
+- Hosts (full edition): sharing is on by default, so anyone who joins can download your listed mods. Press
   **Sharing** under **Settings** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
 
 ## Crew Status And Session Access

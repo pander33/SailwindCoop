@@ -22,12 +22,16 @@ All notable user-facing changes are documented in this file.
   mode the host is reachable by Steam ID, and a joining player sees Steam friends who are in the
   game, with **Join** next to a friend who is hosting. No port forwarding or VPN is needed. Steam
   must be running, and each player needs their own Steam account that owns Sailwind.
-- A Steam host still accepts LAN players on its UDP port. LAN play itself is unchanged and does not
-  need Steam.
-- By default a Steam host accepts only Steam friends (`Steam/FriendsOnly`, the **Friends only**
-  button).
+- LAN play itself is unchanged and does not need Steam.
+- By default a Steam host accepts only Steam friends and nobody through its LAN port
+  (`Steam/FriendsOnly`, the **Friends only** button). Switched to **Anyone**, it accepts players by
+  Steam ID and LAN players on its UDP port. The button also applies to a session that is running.
+- A Steam player removed with **Kick** cannot rejoin until the host starts a new session.
 - The mod now ships two more files that must sit next to `SailwindCoop.dll`:
   `Facepunch.Steamworks.Win64.dll` and `steam_api64.dll`.
+- **Two editions.** The Thunderstore edition plays over LAN or VPN and compares mods when joining;
+  it has no Steam mode and does not download mods. The full edition has both. The editions use the
+  same protocol and can play together. The status overlay title shows the edition.
 - **Teleport to boat.** A button in the F8 menu puts you back on the deck: where you last stood,
   next to the crew, or amidships. For a player who fell overboard or was left ashore.
 

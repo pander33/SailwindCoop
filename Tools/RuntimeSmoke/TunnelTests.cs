@@ -145,6 +145,19 @@ internal static class TunnelTests
                 foreach (NetPeer peer in host.Peers) endpoints.Add(peer.Address + ":" + peer.Port);
                 Assert(endpoints.Count == 3, "the host must see three distinct endpoints");
 
+                // The host tells a relayed player from a LAN one by the endpoint, and learns its relay id.
+                var relayed = new HashSet<ulong>();
+                foreach (NetPeer peer in host.Peers)
+                    if (host.Tunnel.TryGetPeer(new IPEndPoint(peer.Address, peer.Port), out ulong id)) relayed.Add(id);
+                Assert(relayed.Count == 2 && relayed.Contains(2) && relayed.Contains(3),
+                       "relayed peers must map to their relay ids, the LAN peer to none");
+                foreach (NetPeer peer in host.Peers)
+                {
+                    bool plain = host.Tunnel.TryGetPeer(new IPEndPoint(peer.Address, peer.Port), out ulong a);
+                    bool mapped = host.Tunnel.TryGetPeer(new IPEndPoint(peer.Address.MapToIPv6(), peer.Port), out ulong b);
+                    Assert(plain == mapped && a == b, "an IPv4-mapped sender address must resolve the same way");
+                }
+
                 // A world-sized reliable message survives the loss in both directions.
                 var big = new byte[300 * 1024];
                 new Random(11).NextBytes(big);

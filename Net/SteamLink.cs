@@ -30,6 +30,9 @@ namespace SailwindCoop.Net
         /// <summary>Sailwind's Steam application id.</summary>
         public const uint AppId = 1764530;
 
+        /// <summary>This build contains the Steam transport (the Thunderstore edition does not).</summary>
+        public static readonly bool Available = true;
+
         public static bool Ready { get; private set; }
         /// <summary>Why Steam is unavailable, in the player's terms; empty when it is ready.</summary>
         public static string Error { get; private set; } = "";
@@ -97,6 +100,27 @@ namespace SailwindCoop.Net
             try { CloseCore(); } catch { }
         }
 
+        /// <summary>Host: change the admission rule of the open relay. Peers already in stay.</summary>
+        public static void SetFriendsOnly(bool friendsOnly)
+        {
+            if (Ready) Guarded(() => { SetFriendsOnlyCore(friendsOnly); return true; }, false);
+        }
+
+        /// <summary>Host: show or hide the session in friends' menus (hidden while locked or full).</summary>
+        public static void Advertise(bool open)
+        {
+            if (Ready) Guarded(() => { AdvertiseCore(open); return true; }, false);
+        }
+
+        /// <summary>Host: drop a peer and refuse it until this relay is closed.</summary>
+        public static void Block(ulong steamId)
+        {
+            if (Ready) Guarded(() => { BlockCore(steamId); return true; }, false);
+        }
+
+        /// <summary>Client: Steam has said the host cannot be reached at all, so waiting is pointless.</summary>
+        public static bool FailureIsFinal => Ready && Guarded(FailureIsFinalCore, false);
+
         /// <summary>The last peer-to-peer failure Steam reported, once.</summary>
         public static string TakeFailure()
         {
@@ -143,6 +167,10 @@ namespace SailwindCoop.Net
         [MethodImpl(MethodImplOptions.NoInlining)] private static IDatagramRelay OpenCore(ulong host, bool friendsOnly) => SteamNative.Open(host, friendsOnly);
         [MethodImpl(MethodImplOptions.NoInlining)] private static void CloseCore() => SteamNative.Close();
         [MethodImpl(MethodImplOptions.NoInlining)] private static string TakeFailureCore() => SteamNative.TakeFailure();
+        [MethodImpl(MethodImplOptions.NoInlining)] private static bool FailureIsFinalCore() => SteamNative.FailureIsFinal();
+        [MethodImpl(MethodImplOptions.NoInlining)] private static void SetFriendsOnlyCore(bool friendsOnly) => SteamNative.SetFriendsOnly(friendsOnly);
+        [MethodImpl(MethodImplOptions.NoInlining)] private static void AdvertiseCore(bool open) => SteamNative.Advertise(open);
+        [MethodImpl(MethodImplOptions.NoInlining)] private static void BlockCore(ulong id) => SteamNative.Block(id);
         [MethodImpl(MethodImplOptions.NoInlining)] private static void ShutdownCore() => SteamNative.Shutdown();
     }
 
@@ -156,6 +184,11 @@ namespace SailwindCoop.Net
         private static bool _hooked;
         private static SteamRelay _relay;
         private static string _failure;
+        private static bool _failureFinal;
+        // Peers whose refusal is already in the log: a refused peer asks again with every packet.
+        private static readonly HashSet<ulong> _refusalLogged = new HashSet<ulong>();
+        // How long a quitting game waits for Steam to send what is queued (the disconnect packets).
+        private const int QuitFlushMs = 300;
         // Sessions of a relay that was just closed. Closing a Steam session discards what is still
         // queued for it, and the last thing queued is LiteNetLib's disconnect packet.
         private static readonly List<ulong> _closing = new List<ulong>();
@@ -249,6 +282,8 @@ namespace SailwindCoop.Net
             // for a closed one.
             FlushClosing();
             _failure = null;
+            _failureFinal = false;
+            _refusalLogged.Clear();
             _relay = new SteamRelay(hostId, friendsOnly);
             if (hostId == 0UL) SteamFriends.SetRichPresence(PresenceKey, Protocol.Version.ToString());
             return _relay;
@@ -268,12 +303,51 @@ namespace SailwindCoop.Net
         {
             string failure = _failure;
             _failure = null;
+            _failureFinal = false;
             return failure;
+        }
+
+        public static bool FailureIsFinal() => _failureFinal && _failure != null;
+
+        public static void SetFriendsOnly(bool friendsOnly)
+        {
+            SteamRelay relay = _relay;
+            if (relay == null || relay.HostId != 0UL) return;
+            relay.FriendsOnly = friendsOnly;
+            _refusalLogged.Clear();
+        }
+
+        public static void Advertise(bool open)
+        {
+            SteamRelay relay = _relay;
+            if (relay == null || relay.HostId != 0UL) return;
+            SteamFriends.SetRichPresence(PresenceKey, open ? Protocol.Version.ToString() : "");
+        }
+
+        public static void Block(ulong id)
+        {
+            SteamRelay relay = _relay;
+            if (relay == null || relay.HostId != 0UL || id == 0UL) return;
+            relay.Block(id);
+            // The session is closed late for the same reason as in Close: the kick message is still queued.
+            _closing.Add(id);
+            _closingSince.Restart();
         }
 
         public static void Shutdown()
         {
             Close();
+            if (_closing.Count > 0)
+            {
+                // The game is quitting and Tick will not run again. Closing the sessions now would discard
+                // the disconnect packets, and the others would see this player freeze until the timeout.
+                var wait = System.Diagnostics.Stopwatch.StartNew();
+                while (wait.ElapsedMilliseconds < QuitFlushMs)
+                {
+                    SteamClient.RunCallbacks();
+                    System.Threading.Thread.Sleep(10);
+                }
+            }
             FlushClosing();
             if (_hooked)
             {
@@ -290,13 +364,18 @@ namespace SailwindCoop.Net
             SteamRelay relay = _relay;
             if (relay == null) return;   // no session: nobody is let in
             ulong id = requester;
+            bool blocked = relay.HostId == 0UL && relay.IsBlocked(id);
             bool allowed = relay.HostId != 0UL
                 ? id == relay.HostId
-                : !relay.FriendsOnly || new Friend(requester).IsFriend;
+                : !blocked && (!relay.FriendsOnly || new Friend(requester).IsFriend);
             if (!allowed)
             {
-                Plugin.Logger.LogWarning("[Steam] Refused a connection from " + id +
-                                         (relay.HostId != 0UL ? ": not the host" : ": not a Steam friend (Steam/FriendsOnly)"));
+                if (_refusalLogged.Add(id))
+                    Plugin.Logger.LogWarning("[Steam] Refused a connection from " + id +
+                                             (relay.HostId != 0UL ? ": not the host"
+                                              : blocked ? ": removed from this session by the host"
+                                              : ": not a Steam friend (Steam/FriendsOnly)") +
+                                             "; further attempts are not logged");
                 return;
             }
             relay.Admit(id);   // before the accept: the tunnel thread may read the first packet at once
@@ -309,7 +388,21 @@ namespace SailwindCoop.Net
             SteamRelay relay = _relay;
             if (relay == null) return;
             ulong id = peer;
-            if (relay.HostId == 0UL) relay.Revoke(id);
+            if (relay.HostId == 0UL)
+            {
+                // Revoking alone could leave the session half open: Steam asks again only for a closed
+                // one, and without a new request this peer would stay unadmitted until the next Host.
+                relay.Revoke(id);
+                SteamNetworking.CloseP2PSessionWithUser(peer);
+            }
+            else
+            {
+                // A late report about the host of an earlier attempt must not end this one.
+                if (id != relay.HostId) return;
+                _failureFinal = error ==P2PSessionError.NotRunningApp ||
+                                error == P2PSessionError.NoRightsToApp ||
+                                error == P2PSessionError.DestinationNotLoggedIn;
+            }
             _failure = "Steam could not reach " + id + ": " + Describe(error);
             Plugin.Logger.LogWarning("[Steam] " + _failure);
         }
@@ -321,7 +414,9 @@ namespace SailwindCoop.Net
                 case P2PSessionError.NotRunningApp: return "that player is not in the game";
                 case P2PSessionError.NoRightsToApp: return "that account does not own Sailwind";
                 case P2PSessionError.DestinationNotLoggedIn: return "that player is not signed in to Steam";
-                case P2PSessionError.Timeout: return "no answer (not hosting, or the connection is blocked)";
+                case P2PSessionError.Timeout:
+                    return "no answer (not hosting over Steam, hosting for Steam friends only and you are not " +
+                           "on the host's friends list, or the connection is blocked)";
                 default: return error.ToString();
             }
         }
@@ -341,7 +436,9 @@ namespace SailwindCoop.Net
 
         /// <summary>The host we talk to, or 0 when this side is the host.</summary>
         public readonly ulong HostId;
-        public readonly bool FriendsOnly;
+        /// <summary>Host: admit Steam friends only. Read when a session is requested, so it can change live.</summary>
+        public volatile bool FriendsOnly;
+        private readonly HashSet<ulong> _blocked = new HashSet<ulong>();   // under the _admitted lock
 
         public SteamRelay(ulong hostId, bool friendsOnly)
         {
@@ -352,6 +449,9 @@ namespace SailwindCoop.Net
 
         public void Admit(ulong peer) { lock (_admitted) _admitted.Add(peer); }
         public void Revoke(ulong peer) { lock (_admitted) _admitted.Remove(peer); }
+        /// <summary>Stops reading the peer's packets and refuses its next requests; sending still works.</summary>
+        public void Block(ulong peer) { lock (_admitted) { _admitted.Remove(peer); _blocked.Add(peer); } }
+        public bool IsBlocked(ulong peer) { lock (_admitted) return _blocked.Contains(peer); }
 
         public ulong[] CloseAll()
         {

@@ -37,9 +37,22 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
    - If not installed, download from: https://github.com/BepInEx/BepInEx/releases
    - Extract to your Sailwind game folder
 
+#### Editions
+The mod comes in two editions. They use the same network protocol and can play together.
+
+| | Thunderstore edition | Full edition |
+|---|---|---|
+| LAN / VPN play | yes | yes |
+| Play over Steam without an IP address | no | yes |
+| Other mods compared when joining | yes | yes |
+| Missing mods downloaded from the host | no | yes |
+| Files | `SailwindCoop.dll`, `LiteNetLib.dll`, `avatar.bundle`, `sounds/` | the same plus `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` |
+
+The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.3.0 (Thunderstore)`.
+
 #### Mod Installation
 1. Download the latest release archive
-2. Extract `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll`, and `avatar.bundle` to: `Sailwind/BepInEx/plugins/SailwindCoop/`
+2. Extract every file of the archive to: `Sailwind/BepInEx/plugins/SailwindCoop/` (see the table above for the files of each edition)
 3. If you use a custom avatar, replace the included `avatar.bundle` with your compatible bundle
 4. Launch the game
 
@@ -52,7 +65,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 2. Load or start a save game
 3. Press **F8** to open the **Sailwind Co-op** menu
 4. Click **Host**
-5. Share your IP address with friends (see "Finding Your IP" below), or switch the menu to **Steam** before pressing **Host** so Steam friends can join without an IP address (see [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md#playing-over-steam))
+5. Share your IP address with friends (see "Finding Your IP" below), or, in the full edition, switch the menu to **Steam** before pressing **Host** so Steam friends can join without an IP address (see [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md#playing-over-steam))
 6. Wait for friends to connect
 
 #### Joining a Game
@@ -211,9 +224,22 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
    - Если не установлен, скачайте: https://github.com/BepInEx/BepInEx/releases
    - Распакуйте в папку с игрой Sailwind
 
+#### Редакции
+Мод выходит в двух редакциях. Сетевой протокол у них один, играть вместе можно.
+
+| | Редакция Thunderstore | Полная редакция |
+|---|---|---|
+| Игра по LAN / VPN | да | да |
+| Игра через Steam без IP-адреса | нет | да |
+| Сверка других модов при входе | да | да |
+| Скачивание недостающих модов с хоста | нет | да |
+| Файлы | `SailwindCoop.dll`, `LiteNetLib.dll`, `avatar.bundle`, `sounds/` | те же и `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` |
+
+Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.3.0 (Thunderstore)`.
+
 #### Установка мода
 1. Скачайте последний архив релиза
-2. Распакуйте `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll` и `avatar.bundle` в: `Sailwind/BepInEx/plugins/SailwindCoop/`
+2. Распакуйте все файлы архива в: `Sailwind/BepInEx/plugins/SailwindCoop/` (состав файлов каждой редакции — в таблице выше)
 3. Если используете свой аватар, замените комплектный `avatar.bundle` на совместимый bundle
 4. Запустите игру
 

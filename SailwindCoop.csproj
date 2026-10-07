@@ -24,10 +24,38 @@
     <!-- Drop the build output directly into the plugin folder. -->
     <OutputPath>$(PluginDir)\</OutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!--
+      Two editions from one source tree:
+        Full         (default)  the Steam transport and mod download from the host; published outside
+                                Thunderstore. Builds into the game's plugin folder.
+        Thunderstore            neither of them: no Steam library is referenced or shipped, and no
+                                code that sends, receives or installs mod files is compiled.
+                                dotnet build SailwindCoop.csproj -c Release -p:Edition=Thunderstore
+                                Builds into bin\Thunderstore\.
+      Both speak the same protocol and can play together.
+    -->
+    <Edition Condition="'$(Edition)'==''">Full</Edition>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Edition)'=='Thunderstore'">
+    <DefineConstants>$(DefineConstants);THUNDERSTORE</DefineConstants>
+    <OutputPath>$(MSBuildProjectDirectory)\bin\Thunderstore\</OutputPath>
+    <IntermediateOutputPath>obj\Thunderstore\</IntermediateOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="Tools\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Edition)'=='Thunderstore'">
+    <Compile Remove="Net\SteamLink.cs" />
+    <Compile Remove="Sync\ModSync.Download.cs" />
+    <Compile Remove="Sync\ModTransfer.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Edition)'!='Thunderstore'">
+    <Compile Remove="Net\SteamLinkStub.cs" />
+    <Compile Remove="Sync\ModSync.NoDownload.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -62,7 +90,7 @@
 
     <!-- Steam transport: the managed wrapper, copied next to the plugin DLL. Its native half
          (steam_api64.dll) is copied below; the game ships no Steam library of its own. -->
-    <Reference Include="Facepunch.Steamworks.Win64">
+    <Reference Include="Facepunch.Steamworks.Win64" Condition="'$(Edition)'!='Thunderstore'">
       <HintPath>$(MSBuildProjectDirectory)\libs\Facepunch.Steamworks.Win64.dll</HintPath>
       <Private>true</Private>
     </Reference>
@@ -121,7 +149,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="libs\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <!-- Valve's binary (not MIT). Kept in git so the full edition builds out of the box; it is not
+         copied into, and must not be packed with, the Thunderstore edition. -->
+    <None Include="libs\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="'$(Edition)'!='Thunderstore'" />
     <!-- Emote voice lines, loaded at runtime from the "sounds" folder next to the plugin DLL. -->
     <None Include="Sounds\landho.wav" Link="sounds\landho.wav" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
