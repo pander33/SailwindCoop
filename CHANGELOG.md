@@ -2,6 +2,15 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.4.3] - 2026-10-07
+
+**Everyone must update.** The protocol is still 89, but players with different versions of the mod
+cannot connect to each other.
+
+### Changed
+
+- No gameplay changes. Internal cleanup of the mod list check.
+
 ## [0.4.2] - 2026-10-07
 
 **Everyone must update.** The protocol is still 89, but players with different versions of the mod

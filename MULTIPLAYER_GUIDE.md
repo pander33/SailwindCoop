@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Use the same build on every machine. The current build (0.4.2) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
+Use the same build on every machine. The current build (0.4.3) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 <!--full-->
@@ -14,7 +14,7 @@ The mod comes in two editions that use the same protocol and can play together. 
 edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN, VPN or Steam and
 compares mods when joining. The **full edition** adds
 downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.4.2 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.4.3 (Thunderstore)`. Sections below that apply to one edition say so.
 
 <!--/full-->
 
