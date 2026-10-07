@@ -14,7 +14,7 @@ namespace SailwindCoop
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.4.1";
+        public const string Version = "0.4.2";
         /// <summary>Which of the two builds this is; see the Edition property in SailwindCoop.csproj.</summary>
 #if THUNDERSTORE
         public const string Edition = "Thunderstore";
