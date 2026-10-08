@@ -57,6 +57,9 @@ namespace SailwindCoop.Runtime
         private Harmony _harmony;
         private bool _clientProfileSavedOnShutdown;
         private bool _clientCoopWorldLoaded;
+        // The loaded world is the copy of a host's world, connected or not. A guest who lost the session
+        // goes on playing in it, and its character still belongs to the profile.
+        private bool _inHostWorldCopy;
 
         /// <summary>Is OUR co-op menu the thing holding the cursor? Lets <see cref="JoinPause"/> tell a
         /// game menu (which stops the clock) from this one (which does not).</summary>
@@ -171,7 +174,7 @@ namespace SailwindCoop.Runtime
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
-            SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = true;
+            SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = _inHostWorldCopy = true;
             Mods = new ModSync(Net)
             {
                 // Stream the host's world to the client once it answered the mod check, so it loads
@@ -1007,8 +1010,23 @@ namespace SailwindCoop.Runtime
         private void OnApplicationQuit()
         {
             SaveClientProfileBeforeStop("quit");
+            SaveProfileAfterSession("quit");
             Net?.Stop();
             SteamLink.Shutdown();
+        }
+
+        /// <summary>The profile was written when the session ended; what the guest did in the host's
+        /// world after that is added here, before that world is left.</summary>
+        private void SaveProfileAfterSession(string reason)
+        {
+            try
+            {
+                if (!_inHostWorldCopy || _clientCoopWorldLoaded || Net.Role == Role.Host) return;
+                if (!GameState.playing || GameState.currentlyLoading) return;
+                if (CoopProfile.SaveFromGame())
+                    Plugin.Logger.LogInfo("[Coop] Client profile saved after the session: " + reason);
+            }
+            catch (System.Exception e) { Plugin.Logger.LogError("[Coop] Profile not saved (" + reason + "): " + e); }
         }
 
         private void SaveClientProfileBeforeStop(string reason)
@@ -1079,8 +1097,11 @@ namespace SailwindCoop.Runtime
         public void StartHostSession(int port, bool steam = false)
         {
             if (SessionBlocked()) return;
+            if (_leavingWorld) return;
             Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
             TeardownSession("start-host", saveClientProfile: true);
+            // Hosting a copy of a host's world makes it this player's own world.
+            _inHostWorldCopy = false;
             // A notice describes one past attempt; carrying it into a new session tells the player to
             // fix something that is no longer true.
             ClearNotice();
@@ -1206,6 +1227,7 @@ namespace SailwindCoop.Runtime
         // screen. A join from a loaded world therefore starts the game's scenes over, exactly as the
         // game starts them itself, and repeats the join from the title screen.
         private bool _leavingWorld;
+        public bool LeavingWorld => _leavingWorld;
 
         /// <summary>True when the join was put off until the title screen is back.</summary>
         private bool LeaveWorldFirst(System.Action join)
@@ -1266,6 +1288,7 @@ namespace SailwindCoop.Runtime
         {
             Plugin.Logger.LogInfo("[Coop] Leaving the loaded world to join a session");
             TeardownSession("leave-world", saveClientProfile: true);
+            SaveProfileAfterSession("leave-world");
             Notice("Leaving this world to join...");
             // The co-op slot holds a copy of a host's world and is rewritten by the join; an own world is kept.
             if (SaveSlots.currentSlot != Mathf.Clamp(Plugin.Cfg.CoopSaveSlot.Value, 0, 5) && SaveLoadManager.instance != null)
@@ -1289,9 +1312,39 @@ namespace SailwindCoop.Runtime
             GameState.loadedCargoIntoCart = GameState.unloadedCargoFromCart = false;
             GameState.inCursorMenu = _menuUI != null && _menuUI.Visible;
             BoatCamera.on = false;
+            // Left set, the autosave of the new scene would write the title screen over the current slot:
+            // its timer starts at zero and only this flag holds it back when the game starts.
+            SaveLoadManager.readyToSave = false;
+            // Lists the game only ever adds to; the entries of the old scene are destroyed objects.
+            TraderBoat.traderBoats?.Clear();
+            try
+            {
+                var ports = AccessTools.Field(typeof(Recovery), "ports")?.GetValue(null) as System.Collections.IList;
+                ports?.Clear();
+            }
+            catch (System.Exception e) { Plugin.Logger.LogWarning("[Coop] Recovery ports not cleared: " + e.Message); }
+            ForgetCargoCarriers();
+            _inHostWorldCopy = false;
+            _menuUI?.WorldLeft();
             Dice.WorldChanging();
             // Scene 0 is the game's own first scene; it loads the sea, the title screen comes with it.
             UnityEngine.SceneManagement.SceneManager.LoadScene(0);
+        }
+
+        // CargoCarrier subscribes to the day change and never unsubscribes; the game never needed to.
+        private static void ForgetCargoCarriers()
+        {
+            try
+            {
+                var field = AccessTools.Field(typeof(Sun), "OnNewDay");
+                var handlers = field?.GetValue(null) as System.Delegate;
+                if (handlers == null) return;
+                var kept = handlers;
+                foreach (var handler in handlers.GetInvocationList())
+                    if (handler.Target is CargoCarrier) kept = System.Delegate.Remove(kept, handler);
+                field.SetValue(null, kept);
+            }
+            catch (System.Exception e) { Plugin.Logger.LogWarning("[Coop] Day handlers not cleared: " + e.Message); }
         }
 
         public void DisconnectSession(string reason)

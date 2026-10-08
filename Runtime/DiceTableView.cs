@@ -309,6 +309,13 @@ namespace SailwindCoop.Runtime
 				faces = string.Join("  ", state.Faces.Select(f => f.ToString())) + "  = " + score + (score - sum == 12 ? "  (triple +12)" : score - sum == 4 ? "  (pair +4)" : "");
 			}
 			string stake = state.Stake > 0 ? "Stake: " + state.Stake + " " + CurrencyName(state.StakeCurrency) + " each" : "";
+			if (state.Stake > 0 && phase == DicePhase.Completed)
+			{
+				// The same rule as DiceSync.Settle: nobody pays when everyone shares the best score.
+				int top = state.Players.Max(p => p.Scores.Sum()), winning = state.Players.Count(p => p.Scores.Sum() == top);
+				stake = winning == state.Players.Length ? "Draw: nobody pays the stake"
+					: "Each loser pays " + state.Stake + " " + CurrencyName(state.StakeCurrency) + (winning == 1 ? " to the winner" : ", shared by the winners");
+			}
 			return "THREE ROUNDS" + (playing ? "   round " + (state.Round + 1) + " of 3" : "") + "\n" + headline + "\n" + faces + "\n" + stake + "\n" +
 				string.Join("\n", state.Players.Select(p => Short(p.Name) + "  " + string.Join(" / ", p.Scores.Select((s, i) => p.Scored[i] ? s.ToString() : "-")) + "  = " + p.Scores.Sum() +
 					(!p.Connected ? "  (away)" : phase == DicePhase.Lobby ? (p.Ready ? "  ready" : "  ...") : phase == DicePhase.Paused ? (p.CancelVote ? "  cancel" : p.ResumeReady ? "  ready" : "  ...") : "")));

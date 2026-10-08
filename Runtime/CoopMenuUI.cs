@@ -341,14 +341,15 @@ namespace SailwindCoop.Runtime
             float third = Split(3);
             bool canReconnect = _net.HasConnectedSuccessfully &&
                                 (_net.State == LinkState.Idle || _net.State == LinkState.Failed || _net.State == LinkState.Rejected);
+            bool leaving = _coop.LeavingWorld;
             GUILayout.BeginHorizontal();
-            GUI.enabled = PatchHealth.Blocker == null;
+            GUI.enabled = PatchHealth.Blocker == null && !leaving;
             if (GUILayout.Button("Host", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
                 StartHost();
-            GUI.enabled = PatchHealth.Blocker == null && !_restartPending;
+            GUI.enabled = PatchHealth.Blocker == null && !_restartPending && !leaving;
             if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
                 Join();
-            GUI.enabled = canReconnect && !_restartPending;
+            GUI.enabled = canReconnect && !_restartPending && !leaving;
             if (GUILayout.Button("Reconnect", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
             {
                 if (_steamMode)
@@ -362,7 +363,8 @@ namespace SailwindCoop.Runtime
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
-            GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
+            GUILayout.Label(leaving ? "Returning to the title screen to join..."
+                : PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
                 : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
                 : "Host: load a world first. Guest: join from the main menu or from a loaded world.", _muted);
         }
@@ -874,6 +876,17 @@ namespace SailwindCoop.Runtime
                 _coop.CloseCompanionMenus();
             _visible = visible;
             ApplyCursorState();
+        }
+
+        /// <summary>The world the menu was opened in is gone: what it remembered about the cursor belongs
+        /// to that world. The title screen has a free cursor and no mouse look.</summary>
+        public void WorldLeft()
+        {
+            if (!_cursorCaptured) return;
+            _previousCursorVisible = true;
+            _previousLockState = CursorLockMode.None;
+            _previousMouseLookEnabled = false;
+            _previousInCursorMenu = false;
         }
 
         private void ApplyCursorState()
