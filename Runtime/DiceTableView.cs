@@ -35,7 +35,8 @@ namespace SailwindCoop.Runtime
 		private const float TrayX = -.045f, CupX = -.305f;
 		private byte shownHeld;
 		// The table is low: it is played sitting on the deck. The board leans back, so it is read from above.
-		private const float TopHeight = .38f, BoardLean = 25f;
+		public const float TopHeight = .38f;
+		private const float BoardLean = 25f;
 		private static readonly Vector3 BoardHinge = new Vector3(0, .018f, .2f), BoardCenter = new Vector3(0, .136f, .255f), BoardSize = new Vector3(.62f, .24f, .13f);
 		private static Font boardFont;
 		private static Material boardMaterial, litSource;

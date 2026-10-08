@@ -266,7 +266,7 @@ on the part of the table you are looking at.
   up a table again moves the one you already have, wherever it stands, unless dice are being
   rolled at it right now; a paused party ends with the move.
 - **Sit down and start:** press the pick-up button on the cup to sit down, again to say you are
-  ready. When everyone seated is ready, any of them starts the party at the score board.
+  ready. The party starts by itself as soon as everyone seated is ready (two players or more).
 - **A turn:** the cup rolls three dice. Press a die to keep it, the cup to reroll the others once,
   or the score board to take the points. Points are the sum of the dice, plus 4 for a pair or 12
   for a triple. Three rounds; the highest total wins and equal totals share the victory.
@@ -284,6 +284,13 @@ on the part of the table you are looking at.
   to enable stakes. Seated players set a stake with the mouse wheel on the score board
   before the start; a changed stake asks everyone to confirm again. When the party ends, every
   loser pays the stake to the winner, divided between the winners of a shared victory.
+- **Close view:** sitting down brings the table close, so that it fills the screen. The cursor is
+  free there: the left mouse button does what the pick-up button does and the right one what the
+  use button does. Press `T`, take a step aside or right-click beside the table to step back;
+  a seated player comes close again with the pick-up button on the cup, and `T` on a table you are
+  looking at opens the view for anyone, also for a player who only watches.
+  The other players see no difference. `Dice.CloseUp = false` stops the view from opening by
+  itself, and `UI.DiceViewKey` changes the key.
 - Players who do not sit down see the table, the rolls and the score like everyone else.
 - If the table looks wrong, turn off `Dice.LitMaterials` in the config file.
 

@@ -283,7 +283,15 @@ namespace SailwindCoop.Sync
 					case DiceAction.Leave:
 						if (seat >= 0) changed = game.Phase == DicePhase.Lobby ? game.Leave(seat) : game.Cancel();
 						break;
-					case DiceAction.Ready: changed = game.SetReady(seat, request.Flag); break;
+					case DiceAction.Ready:
+						changed = game.SetReady(seat, request.Flag);
+						// The party starts by itself once everyone seated is ready; the board keeps its start for the rest.
+						if (changed && game.Seats.Count >= 2 && game.Seats.All(p => p.Ready && p.Connected))
+						{
+							if (game.RollId == 0) game.FirstSeat = random.Next(game.Seats.Count);
+							game.Start();
+						}
+						break;
 					case DiceAction.Start: if (game.RollId == 0) game.FirstSeat = random.Next(Math.Max(1, game.Seats.Count)); changed = game.Start(); break;
 					case DiceAction.Roll:
 						if (game.Phase == DicePhase.AwaitRoll || game.Phase == DicePhase.Selecting && !game.Rerolled && game.HeldMask != 7)

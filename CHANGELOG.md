@@ -17,6 +17,9 @@ The development build uses protocol 92; it cannot connect to builds with an earl
   boat, five in a world. A table is not saved with the world and leaves with its owner.
 - A party can be paused and resumed, a player who reconnects returns to the same seat, and the
   score board shows the rules and the history of finished parties.
+- Close view of the dice table: sitting down brings the table close and frees the cursor, and the
+  table is played with the mouse buttons. `T` opens and closes it (`UI.DiceViewKey`);
+  `Dice.CloseUp = false` leaves it to the key. The other players see no difference.
 - Optional stakes in coins, enabled by default (`Dice.AllowStakes`, personal wallets only).
   Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` to enable them
   if previously disabled.

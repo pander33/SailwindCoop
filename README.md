@@ -135,6 +135,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `PauseHostOnJoin` | true | Host world is paused while a client loads it, so nothing drifts during the join |
 | **Dice** |
 | `AllowStakes` | true | Host: allow optional dice stakes with personal wallets. Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` if previously disabled |
+| `CloseUp` | true | Sitting down at a dice table opens the close view of it (free cursor, mouse buttons). The key `UI.DiceViewKey` (`T`) opens and closes it by hand |
 | **Debug** |
 | `EnableLogging` | false | Write diagnostics to `BepInEx/LogOutput.log`. Also toggleable in-game (F8 → Logging) |
 | `EnableDebugPanel` | false | Developer/test panel. The **Debug** button in the menu does nothing until this is on |
@@ -317,6 +318,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `PauseHostOnJoin` | true | Мир хоста стоит на паузе, пока клиент его грузит — иначе состояние успевает разойтись |
 | **Кости** |
 | `AllowStakes` | true | Хост: разрешить добровольные ставки при личных кошельках. Старый конфиг сохраняет записанное значение; если ставки были выключены, задайте `AllowStakes = true` в секции `[Dice]` |
+| `CloseUp` | true | Сев за столик для костей, игрок видит его крупным планом (свободный курсор, кнопки мыши). Клавиша `UI.DiceViewKey` (`T`) открывает и закрывает крупный план вручную |
 | **Отладка** |
 | `EnableLogging` | false | Писать диагностику в `BepInEx/LogOutput.log`. Переключается и в игре (F8 → Logging) |
 | `EnableDebugPanel` | false | Панель разработчика. Кнопка **Debug** в меню не работает, пока это выключено |

@@ -105,6 +105,8 @@ namespace SailwindCoop
         public readonly ConfigEntry<KeyCode> GiveKey;
         public readonly ConfigEntry<bool> DiceStakes;
         public readonly ConfigEntry<bool> DiceLitMaterials;
+        public readonly ConfigEntry<bool> DiceCloseUp;
+        public readonly ConfigEntry<KeyCode> DiceViewKey;
         public readonly ConfigEntry<bool> GiveHintShown;
 
         public CoopConfig(ConfigFile c)
@@ -147,6 +149,8 @@ namespace SailwindCoop
             GiveKey = c.Bind("UI", "GiveKey", KeyCode.H, "Look at a crewmate standing next to you and hold this key to hold out money: the mouse wheel changes the amount, the middle mouse button changes the currency. The other player looks at you and presses the same key to take it. Change it if the key is bound to something else in the game.");
             DiceStakes = c.Bind("Dice", "AllowStakes", true, "Host: allow players at a dice table to agree on a stake in the lobby (mouse wheel on the score board). Enabled by default; turn off to disable stakes. When the party ends, every loser pays the stake to the winner from a personal wallet. Not available with the shared wallet.");
             DiceLitMaterials = c.Bind("Dice", "LitMaterials", true, "The dice table uses a material of the game that reacts to light. Turn it off if the table looks wrong: it then uses a plain material that does not react to light.");
+            DiceCloseUp = c.Bind("Dice", "CloseUp", true, "Sitting down at a dice table brings the table close: it fills the screen, the cursor is free and the table is played with the mouse buttons. The other players see no difference. Turn off to open the close view only with the key (UI/DiceViewKey).");
+            DiceViewKey = c.Bind("UI", "DiceViewKey", KeyCode.T, "Look at a dice table and press this key for the close view of it; press it again to step back. Change it if the key is bound to something else in the game.");
             GiveHintShown = c.Bind("UI", "GiveHintShown", false, "The one-time on-screen hint about handing money over has been shown. Set to false to see it again.");
             EmoteHintShown = c.Bind("UI", "EmoteHintShown", false, "The one-time on-screen hint about the emote wheel has been shown. Set to false to see it again in the next session.");
         }

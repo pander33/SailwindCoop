@@ -17,13 +17,15 @@ namespace SailwindCoop.Runtime
 			public string Label;
 			public DiceAction Action;
 			public byte Mask;
-			public bool Flag, Page;
+			public bool Flag, Page, Closer;
 		}
 		private const float ReachMetres = 2f, ShorePresenceMetres = 12f;
 		private const int StakeStep = 5, StakeLimit = 1000;
 		private const int CupTarget = 0, BoardTarget = 4;
 		private readonly DiceSync sync;
 		private DiceTableView preview;
+		private readonly DiceCloseUp closeUp = new DiceCloseUp();
+		public DiceCloseUp CloseUp => closeUp;
 		private bool placing, valid;
 		private readonly Dictionary<uint, bool> presence = new Dictionary<uint, bool>();
 		private float yaw;
@@ -40,8 +42,8 @@ namespace SailwindCoop.Runtime
 		}
 		public string Hint = "";
 		public DiceTableInput(DiceSync sync) { this.sync = sync; }
-		public void Clear() { preview?.Dispose(); preview = null; placing = false; Hint = ""; presence.Clear(); }
-		public void Forget(DiceTable table) => presence.Remove(table.State.TableId);
+		public void Clear() { closeUp.Drop(); preview?.Dispose(); preview = null; placing = false; Hint = ""; presence.Clear(); }
+		public void Forget(DiceTable table) { presence.Remove(table.State.TableId); if (closeUp.Table == table) closeUp.Exit(); }
 		/// <summary>Called by the gesture wheel sector "Dice table".</summary>
 		public void BeginPlacement()
 		{
@@ -63,6 +65,7 @@ namespace SailwindCoop.Runtime
 		}
 		public void ObservePresence()
 		{
+			closeUp.Tick();
 			var coop = CoopBehaviour.Instance;
 			bool available = !GameState.inBed && !GameState.sleeping;
 			foreach (var table in sync.Tables.Where(t => t.State.Players.Any(p => p.NetId == coop.Net.MyNetId)))
@@ -78,6 +81,7 @@ namespace SailwindCoop.Runtime
 			var coop = CoopBehaviour.Instance;
 			if (pointer.type != GoPointer.PointerType.crosshairMouse) return false;
 			Hint = "";
+			if (coop != null && closeUp.Active) return HandleCloseUp(coop);
 			if (coop == null || coop.Net.Role == Role.None ||
 				!GameState.playing || GameState.currentlyLoading || GameState.inBed || GameState.sleeping || GameState.inCursorMenu || BoatCamera.on ||
 				pointer.GetHeldItem() != null || Time.timeScale <= 0) return false;
@@ -115,10 +119,33 @@ namespace SailwindCoop.Runtime
 			if (nearest == null) return false;
 			Ray physicsRay = PhysicsRay(ray, nearest.Boat, out _);
 			if (Physics.Raycast(physicsRay, out var obstacle, distance, -604165, QueryTriggerInteraction.Ignore) && obstacle.distance + .02f < distance) return false;
-			uint me = coop.Net.MyNetId;
+			if (Input.GetKeyDown(Plugin.Cfg.DiceViewKey.Value)) { closeUp.Enter(nearest); return true; }
+			// A seated player who stepped back from the table comes close again at the cup, before anything else.
+			bool closer = Plugin.Cfg.DiceCloseUp.Value && target == CupTarget && nearest.State.Players.Any(p => p.NetId == coop.Net.MyNetId);
+			bool acted = Offer(nearest, target, "Pick up", "Use", pointer.MainButtonDown(), pointer.AltButtonDown(), closer);
+			Hint += "\n" + Plugin.Cfg.DiceViewKey.Value + ": close view";
+			return acted;
+		}
+		// The close view: the cursor is free, the left button stands for pick-up and the right one for use.
+		private bool HandleCloseUp(CoopBehaviour coop)
+		{
+			var table = closeUp.Table;
+			string leave = Plugin.Cfg.DiceViewKey.Value + ", a step aside or a right click beside the table: step back";
+			if (table?.View == null || !closeUp.CursorRay(out Ray ray) || Time.timeScale <= 0) { Hint = leave; return true; }
+			int target = table.View.Target(ray, out _);
+			bool right = Input.GetMouseButtonDown(1);
+			if (target < 0) { Hint = leave; if (right) closeUp.Exit(); return true; }
+			Offer(table, target, "Left click", "Right click", Input.GetMouseButtonDown(0), right);
+			Hint += "\n" + leave;
+			return true;
+		}
+		private bool Offer(DiceTable nearest, int target, string mainName, string altName, bool mainDown, bool altDown, bool closer = false)
+		{
+			uint me = CoopBehaviour.Instance.Net.MyNetId;
 			bool main = Choose(nearest, target, false, me, out Choice primary), alt = Choose(nearest, target, true, me, out Choice secondary);
+			if (closer) { main = true; primary = new Choice { Label = "move closer to the table", Closer = true }; }
 			Hint = (target == CupTarget ? "Dice cup" : target == BoardTarget ? "Score board" : "Die") +
-				(main ? "\nPick up: " + primary.Label : "") + (alt ? "\nUse: " + secondary.Label : "");
+				(main ? "\n" + mainName + ": " + primary.Label : "") + (alt ? "\n" + altName + ": " + secondary.Label : "");
 			var state = nearest.State;
 			if (target == BoardTarget && state.Phase == (byte) DicePhase.Lobby && state.StakesAllowed && state.Players.Any(p => p.NetId == me))
 			{
@@ -128,8 +155,8 @@ namespace SailwindCoop.Runtime
 				if (notches != 0 && stake != state.Stake)
 					sync.Request(nearest, DiceAction.SetStake, mask: (byte) (state.Stake > 0 ? state.StakeCurrency : TradeCurrency()), stake: (ushort) stake);
 			}
-			if (pointer.MainButtonDown()) { if (main) Do(nearest, primary); return true; }
-			if (pointer.AltButtonDown() && alt) { Do(nearest, secondary); return true; }
+			if (mainDown) { if (main) Do(nearest, primary); return true; }
+			if (altDown && alt) { Do(nearest, secondary); return true; }
 			return false;
 		}
 		// What the pick-up button (or the use button) does on this part of the table right now. The host
@@ -186,6 +213,7 @@ namespace SailwindCoop.Runtime
 		}
 		private void Do(DiceTable table, Choice choice)
 		{
+			if (choice.Closer) { closeUp.Enter(table); return; }
 			if (choice.Page)
 			{
 				if (table.View == null) return;
@@ -196,6 +224,9 @@ namespace SailwindCoop.Runtime
 			if (choice.Action == DiceAction.Roll && table.View != null)
 				CoopBehaviour.Instance.Players.ReachFor(table.View.Cup, Vector3.up * .08f, 1.2f);
 			sync.Request(table, choice.Action, choice.Mask, choice.Flag);
+			// Sitting down brings the table close; getting up steps back from it.
+			if (choice.Action == DiceAction.Join && Plugin.Cfg.DiceCloseUp.Value) closeUp.Enter(table);
+			if (choice.Action == DiceAction.Leave) closeUp.Exit();
 		}
 		/// <summary>The currency of the region the player trades in; the stake is named in it.</summary>
 		private static int TradeCurrency()
@@ -262,8 +293,12 @@ namespace SailwindCoop.Runtime
 		}
 		public void DrawHint()
 		{
-			if (!string.IsNullOrEmpty(Hint) && !GameState.inCursorMenu)
-				GUI.Label(new Rect(Screen.width / 2f - 240, Screen.height / 2f + 35, 480, 110), Hint);
+			if (string.IsNullOrEmpty(Hint)) return;
+			// In the close view the hint follows the cursor, as it follows the crosshair otherwise.
+			if (closeUp.Active)
+				GUI.Label(new Rect(Mathf.Clamp(UnityEngine.Input.mousePosition.x + 24, 0, Screen.width - 480), Mathf.Clamp(Screen.height - UnityEngine.Input.mousePosition.y + 20, 0, Screen.height - 130), 480, 130), Hint);
+			else if (!GameState.inCursorMenu)
+				GUI.Label(new Rect(Screen.width / 2f - 240, Screen.height / 2f + 35, 480, 130), Hint);
 		}
 	}
 }
