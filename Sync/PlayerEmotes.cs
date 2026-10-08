@@ -16,6 +16,8 @@ namespace SailwindCoop.Sync
         Point = 8,
         /// <summary>Рука протянута с деньгами. Не из колеса: держится, пока игрок предлагает деньги.</summary>
         Offer = 9,
+        /// <summary>Сектор колеса «поставить столик для костей». Действие локальное, по сети не передаётся.</summary>
+        DiceTable = 10,
     }
 
     /// <summary>Цели рук жеста в один момент времени.</summary>
@@ -37,7 +39,7 @@ namespace SailwindCoop.Sync
         public static readonly EmoteId[] Wheel =
         {
             EmoteId.Wave, EmoteId.LandHo, EmoteId.Point, EmoteId.ComeHere,
-            EmoteId.Clap, EmoteId.Shrug, EmoteId.Salute, EmoteId.Hooray,
+            EmoteId.Clap, EmoteId.Shrug, EmoteId.Salute, EmoteId.Hooray, EmoteId.DiceTable,
         };
 
         public static string Label(EmoteId id)
@@ -52,6 +54,7 @@ namespace SailwindCoop.Sync
                 case EmoteId.Shrug: return "Shrug";
                 case EmoteId.Hooray: return "Hooray";
                 case EmoteId.Point: return "Point";
+                case EmoteId.DiceTable: return "Dice table";
                 default: return "";
             }
         }

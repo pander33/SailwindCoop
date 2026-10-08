@@ -11,7 +11,7 @@
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
 **Current Version:** 0.4.3
-**Wire Protocol:** 89. Use the same build on every machine. Most new features still await end-to-end in-game validation; see the release notes.
+**Wire Protocol:** 92 (unreleased development build; published 0.4.3 uses 89). Use the same build on every machine. Most new features still await end-to-end in-game validation; see the release notes.
 **Requirements:** BepInEx 5.x, Sailwind 0.39
 
 ### ✨ Features
@@ -72,7 +72,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 
 #### Joining a Game
 1. Launch Sailwind
-2. **Important:** Do NOT load a save game (stay at main menu)
+2. Stay at the main menu, or join from a loaded world: the game then saves it, returns to the title screen by itself and joins
 3. Press **F8** to open the **Sailwind Co-op** menu
 4. Enter the host IP and click **Join**
    - Default IP is `127.0.0.1` (localhost)
@@ -81,7 +81,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 
 #### Disconnecting
 - Press **F8** and click **Disconnect**
-- After a connection has succeeded once, **Reconnect** repeats the join from the main menu. It is intentionally unavailable inside an already loaded world.
+- After a connection has succeeded once, **Reconnect** repeats the join. From a loaded world the game first returns to the title screen by itself.
 
 #### Crew And Host Controls
 - The **Crew** section shows each player's loading state, ping, and current boat.
@@ -133,6 +133,8 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `CoopSaveSlot` | 5 | Slot the client writes the received host world into. **The local save in this slot is overwritten.** |
 | `ForceHostSaveOnJoin` | true | Host makes a fresh save on join so the client gets the current world |
 | `PauseHostOnJoin` | true | Host world is paused while a client loads it, so nothing drifts during the join |
+| **Dice** |
+| `AllowStakes` | true | Host: allow optional dice stakes with personal wallets. Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` if previously disabled |
 | **Debug** |
 | `EnableLogging` | false | Write diagnostics to `BepInEx/LogOutput.log`. Also toggleable in-game (F8 → Logging) |
 | `EnableDebugPanel` | false | Developer/test panel. The **Debug** button in the menu does nothing until this is on |
@@ -201,7 +203,7 @@ Visit: https://github.com/pander33/SailwindCoop
 Sailwind LAN Co-op — это мод, добавляющий мультиплеер в игру Sailwind. Позволяет играть с друзьями по локальной сети (LAN) или через VPN/туннелирование.
 
 **Текущая версия:** 0.4.3
-**Сетевой протокол:** 89. На всех компьютерах должна быть одна сборка. Большинство новых функций ещё ожидает проверки в игре; см. описание релиза.
+**Сетевой протокол:** 92 (неопубликованная сборка разработки; опубликованная 0.4.3 использует 89). На всех компьютерах должна быть одна сборка. Большинство новых функций ещё ожидает проверки в игре; см. описание релиза.
 **Требования:** BepInEx 5.x, Sailwind 0.39 (Steam версия)
 
 ### ✨ Особенности
@@ -261,7 +263,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 #### Подключение к игре
 1. Запустите Sailwind
-2. **Важно:** НЕ загружайте сохранение (останьтесь в главном меню)
+2. Останьтесь в главном меню или подключайтесь из загруженного мира: игра сама сохранит его, вернётся на титульный экран и подключится
 3. Нажмите **F8**, чтобы открыть меню **Sailwind Co-op**
 4. Введите IP хоста и нажмите **Join**
    - IP по умолчанию: `127.0.0.1` (локальный)
@@ -313,6 +315,8 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `CoopSaveSlot` | 5 | Слот, куда клиент пишет полученный мир хоста. **Локальное сохранение в этом слоте перезаписывается.** |
 | `ForceHostSaveOnJoin` | true | Хост делает свежее сохранение при подключении, чтобы клиент получил актуальный мир |
 | `PauseHostOnJoin` | true | Мир хоста стоит на паузе, пока клиент его грузит — иначе состояние успевает разойтись |
+| **Кости** |
+| `AllowStakes` | true | Хост: разрешить добровольные ставки при личных кошельках. Старый конфиг сохраняет записанное значение; если ставки были выключены, задайте `AllowStakes = true` в секции `[Dice]` |
 | **Отладка** |
 | `EnableLogging` | false | Писать диагностику в `BepInEx/LogOutput.log`. Переключается и в игре (F8 → Logging) |
 | `EnableDebugPanel` | false | Панель разработчика. Кнопка **Debug** в меню не работает, пока это выключено |

@@ -282,7 +282,6 @@ namespace SailwindCoop.Sync
         /// to the coop slot and triggers the game's load flow.</summary>
         private void ApplyHostSave(byte[] bytes)
         {
-            if (RefuseLoadIntoWorld()) return;
             SaveContainer host;
             using (var ms = new MemoryStream(bytes))
             {
@@ -325,21 +324,8 @@ namespace SailwindCoop.Sync
             runner.StartCoroutine(LoadRoutine(slot));
         }
 
-        private bool RefuseLoadIntoWorld()
-        {
-            if (!GameState.playing && !GameState.currentlyLoading) return false;
-            // Refuse before merging/writing a slot, and recheck when starting the load coroutine.
-            Plugin.Logger.LogError("[SaveTransfer] Client is already in-game - host world was not loaded. " +
-                                   "Return to the main menu and reconnect.");
-            CoopBehaviour.Notice("Join failed: you were already in a world. Return to the main menu, then join.");
-            NotifyHostLoaded(false);
-            return true;
-        }
-
         private IEnumerator LoadRoutine(int slot)
         {
-            if (RefuseLoadIntoWorld()) yield break;
-
             SaveSlots.currentSlot = slot;
             if (SaveSlots.slotsActive != null && slot < SaveSlots.slotsActive.Length)
                 SaveSlots.slotsActive[slot] = true;
@@ -353,7 +339,7 @@ namespace SailwindCoop.Sync
                     Plugin.Logger.LogError("[SaveTransfer] Failed to start host world load within 10 s " +
                                            "(StartMenu busy or unavailable)");
                     CoopBehaviour.Notice("Join failed: could not start loading the host's world. " +
-                                         "Make sure you are on the main menu, then join again.");
+                                         "Join again; if it repeats, restart the game.");
                     NotifyHostLoaded(false);
                     yield break;
                 }

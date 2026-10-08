@@ -59,6 +59,12 @@ namespace ProtocolSmoke
             TestOversizedCounts(failures);
 
             int populated = 0, truncated = 0;
+            CheckPopulatedMessage(new HelloMsg { ProtocolVersion = Protocol.Version, PlayerGuid = Guid.NewGuid().ToString("N"), PlayerName = "Dice guest", SelectedAvatar = "avatar.bundle" }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceRequestMsg { Action = DiceAction.Place, TableId = 38, Epoch = 14, RequestId = 77, Revision = 90, TurnId = 2, BoatIndex = 511, Stake = 15, MatchId = Guid.NewGuid().ToString("N"), Mask = 5, Flag = true, X = 2.5f, Y = 1.3f, Z = -4, Yaw = 120 }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceStateMsg { TableId = 38, Epoch = 14, Revision = 99, TurnId = 3, RollId = 4, ClockRevision = 7, OwnerNetId = 3, Stake = 25, StakeCurrency = 2, StakesAllowed = true, BoatIndex = 511, MatchId = Guid.NewGuid().ToString("N"), ClockEpoch = "clock", Phase = 4, ResumePhase = 3, Faces = new byte[] { 4, 4, 2 }, HeldMask = 3, RollHeldMask = 3, Running = true, AnchorTick = 1000, ElapsedMs = 700, PresentationAtMs = 500, Players = Enumerable.Range(0, 5).Select(i => new DicePlayerData { Identity = Guid.NewGuid().ToString("N"), Name = "Player " + i, NetId = (uint) i + 1, Connected = true, Ready = true, Scores = new[] { 14, 21, 30 }, Scored = new[] { true, true, true } }).ToArray() }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceResultMsg { RequestId = 7, Revision = 90, Result = DiceResultKind.ResyncNeeded, Detail = "changed" }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceBaselineMsg { Revision = 100, Tables = new uint[] { 3, 4, 5 } }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceJournalMsg { Text = "Player 1: 42 points" }, failures, ref populated, ref truncated);
             foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
                 t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(DirtRequestMsg) || t == typeof(DirtStateMsg) || t == typeof(OrbRequestMsg) || t == typeof(OrbStateMsg) || t == typeof(WindRequestMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t) || typeof(RefitBody).IsAssignableFrom(t)))
             {
@@ -325,7 +331,7 @@ namespace ProtocolSmoke
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
                 (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
-                 a is ModEntry || a is ModPlugin || a is ModListFile))
+                  a is ModEntry || a is ModPlugin || a is ModListFile || a is DicePlayerData))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

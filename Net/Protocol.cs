@@ -14,7 +14,7 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 89;
+        public const int Version = 92;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -133,6 +133,11 @@ namespace SailwindCoop.Net
                 case MsgType.WalletState: return new WalletStateMsg();
                 case MsgType.WalletDelta: return new WalletDeltaMsg();
                 case MsgType.ShopTaken: return new ShopTakenMsg();
+                case MsgType.DiceRequest: return new DiceRequestMsg();
+                case MsgType.DiceState: return new DiceStateMsg();
+                case MsgType.DiceResult: return new DiceResultMsg();
+                case MsgType.DiceBaseline: return new DiceBaselineMsg();
+                case MsgType.DiceJournal: return new DiceJournalMsg();
                 case MsgType.MissionAccept: return new MissionAcceptMsg();
                 case MsgType.MissionAbandon: return new MissionAbandonMsg();
                 case MsgType.BoatPurchase: return new BoatPurchaseMsg();

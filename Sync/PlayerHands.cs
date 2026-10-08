@@ -16,6 +16,16 @@ namespace SailwindCoop.Sync
         public bool HasRight, HasLeft;
         public Vector3 RightWorld, LeftWorld;
 
+        private Transform _reachAnchor;
+        private Vector3 _reachLocal;
+        private float _reachUntil;
+
+        /// <summary>Свободная правая рука тянется к точке на объекте (стаканчик костей) заданное время.</summary>
+        public void Reach(Transform anchor, Vector3 local, float seconds)
+        {
+            _reachAnchor = anchor; _reachLocal = local; _reachUntil = Time.unscaledTime + seconds;
+        }
+
         private GoPointer _gp;
         private float _gpRetryAt;
 
@@ -33,6 +43,7 @@ namespace SailwindCoop.Sync
             _gp = null;
             _gpRetryAt = 0f;
             HasRight = HasLeft = false;
+            _reachAnchor = null;
         }
 
         /// <param name="player">Трансформ локального игрока (render-кадр).</param>
@@ -79,6 +90,11 @@ namespace SailwindCoop.Sync
                 }
             }
 
+            if (button == null && item == null && _reachAnchor != null && Time.unscaledTime < _reachUntil)
+            {
+                RightWorld = _reachAnchor.TransformPoint(_reachLocal);
+                HasRight = true;
+            }
             if (button == null) return;
             Vector3 grip = GripPoint(button);
             if (item != null)

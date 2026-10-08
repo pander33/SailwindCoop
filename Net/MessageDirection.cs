@@ -47,6 +47,7 @@ namespace SailwindCoop.Net
                 case MsgType.ModFileRequest:
 #endif
                 case MsgType.WalletDelta:
+                case MsgType.DiceRequest:
                     return MsgFlow.ToHost;
 
                 case MsgType.HelloAck:
@@ -90,6 +91,10 @@ namespace SailwindCoop.Net
                 case MsgType.ModFileEnd:
 #endif
                 case MsgType.WalletState:
+                case MsgType.DiceState:
+                case MsgType.DiceResult:
+                case MsgType.DiceBaseline:
+                case MsgType.DiceJournal:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.

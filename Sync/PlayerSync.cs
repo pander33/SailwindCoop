@@ -764,6 +764,8 @@ namespace SailwindCoop.Sync
         private bool _haveYaw;
 
         private readonly LocalHandProbe _handProbe = new LocalHandProbe();
+        /// <summary>The local avatar reaches with its free right hand for a point on an object for a while.</summary>
+        public void ReachFor(Transform anchor, Vector3 local, float seconds) => _handProbe.Reach(anchor, local, seconds);
 
         private EmoteId _emote;
         private long _emoteTick;
@@ -946,6 +948,8 @@ namespace SailwindCoop.Sync
 
             // Never render ourselves.
             if (msg.NetId == _net.MyNetId) return;
+            // A pose relayed just before the player left may arrive after the roster that dropped them.
+            if (_gone.Contains(msg.NetId)) return;
 
             if (!_remotes.TryGetValue(msg.NetId, out var a))
             {
@@ -1064,6 +1068,16 @@ namespace SailwindCoop.Sync
             }
         }
 
+        private readonly HashSet<uint> _gone = new HashSet<uint>();
+
+        /// <summary>Client: the host no longer lists this player. Its avatar goes and stays gone; the
+        /// host does not give the same NetId to anyone else.</summary>
+        public void ForgetRemote(uint netId)
+        {
+            _gone.Add(netId);
+            RemoveRemote(netId);
+        }
+
         public void RemoveRemote(uint netId)
         {
             if (_remotes.TryGetValue(netId, out var a))
@@ -1080,6 +1094,7 @@ namespace SailwindCoop.Sync
             BoatAuthority.Instance?.Clear();
             foreach (var a in _remotes.Values)
                 if (a.Go != null) Object.Destroy(a.Go);
+            _gone.Clear();
             _remotes.Clear();
             _remoteAvatarFile.Clear();
             _npcRetryAt.Clear();

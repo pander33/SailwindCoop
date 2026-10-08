@@ -111,6 +111,11 @@ namespace SailwindCoop.Net
         WalletState = 115,      // host -> client : shared wallet on/off and the host's balance (ReliableOrdered, on change)
         WalletDelta = 116,      // client -> host : what the client spent from or added to the shared wallet
         ShopTaken = 117,        // buyer -> host -> others : this shelf place of a shop was bought out
+        DiceRequest = 118,      // client -> host : one dice table action (place, join, roll, keep, bank, pause, remove)
+        DiceState = 119,        // host -> client : full state of one dice table (ReliableOrdered, on change)
+        DiceResult = 120,       // host -> client : answer to a DiceRequest by RequestId
+        DiceBaseline = 121,     // host -> client : ids of all existing dice tables, sent after their states
+        DiceJournal = 122,      // host -> client : summary of completed dice matches for reading
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -190,6 +195,7 @@ namespace SailwindCoop.Net
         public string WorldId = "";      // host save identity; must match
         public string PlayerName = "";
         public string SelectedAvatar = ""; // avatar bundle file name, e.g. "avatar1.bundle"
+        public string PlayerGuid = "";
 
         public MsgType Type => MsgType.Hello;
 
@@ -200,6 +206,7 @@ namespace SailwindCoop.Net
             w.Put(WorldId);
             w.Put(PlayerName);
             w.Put(SelectedAvatar ?? "");
+            w.Put(PlayerGuid ?? "");
         }
 
         public void Deserialize(NetDataReader r)
@@ -209,6 +216,7 @@ namespace SailwindCoop.Net
             WorldId = r.GetString();
             PlayerName = r.GetString();
             SelectedAvatar = r.GetString();
+            PlayerGuid = r.GetString(64);
         }
     }
 

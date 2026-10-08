@@ -10,6 +10,8 @@
     <Compile Include="..\..\Net\BoatGenerationQueue.cs" Link="Net\BoatGenerationQueue.cs" />
     <Compile Include="..\..\Net\BoatGenerationBook.cs" Link="Net\BoatGenerationBook.cs" />
     <Compile Include="..\..\Sync\AtomicSaveFile.cs" Link="AtomicSaveFile.cs" />
+    <Compile Include="..\..\Sync\DiceGame.cs" Link="DiceGame.cs" />
+    <Compile Include="..\..\Sync\DiceJournal.cs" Link="DiceJournal.cs" />
     <Compile Include="..\..\Net\ModManifest.cs" Link="Net\ModManifest.cs" />
     <Compile Include="..\..\Sync\ModCatalog.cs" Link="ModCatalog.cs" />
     <Compile Include="..\..\Sync\ModTransfer.cs" Link="ModTransfer.cs" />

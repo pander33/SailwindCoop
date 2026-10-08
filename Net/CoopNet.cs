@@ -18,6 +18,7 @@ namespace SailwindCoop.Net
         public bool HandshakeDone;
         public uint PlayerNetId;
         public string PlayerName = "";
+        public string PlayerGuid = "";
         public string SelectedAvatar = ""; // avatar bundle file name chosen by this player
         public MemberJoinState JoinState = MemberJoinState.Handshaking;
         public int BoatIndex = -1;
@@ -85,6 +86,25 @@ namespace SailwindCoop.Net
         public string ModVersion = "0.0.1";
         public Func<string> WorldIdProvider = () => "";   // host's save identity ("" = unknown)
         public string PlayerName = "Player";
+        public string PlayerGuid = "";
+        public string GetPlayerGuid(uint netId)
+        {
+            if (netId == MyNetId) return PlayerGuid;
+            foreach (var session in _sessions.Values)
+                if (session.PlayerNetId == netId) return session.PlayerGuid;
+            return "";
+        }
+        /// <summary>Host: true when a participant that joined earlier (the host first) presents the same
+        /// PlayerGuid, as two copies started from one install folder do.</summary>
+        public bool SharesPlayerGuid(uint netId)
+        {
+            string guid = GetPlayerGuid(netId);
+            if (string.IsNullOrEmpty(guid) || netId == MyNetId) return false;
+            if (guid == PlayerGuid) return true;
+            foreach (var session in _sessions.Values)
+                if (session.HandshakeDone && session.PlayerNetId < netId && session.PlayerGuid == guid) return true;
+            return false;
+        }
 
         // Server (host) tuning, supplied by the runtime layer from config.
         public int MaxClients = 4;
@@ -105,6 +125,8 @@ namespace SailwindCoop.Net
         public event Action<HelloAckMsg> OnAccepted;
         // Raised when a remote player leaves (host side, with the leaver's NetId).
         public event Action<uint> OnPlayerLeft;
+        // Raised on a client when another player is no longer in the host's roster.
+        public event Action<uint> OnMemberGone;
         public event Action OnRosterChanged;
         public event Action<GameplayNoticeMsg> OnGameplayNotice;
 
@@ -477,6 +499,7 @@ namespace SailwindCoop.Net
                     WorldId = WorldIdProvider(),
                     PlayerName = PlayerName,
                     SelectedAvatar = mySelection,
+                    PlayerGuid = PlayerGuid,
                 }, DeliveryMethod.ReliableOrdered);
             }
             else // Host
@@ -670,6 +693,7 @@ namespace SailwindCoop.Net
             Registry.Register(assigned, NetObjKind.Player, assigned);
             session.HandshakeDone = true;
             session.PlayerNetId = assigned;
+            session.PlayerGuid = hello.PlayerGuid;
             session.PlayerName = string.IsNullOrEmpty(hello.PlayerName) ? ("Player" + assigned) : hello.PlayerName;
             session.SelectedAvatar = string.IsNullOrWhiteSpace(hello.SelectedAvatar) ? "" : hello.SelectedAvatar.Trim();
             session.JoinState = MemberJoinState.Queued;
@@ -844,7 +868,12 @@ namespace SailwindCoop.Net
                 };
                 _playerNames[m.NetId] = m.Name ?? "";
             }
+            SessionMemberInfo[] previous = _roster;
             _roster = next;
+            // A client hears about a leaver only through the roster: OnPlayerLeft is raised on the host.
+            if (Role == Role.Client)
+                foreach (SessionMemberInfo old in previous)
+                    if (old.NetId != MyNetId && Array.FindIndex(next, m => m.NetId == old.NetId) < 0) OnMemberGone?.Invoke(old.NetId);
             OnRosterChanged?.Invoke();
         }
 

@@ -55,6 +55,7 @@ internal static class Program
         try
         {
             ItemReliabilityTests.Run(Test);
+            DiceTests.Run(Test);
             ModSharingTests.Run(Test);
             TunnelTests.Run(Test);
             Test("a mission reward is divided equally and nothing is created or lost", () => {

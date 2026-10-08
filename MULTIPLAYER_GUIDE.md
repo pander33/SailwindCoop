@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.4.3) uses **protocol 89**, requires Sailwind 0.39, and cannot connect to
+Every machine needs a build with the same protocol number. The unreleased development build uses **protocol 92** (published 0.4.3 uses 89), requires Sailwind 0.39, and cannot connect to
 earlier protocol builds. A host on 0.4.3 or later accepts other versions of the mod that use the same protocol; a host on 0.4.2 or earlier requires the exact same version. Most features added since 0.1.6 still await end-to-end in-game verification.
 
 <!--full-->
@@ -21,7 +21,9 @@ for example `Sailwind Co-op 0.4.3 (Thunderstore)`. Sections below that apply to 
 ## Session Model
 
 - The host loads the real world save.
-- Joining players should stay in the main menu, open the F8 co-op menu, enter the host IP, and press `Join`.
+- Joining players open the F8 co-op menu, enter the host IP, and press `Join`. The main menu is the
+  quickest place to join from. From a loaded world the game saves it (unless it is the co-op slot),
+  returns to the title screen by itself and then joins; this takes as long as starting the game.
 - The host streams the current world save to the client.
 - The client loads that world into a dedicated co-op slot.
 - The guest keeps a local co-op profile for personal character progress such as money, reputation, needs, known prices, missions, journal data, and personal belt inventory.
@@ -244,12 +246,46 @@ Best current practice: use one main boat for normal co-op sailing, and test ding
 
 - Hold `G` during a session to open the gesture wheel, move the mouse to a gesture and release.
   Release in the middle, or press `Esc`, to cancel.
-- Gestures: Wave, Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray. "Land ho!" and
+- Gestures: Wave, Land ho!, Point, Come here, Applause, Shrug, Salute, Hooray. The ninth sector,
+  **Dice table**, is not a gesture: it sets up a dice table (see below). "Land ho!" and
   "Point" aim where you are looking; "Land ho!" also shouts, and others hear it from your position.
 - Walking ends a gesture. You do not see your own gesture: the game is first person.
 - The key is `UI.EmoteKey` in the config file. Change it if `G` is bound to something else.
 - A hint with the key appears once, the first time the wheel is available. The F8 menu shows the
   key as well.
+
+### Deck Dice
+
+A short game for two to five players at a low folding table, played sitting on the deck (crouch). Everything is done at the table; there is
+no menu for it. The hint under the crosshair names what the pick-up button and the use button do
+on the part of the table you are looking at.
+
+- **Set up a table:** hold `G`, choose **Dice table**, look at a level spot on the deck, a pier or
+  the ground, turn the table with the mouse wheel and press the pick-up button. The use button cancels.
+  A player has one table at a time, a boat has one table, and a world has at most five. Setting
+  up a table again moves the one you already have, wherever it stands, unless dice are being
+  rolled at it right now; a paused party ends with the move.
+- **Sit down and start:** press the pick-up button on the cup to sit down, again to say you are
+  ready. When everyone seated is ready, any of them starts the party at the score board.
+- **A turn:** the cup rolls three dice. Press a die to keep it, the cup to reroll the others once,
+  or the score board to take the points. Points are the sum of the dice, plus 4 for a pair or 12
+  for a triple. Three rounds; the highest total wins and equal totals share the victory.
+- **Pause:** the use button on the score board pauses the party; so does a seated player who
+  leaves the boat, goes to bed or disconnects. Everyone seated presses the cup to go on. A paused
+  party can be cancelled by a vote at the board, or by a player who leaves at the cup.
+- **After the party:** the cup starts a new one for those who played. The owner folds the table away with the use
+  button on the score board, also during a pause (that ends the party). The score board also shows the rules and the past parties.
+- A table belongs to the session and to the player who set it up: it is not saved with the world,
+  and it disappears when its owner leaves the game. The history of finished parties belongs to
+  the world and follows its save.
+- **Stakes** are enabled by default (`Dice.AllowStakes = true`), but only with personal wallets.
+  The host can disable them by setting `AllowStakes = false` in the config file's `[Dice]` section.
+  An existing config keeps its saved value: if it has `AllowStakes = false`, change it to `true`
+  to enable stakes. Seated players set a stake with the mouse wheel on the score board
+  before the start; a changed stake asks everyone to confirm again. When the party ends, every
+  loser pays the stake to the winner, divided between the winners of a shared victory.
+- Players who do not sit down see the table, the rolls and the score like everyone else.
+- If the table looks wrong, turn off `Dice.LitMaterials` in the config file.
 
 If a selected NPC skin is not available on the other machine yet, the remote player may temporarily appear with the default avatar until the skin can be built.
 
@@ -287,8 +323,8 @@ guest types the host's IP address. Steam mode needs no IP address, port forwardi
   press **Join** next to the one marked `hosting`. A host who is not listed can be joined by typing
   their Steam ID (17 digits) into **Host ID**; the host copies it with **Copy ID**.
 - **Join Game in Steam:** a friend who hosts over Steam also has **Join Game** in your Steam friends
-  list, and the host can send you **Invite to Game** from there. Be at the main menu: a request
-  that arrives while you are in a world or hosting is refused with a notice. If the game is not
+  list, and the host can send you **Invite to Game** from there. A request that arrives while you
+  are hosting is refused with a notice; from a loaded world the game returns to the title screen first. If the game is not
   running, Steam starts it and the join begins when the title screen appears. For a running game
   this works only while the F8 menu is in Steam mode.
 - **Friends only / Anyone** (host): by default only your Steam friends can connect, and joining by
@@ -352,7 +388,7 @@ Details:
 - Ping and the last known boat are shown beside each player.
 - The host may close the session to new joins without removing anyone already connected.
 - Removing a guest uses a two-step confirmation and sends that guest a readable reason.
-- Reconnect is a full fresh join and is only allowed from the main menu.
+- Reconnect is a full fresh join. From a loaded world the game returns to the title screen first.
 - **Export report** (under **Settings**) creates a single diagnostic text file that can be attached to a bug report.
 
 ## Reporting A Problem

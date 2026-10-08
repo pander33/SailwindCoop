@@ -2,6 +2,35 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+The development build uses protocol 92; it cannot connect to builds with an earlier protocol.
+
+### Added
+
+- Dice tables can also be placed on level piers and island ground, using shared world coordinates.
+- Deck dice: a folding table with three dice, a cup and a score board for two to five players;
+  three rounds with one optional reroll, pair +4, triple +12. Everything is done at the table:
+  the hint under the crosshair says what the pick-up and use buttons do. Players who do not sit
+  down see the same rolls and score.
+- The table is set up from the gesture wheel (`G`, **Dice table**). One table per player, one per
+  boat, five in a world. A table is not saved with the world and leaves with its owner.
+- A party can be paused and resumed, a player who reconnects returns to the same seat, and the
+  score board shows the rules and the history of finished parties.
+- Optional stakes in coins, enabled by default (`Dice.AllowStakes`, personal wallets only).
+  Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` to enable them
+  if previously disabled.
+- Joining and reconnecting work from a loaded world: the game returns to the title screen by itself
+  and then joins. It is no longer necessary to restart the game or to stay at the main menu.
+
+### Fixed
+
+- With three or more players, the avatar of a player who left stayed in the world on the other
+  guests' machines.
+- Persistent player identity and a dice history that belongs to the world: it follows the save,
+  its backups and its copies, and a new game starts an empty one.
+- Deck dice has not been verified in a running game yet.
+
 ## [0.4.3] - 2026-10-07
 
 The protocol is still 89. Hosts should update: a host on 0.4.2 or earlier still refuses players

@@ -33,11 +33,14 @@ namespace SailwindCoop.Sync
         {
             try { Plugin.Logger?.LogWarning("[InputScopePatches] " + error); } catch { }
         }
-        private static void PreInput(out InteractionContext.Scope __state)
+        private static bool PreInput(GoPointer __instance, out InteractionContext.Scope __state)
         {
             InteractionContext.Scope state = null;
             PatchGuard.Run(() => state = InteractionContext.Begin(InteractionSource.LocalInput), Report);
             __state = state;
+            bool consumed = false;
+            PatchGuard.Run(() => consumed = CoopBehaviour.Instance?.Dice?.Input.Handle(__instance) == true, Report);
+            return !consumed;
         }
         private static void FinishInput(InteractionContext.Scope __state)
             => PatchGuard.Run(() => __state?.Dispose(), Report);

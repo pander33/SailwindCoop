@@ -103,6 +103,8 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> EmoteHintShown;
         public readonly ConfigEntry<bool> SharedWallet;
         public readonly ConfigEntry<KeyCode> GiveKey;
+        public readonly ConfigEntry<bool> DiceStakes;
+        public readonly ConfigEntry<bool> DiceLitMaterials;
         public readonly ConfigEntry<bool> GiveHintShown;
 
         public CoopConfig(ConfigFile c)
@@ -143,6 +145,8 @@ namespace SailwindCoop
             EmoteKey = c.Bind("UI", "EmoteKey", KeyCode.G, "Hold to open the emote wheel, move the mouse to a gesture and release. Works only in a co-op session. Change it if the key is bound to something else in the game.");
             SharedWallet = c.Bind("Economy", "SharedWallet", false, "Host: the whole crew uses the host's money. Every purchase, sale and reward of any player changes the host's wallet, and everyone sees the same balance. Guests' own money stays in their profiles and comes back when they leave or when this is turned off. Off: every player has a personal wallet and mission rewards are divided equally. Toggle it in the co-op menu (F8) while hosting.");
             GiveKey = c.Bind("UI", "GiveKey", KeyCode.H, "Look at a crewmate standing next to you and hold this key to hold out money: the mouse wheel changes the amount, the middle mouse button changes the currency. The other player looks at you and presses the same key to take it. Change it if the key is bound to something else in the game.");
+            DiceStakes = c.Bind("Dice", "AllowStakes", true, "Host: allow players at a dice table to agree on a stake in the lobby (mouse wheel on the score board). Enabled by default; turn off to disable stakes. When the party ends, every loser pays the stake to the winner from a personal wallet. Not available with the shared wallet.");
+            DiceLitMaterials = c.Bind("Dice", "LitMaterials", true, "The dice table uses a material of the game that reacts to light. Turn it off if the table looks wrong: it then uses a plain material that does not react to light.");
             GiveHintShown = c.Bind("UI", "GiveHintShown", false, "The one-time on-screen hint about handing money over has been shown. Set to false to see it again.");
             EmoteHintShown = c.Bind("UI", "EmoteHintShown", false, "The one-time on-screen hint about the emote wheel has been shown. Set to false to see it again in the next session.");
         }

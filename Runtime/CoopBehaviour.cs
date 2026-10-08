@@ -40,6 +40,7 @@ namespace SailwindCoop.Runtime
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
         public WalletSync Wallet { get; private set; }
+        public DiceSync Dice { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
         public SaveTransferSync SaveTransfer { get; private set; }
         public ModSync Mods { get; private set; }
@@ -116,6 +117,9 @@ namespace SailwindCoop.Runtime
                 SnapshotHz = Plugin.Cfg.SnapshotHz.Value,
             };
 
+            Net.PlayerGuid = CoopIdentity.Load(System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "SailwindCoop")).ToString("N");
+            Dice = new DiceSync(Net) { AllowStakes = Plugin.Cfg.DiceStakes.Value };
+
             Boats = new BoatSync(Net)
             {
                 InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value,
@@ -165,7 +169,7 @@ namespace SailwindCoop.Runtime
             Wallet = new WalletSync(Net);
             Shipyard = new ShipyardSync(Net);
             Shipyard.Dispatch = OnGameMessage;
-            Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); };
+            Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
             SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = true;
             Mods = new ModSync(Net)
@@ -217,6 +221,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Item simulation", () => ItemSimulationPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shop", () => ShopPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Dice save lifecycle", () => DiceSavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Missions", () => MissionPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
@@ -250,9 +255,11 @@ namespace SailwindCoop.Runtime
             Net.OnGameMessage += OnGameMessage;
             _notifications = new CoopNotifications();
             Net.OnGameplayNotice += msg => _notifications.Add(msg, Net);
+            Net.OnMemberGone += netId => Players.ForgetRemote(netId);
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
+                Dice.PlayerLeft(netId);
                 Items.ClearRemoteActor(netId);
                 Anchor.ClearRemoteActor(netId);
                 Mooring.ClearRemoteActor(netId);
@@ -359,6 +366,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Teleport.Tick", () => Teleport.Tick()),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
                 new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
+                new SyncStep("Dice.Tick", () => Dice.Tick()),
             };
         }
 
@@ -381,7 +389,8 @@ namespace SailwindCoop.Runtime
             {
                 bool emotesAllowed = EmoteWheelAllowed();
                 EmoteId picked = _emoteWheel.Update(Plugin.Cfg.EmoteKey.Value, emotesAllowed);
-                if (picked != EmoteId.None) Players.StartEmote(picked);
+                if (picked == EmoteId.DiceTable) Dice.Input.BeginPlacement();
+                else if (picked != EmoteId.None) Players.StartEmote(picked);
 
                 // Подсказка о колесе — один раз за всё время, в первой сессии, где колесо доступно.
                 if (emotesAllowed && !Plugin.Cfg.EmoteHintShown.Value && _notifications != null)
@@ -467,6 +476,12 @@ namespace SailwindCoop.Runtime
             if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
             {
+                case MsgType.DiceRequest:
+                case MsgType.DiceState:
+                case MsgType.DiceResult:
+                case MsgType.DiceBaseline:
+                case MsgType.DiceJournal:
+                    Dice.Receive(msg, fromPeer); break;
                 case MsgType.ModManifest:
                     Mods.OnManifest((ModManifestMsg)msg); break;
                 case MsgType.ModSyncResult:
@@ -688,6 +703,7 @@ namespace SailwindCoop.Runtime
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
                             HouseDoors.SendBaseline(fromPeer);
+                            Dice.SendBaseline(netId);
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         }
                         Pause.Release(netId);
@@ -919,6 +935,7 @@ namespace SailwindCoop.Runtime
             {
                 if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
+                Dice?.Input.DrawHint();
                 _emoteWheel.Draw();
                 _moneyHand.Draw(_emoteWheel);
                 if (_notifications != null) _notifications.Draw();
@@ -1077,6 +1094,7 @@ namespace SailwindCoop.Runtime
         public void StartClientSession(string ip, int port)
         {
             if (SessionBlocked() || RestartPending()) return;
+            if (LeaveWorldFirst(() => StartClientSession(ip, port))) return;
             Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
             TeardownSession("start-client", saveClientProfile: true);
             ClearNotice();
@@ -1132,12 +1150,14 @@ namespace SailwindCoop.Runtime
                 Notice("You are hosting. Stop the session (" + Plugin.Cfg.MenuKey.Value + ") before joining a friend through Steam.");
                 return;
             }
-            if (GameState.playing || GameState.currentlyLoading)
+            // From a loaded world the join leaves it first; the request waits for the title screen below.
+            if (GameState.playing && !GameState.currentlyLoading && !_leavingWorld)
             {
-                _steamJoinHost = 0UL;
-                Notice("Return to the main menu, then join your friend through Steam again.");
+                _steamJoinSince = now;
+                LeaveWorldFirst(null);
                 return;
             }
+            if (_leavingWorld || GameState.currentlyLoading) return;
             // A game started by Steam is still on its way to the title screen.
             if (UnityEngine.Object.FindObjectOfType<StartMenu>() == null)
             {
@@ -1169,6 +1189,7 @@ namespace SailwindCoop.Runtime
         public void StartSteamClientSession(ulong hostSteamId)
         {
             if (SessionBlocked() || RestartPending()) return;
+            if (LeaveWorldFirst(() => StartSteamClientSession(hostSteamId))) return;
             Plugin.Logger.LogInfo("[Coop] Joining via UI over Steam to " + hostSteamId);
             TeardownSession("start-client", saveClientProfile: true);
             ClearNotice();
@@ -1179,14 +1200,98 @@ namespace SailwindCoop.Runtime
             NoticeFaultedPatchSets();
         }
 
-        public void ReconnectSession(string ip, int port)
+        public void ReconnectSession(string ip, int port) => StartClientSession(ip, port);
+
+        // The game has no way back to its title screen, and the host's world is loaded through that
+        // screen. A join from a loaded world therefore starts the game's scenes over, exactly as the
+        // game starts them itself, and repeats the join from the title screen.
+        private bool _leavingWorld;
+
+        /// <summary>True when the join was put off until the title screen is back.</summary>
+        private bool LeaveWorldFirst(System.Action join)
         {
-            if (GameState.playing)
+            if (_leavingWorld) return true;
+            if (!GameState.playing && !GameState.currentlyLoading) return false;
+            if (GameState.currentlyLoading)
             {
-                Notice("Return to the main menu before reconnecting to a co-op world.");
-                return;
+                Notice("The world is still loading. Join when it has finished.");
+                return true;
             }
-            StartClientSession(ip, port);
+            _leavingWorld = true;
+            StartCoroutine(LeaveWorld(join));
+            return true;
+        }
+
+        private IEnumerator LeaveWorld(System.Action join)
+        {
+            // What can throw sits in methods of its own: a coroutine cannot yield inside a try block.
+            if (!Guarded("Leaving the world", PrepareToLeaveWorld)) { _leavingWorld = false; yield break; }
+
+            // An own world is saved first; the save starts at the end of this frame.
+            yield return null;
+            for (float t = 0f; t < 10f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
+
+            if (!Guarded("Returning to the title screen", ReloadGameScenes)) { _leavingWorld = false; yield break; }
+
+            bool title = false;
+            for (float t = 0f; t < 90f && !title; t += Time.unscaledDeltaTime)
+            {
+                yield return null;
+                title = UnityEngine.Object.FindObjectOfType<StartMenu>() != null;
+            }
+            _leavingWorld = false;
+            if (!title)
+            {
+                Notice("Could not return to the title screen. Restart the game, then join.");
+                Plugin.Logger.LogError("[Coop] The title screen did not appear within 90 s after leaving the world");
+                yield break;
+            }
+            Plugin.Logger.LogInfo("[Coop] Back on the title screen, joining");
+            ClearNotice();
+            if (join != null) Guarded("Join after leaving the world", join);
+        }
+
+        private static bool Guarded(string what, System.Action action)
+        {
+            try { action(); return true; }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogError("[Coop] " + what + " failed: " + e);
+                Notice(what + " failed: " + e.Message);
+                return false;
+            }
+        }
+
+        private void PrepareToLeaveWorld()
+        {
+            Plugin.Logger.LogInfo("[Coop] Leaving the loaded world to join a session");
+            TeardownSession("leave-world", saveClientProfile: true);
+            Notice("Leaving this world to join...");
+            // The co-op slot holds a copy of a host's world and is rewritten by the join; an own world is kept.
+            if (SaveSlots.currentSlot != Mathf.Clamp(Plugin.Cfg.CoopSaveSlot.Value, 0, 5) && SaveLoadManager.instance != null)
+                SaveLoadManager.instance.SaveGame(compressed: true);
+        }
+
+        // The game sets these while a world runs and never clears them, because it never leaves a world.
+        private void ReloadGameScenes()
+        {
+            Time.timeScale = 1f;
+            GameState.playing = GameState.justStarted = GameState.currentlyLoading = GameState.loadingBoatLocalItems = false;
+            GameState.changingStartRegion = GameState.recovering = false;
+            GameState.loadingScenes = 0;
+            GameState.inBed = null;
+            GameState.sleeping = GameState.eyesFullyClosed = GameState.justWokeUp = GameState.sleepingInTavern = GameState.waitingForShift = false;
+            GameState.currentBoat = GameState.lastBoat = GameState.lastOwnedBoat = null;
+            GameState.indoors = GameState.onRatlines = GameState.clickedRatlines = GameState.holdingSunCompass = false;
+            GameState.currentShipyard = null; GameState.shipyardUpdatingOrder = false;
+            GameState.lastVisitedPort = null; GameState.currentHouse = null;
+            GameState.inPortMissionList = GameState.wasInSettingsMenu = false;
+            GameState.loadedCargoIntoCart = GameState.unloadedCargoFromCart = false;
+            GameState.inCursorMenu = _menuUI != null && _menuUI.Visible;
+            BoatCamera.on = false;
+            Dice.WorldChanging();
+            // Scene 0 is the game's own first scene; it loads the sea, the title screen comes with it.
+            UnityEngine.SceneManagement.SceneManager.LoadScene(0);
         }
 
         public void DisconnectSession(string reason)
@@ -1206,6 +1311,7 @@ namespace SailwindCoop.Runtime
             // leave the queue slot held for the next session.
             ResetJoinStreaming();
             Net.Stop();
+            Dice.Clear();
             _notifications?.Clear();
             Shipyard.Clear();
             Missions.Clear();

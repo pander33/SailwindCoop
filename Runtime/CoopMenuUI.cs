@@ -351,9 +351,7 @@ namespace SailwindCoop.Runtime
             GUI.enabled = canReconnect && !_restartPending;
             if (GUILayout.Button("Reconnect", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
             {
-                if (GameState.playing)
-                    _status = "Return to the main menu before reconnecting";
-                else if (_steamMode)
+                if (_steamMode)
                     JoinSteamFromField();
                 else if (TryApplyConnectionFields(out int reconnectPort))
                 {
@@ -366,7 +364,7 @@ namespace SailwindCoop.Runtime
 
             GUILayout.Label(PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
                 : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
-                : "Host: load a world first. Guest: join from the main menu.", _muted);
+                : "Host: load a world first. Guest: join from the main menu or from a loaded world.", _muted);
         }
 
         private void DrawSessionConnecting()
