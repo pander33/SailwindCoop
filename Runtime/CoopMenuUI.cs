@@ -390,7 +390,11 @@ namespace SailwindCoop.Runtime
                              : _net.SteamFriendsOnly ? "Steam friends only (" + _net.TransportStatus + ")"
                              : "LAN and Steam (" + _net.TransportStatus + ")") +
                             ", guests: " + _net.PeerCount, _muted);
-            if (_hostingOverSteam) DrawSteamAdmission();
+            if (_hostingOverSteam)
+            {
+                DrawSteamSelf();
+                DrawSteamAdmission();
+            }
             DrawWalletMode();
             GUILayout.Space(4f);
             float half = Split(2);
@@ -744,13 +748,12 @@ namespace SailwindCoop.Runtime
                                   : "Hosting accepts anyone: by Steam ID and on the LAN port";
         }
 
-        private void DrawSteam()
+        /// <summary>
+        /// Our own Steam ID with a copy button. Drawn before hosting and during it: a guest who is
+        /// not a friend joins by this number.
+        /// </summary>
+        private void DrawSteamSelf()
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Host ID", _muted, GUILayout.Width(CaptionWidth));
-            _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(FieldHeight));
-            GUILayout.EndHorizontal();
-
             GUILayout.BeginHorizontal();
             GUILayout.Label("You: " + _steamSelf + " (" + _steamMyId + ")", _muted);
             GUILayout.FlexibleSpace();
@@ -760,6 +763,16 @@ namespace SailwindCoop.Runtime
                 _status = "Your Steam ID is in the clipboard";
             }
             GUILayout.EndHorizontal();
+        }
+
+        private void DrawSteam()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Host ID", _muted, GUILayout.Width(CaptionWidth));
+            _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(FieldHeight));
+            GUILayout.EndHorizontal();
+
+            DrawSteamSelf();
             DrawSteamAdmission();
 
             GUILayout.Label(_friends.Length == 0
