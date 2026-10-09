@@ -57,6 +57,7 @@ namespace ProtocolSmoke
             TestSleepOrdering(failures);
             TestDirection(failures);
             TestOversizedCounts(failures);
+            TestRosterVersions(failures);
 
             int populated = 0, truncated = 0;
             CheckPopulatedMessage(new HelloMsg { ProtocolVersion = Protocol.Version, PlayerGuid = Guid.NewGuid().ToString("N"), PlayerName = "Dice guest", SelectedAvatar = "avatar.bundle" }, failures, ref populated, ref truncated);
@@ -257,6 +258,27 @@ namespace ProtocolSmoke
             chunk.Put((ushort)0); chunk.Put((ushort)0); chunk.Put(0); chunk.Put(ushort.MaxValue);
             if (Protocol.ReadBody(MsgType.ModFileChunk, new NetDataReader(chunk.Data, 0, chunk.Length)) != null)
                 failures.Add("ModFileChunkMsg: oversized chunk accepted");
+        }
+
+        /// <summary>The mod versions sit after the members: a roster without them is a valid roster
+        /// (a host that does not send them), and one with them is read whole.</summary>
+        private static void TestRosterVersions(List<string> failures)
+        {
+            var roster = new SessionRosterMsg { Revision = 5, AcceptingClients = true, Members = new[] {
+                new SessionRosterMsg.Member { NetId = 1, Name = "Host", IsHost = true, State = MemberJoinState.Ready, BoatIndex = 2, ModVersion = "0.4.4" },
+                new SessionRosterMsg.Member { NetId = 2, Name = "Guest", State = MemberJoinState.Queued, PingMs = 40, BoatIndex = -1, ModVersion = "0.4.3" } } };
+            var writer = Protocol.Write(roster);
+            var reader = new NetDataReader(writer.Data, 1, writer.Length);
+            var full = Protocol.ReadBody(MsgType.SessionRoster, reader) as SessionRosterMsg;
+            if (full == null || reader.AvailableBytes != 0 || full.Members.Length != 2 ||
+                full.Members[0].ModVersion != "0.4.4" || full.Members[1].ModVersion != "0.4.3" || full.Members[1].PingMs != 40)
+                failures.Add("SessionRosterMsg: versions round-trip");
+            int tail = 2 * (2 + 5);   // two strings of five characters, each with a two-byte length
+            var old = Protocol.ReadBody(MsgType.SessionRoster, new NetDataReader(writer.Data, 1, writer.Length - tail)) as SessionRosterMsg;
+            if (old == null || old.Members.Length != 2 || old.Members[0].ModVersion != "" || old.Members[1].Name != "Guest")
+                failures.Add("SessionRosterMsg: roster without versions refused");
+            if (Protocol.ReadBody(MsgType.SessionRoster, new NetDataReader(writer.Data, 1, writer.Length - 3)) != null)
+                failures.Add("SessionRosterMsg: cut version list accepted");
         }
 
         private static void TestSleepOrdering(List<string> failures)

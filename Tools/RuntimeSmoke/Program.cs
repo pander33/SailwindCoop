@@ -124,6 +124,18 @@ internal static class Program
             DiceTests.Run(Test);
             ModSharingTests.Run(Test);
             TunnelTests.Run(Test);
+            Test("a later mod version in the crew is found, an unreadable one is ignored", () => {
+                Assert(ModVersions.IsNewer("0.4.4", "0.4.3") && ModVersions.IsNewer("0.10.0", "0.9.9") && ModVersions.IsNewer("1.0.0", "0.99.99"), "newer");
+                Assert(!ModVersions.IsNewer("0.4.3", "0.4.3") && !ModVersions.IsNewer("0.4.2", "0.4.3"), "same or older");
+                Assert(!ModVersions.IsNewer("0.4.0", "0.4") && !ModVersions.IsNewer("0.4.3.0", "0.4.3") && ModVersions.IsNewer("0.4.1", "0.4"), "missing parts count as zero");
+                Assert(!ModVersions.IsNewer("", "0.4.3") && !ModVersions.IsNewer("0.5.0-beta", "0.4.3") && !ModVersions.IsNewer("0.5.0", "dev") && !ModVersions.IsNewer(null, null), "unreadable");
+                Assert(ModVersions.NewestAbove("0.4.3", new[] { "0.4.3", "0.4.5", "", "0.4.4", "0.4.5" }) == 1, "newest, first among equals");
+                Assert(ModVersions.NewestAbove("0.4.3", new[] { "0.4.3", "0.4.2", "junk" }) == -1 && ModVersions.NewestAbove("0.4.3", null) == -1, "nothing newer");
+                string older = ModVersions.ProtocolMismatch(92, 89, "0.4.4"), newer = ModVersions.ProtocolMismatch(89, 92, "");
+                Assert(older.StartsWith("your mod is older than the host's 0.4.4 (protocol 89, host 92)") && older.EndsWith("Update the mod to join"), "joining player is behind");
+                Assert(newer.StartsWith("the host's mod is older than yours (protocol 92, host 89)") && newer.EndsWith("The host has to update the mod"), "host is behind");
+                Assert(ModVersions.Clean("  0.4.3 ") == "0.4.3" && ModVersions.Clean(new string('9', ModVersions.MaxLength + 1)) == "" && ModVersions.Clean(null) == "", "clean");
+            });
             Test("a mission reward is divided equally and nothing is created or lost", () => {
                 foreach (int total in new[] { 0, 1, 3, 4, 100, 101, 999, 12345 })
                     for (int players = 1; players <= 5; players++)

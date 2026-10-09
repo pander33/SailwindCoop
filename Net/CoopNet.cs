@@ -19,6 +19,7 @@ namespace SailwindCoop.Net
         public uint PlayerNetId;
         public string PlayerName = "";
         public string PlayerGuid = "";
+        public string ModVersion = "";
         public string SelectedAvatar = ""; // avatar bundle file name chosen by this player
         public MemberJoinState JoinState = MemberJoinState.Handshaking;
         public int BoatIndex = -1;
@@ -35,6 +36,7 @@ namespace SailwindCoop.Net
         public MemberJoinState State;
         public int PingMs = -1;
         public int BoatIndex = -1;
+        public string ModVersion = "";
     }
 
     /// <summary>
@@ -155,6 +157,10 @@ namespace SailwindCoop.Net
             (string.IsNullOrEmpty(_tunnel.LastError) ? "" : " err=" + _tunnel.LastError);
         public double RttMs => Clock.RttMs;
         public SessionMemberInfo[] RosterSnapshot => (SessionMemberInfo[])_roster.Clone();
+        /// <summary>The latest mod version in the session when it is later than this machine's, else "".</summary>
+        public string NewerModVersion { get; private set; } = "";
+        /// <summary>Name of the member who runs <see cref="NewerModVersion"/>.</summary>
+        public string NewerModVersionHolder { get; private set; } = "";
 
         public string GetPlayerName(uint netId)
         {
@@ -383,6 +389,8 @@ namespace SailwindCoop.Net
             _hostPeer = null;
             _roster = new SessionMemberInfo[0];
             _rosterRevision = 0;
+            NewerModVersion = "";
+            NewerModVersionHolder = "";
             _hostBoatIndex = -1;
             AcceptingClients = true;
             OnRosterChanged?.Invoke();
@@ -478,8 +486,33 @@ namespace SailwindCoop.Net
                 return;
             }
             // Cap concurrent clients per config (Server/MaxClients).
-            if (_sessions.Count >= Math.Max(1, MaxClients)) { request.Reject(); return; }
-            request.AcceptIfKey(ConnKey);
+            if (_sessions.Count >= Math.Max(1, MaxClients))
+            {
+                request.Reject(Protocol.Write(new RejectMsg { Reason = RejectReason.ServerFull, Detail = "the session is full" }));
+                return;
+            }
+            string key = "";
+            try { key = request.Data.GetString(); } catch { }
+            if (key == ConnKey) { request.Accept(); return; }
+            // A build with another protocol number: it cannot play here, and the player has to hear
+            // which side must update. The reject travels in the refusal itself, where clients since
+            // 0.4.3 already look for it.
+            if (TryProtocolOfKey(key, out int theirs))
+            {
+                string detail = ModVersions.ProtocolMismatch(Protocol.Version, theirs, ModVersion);
+                _log("[CoopNet] Refused " + request.RemoteEndPoint + ": " + detail);
+                request.Reject(Protocol.Write(new RejectMsg { Reason = RejectReason.ProtocolMismatch, Detail = detail }));
+                return;
+            }
+            request.Reject();
+        }
+
+        private static bool TryProtocolOfKey(string key, out int protocol)
+        {
+            protocol = 0;
+            const string prefix = "SailwindCoop:";
+            return key != null && key.StartsWith(prefix, StringComparison.Ordinal) &&
+                   int.TryParse(key.Substring(prefix.Length), out protocol);
         }
 
         private void OnPeerConnected(NetPeer peer)
@@ -540,6 +573,12 @@ namespace SailwindCoop.Net
                     LastError = string.IsNullOrEmpty(LastDisconnectReason)
                         ? "Disconnected: " + info.Reason
                         : LastDisconnectReason;
+                    // A host that says why it refuses was handled above. One that refuses in silence
+                    // is a build up to 0.4.3 with another protocol number, or a full session of one.
+                    if (info.Reason == DisconnectReason.ConnectionRejected && string.IsNullOrEmpty(LastDisconnectReason))
+                        LastError = "The host refused the connection without a reason. Most likely the host runs " +
+                                    "another version of the mod (yours is " + ModVersion + ", protocol " + Protocol.Version +
+                                    "): both players need the same one.";
                     // Steam knows why the host could not be reached; "ConnectionFailed" does not.
                     string steamFailure = OverSteam ? SteamLink.TakeFailure() : null;
                     if (!string.IsNullOrEmpty(steamFailure) && string.IsNullOrEmpty(LastDisconnectReason))
@@ -694,6 +733,7 @@ namespace SailwindCoop.Net
             session.HandshakeDone = true;
             session.PlayerNetId = assigned;
             session.PlayerGuid = hello.PlayerGuid;
+            session.ModVersion = ModVersions.Clean(hello.ModVersion);
             session.PlayerName = string.IsNullOrEmpty(hello.PlayerName) ? ("Player" + assigned) : hello.PlayerName;
             session.SelectedAvatar = string.IsNullOrWhiteSpace(hello.SelectedAvatar) ? "" : hello.SelectedAvatar.Trim();
             session.JoinState = MemberJoinState.Queued;
@@ -753,7 +793,7 @@ namespace SailwindCoop.Net
             detail = "";
             if (h.ProtocolVersion != Protocol.Version)
             {
-                detail = "server " + Protocol.Version + ", client " + h.ProtocolVersion;
+                detail = ModVersions.ProtocolMismatch(Protocol.Version, h.ProtocolVersion, ModVersion);
                 return RejectReason.ProtocolMismatch;
             }
             // A different mod version is not a reason to refuse: the protocol number alone says whether
@@ -801,7 +841,9 @@ namespace SailwindCoop.Net
         {
             if (Role != Role.Client) return;
             State = LinkState.Rejected;
-            LastError = "Host rejected: " + rej.Reason + " (" + rej.Detail + ")";
+            LastError = rej.Reason == RejectReason.ProtocolMismatch && !string.IsNullOrEmpty(rej.Detail)
+                ? "Different mod versions: " + rej.Detail + "."
+                : "Host rejected: " + rej.Reason + " (" + rej.Detail + ")";
             _log("[CoopNet] " + LastError);
         }
 
@@ -818,6 +860,7 @@ namespace SailwindCoop.Net
                 State = MemberJoinState.Ready,
                 PingMs = 0,
                 BoatIndex = _hostBoatIndex,
+                ModVersion = ModVersion,
             });
             foreach (PeerSession session in _sessions.Values)
             {
@@ -830,6 +873,7 @@ namespace SailwindCoop.Net
                     State = session.JoinState,
                     PingMs = session.Peer == null ? -1 : session.Peer.RoundTripTime,   // Ping is RTT/2
                     BoatIndex = session.BoatIndex,
+                    ModVersion = session.ModVersion,
                 });
             }
             members.Sort((a, b) => a.NetId.CompareTo(b.NetId));
@@ -865,11 +909,15 @@ namespace SailwindCoop.Net
                     State = m.State,
                     PingMs = m.PingMs,
                     BoatIndex = m.BoatIndex,
+                    ModVersion = m.ModVersion ?? "",
                 };
                 _playerNames[m.NetId] = m.Name ?? "";
             }
             SessionMemberInfo[] previous = _roster;
             _roster = next;
+            int newest = ModVersions.NewestAbove(ModVersion, Array.ConvertAll(next, m => m.ModVersion));
+            NewerModVersion = newest < 0 ? "" : next[newest].ModVersion;
+            NewerModVersionHolder = newest < 0 ? "" : next[newest].Name;
             // A client hears about a leaver only through the roster: OnPlayerLeft is raised on the host.
             if (Role == Role.Client)
                 foreach (SessionMemberInfo old in previous)

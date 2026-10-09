@@ -2439,6 +2439,7 @@ namespace SailwindCoop.Net
             public MemberJoinState State;
             public int PingMs;
             public int BoatIndex;
+            public string ModVersion;   // "" from a host that does not send versions
         }
 
         public int Revision;
@@ -2463,6 +2464,9 @@ namespace SailwindCoop.Net
                 w.Put(m.PingMs);
                 w.Put(m.BoatIndex);
             }
+            // Appended after the members, so a build that does not know the versions reads the
+            // roster as before and leaves these bytes unread.
+            for (int i = 0; i < count; i++) w.Put(ModVersions.Clean(Members[i].ModVersion));
         }
 
         public void Deserialize(NetDataReader r)
@@ -2484,6 +2488,9 @@ namespace SailwindCoop.Net
                     BoatIndex = r.GetInt(),
                 };
             }
+            // A host that does not send versions ends the roster here.
+            bool versions = r.AvailableBytes > 0;
+            for (int i = 0; i < count; i++) Members[i].ModVersion = versions ? r.GetString(ModVersions.MaxLength) : "";
         }
     }
 

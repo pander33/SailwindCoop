@@ -26,6 +26,12 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 - Joining and reconnecting work from a loaded world: the game returns to the title screen by itself
   and then joins. It is no longer necessary to restart the game or to stay at the main menu.
 - A Steam host sees their Steam ID and the **Copy ID** button while hosting, not only before it.
+- A join refused because the two builds cannot play together now says so: which side has the
+  older mod and who has to update. A host that still runs 0.4.3 or older refuses without a reason;
+  the message then says that the versions most likely differ.
+- The crew card of the `F8` menu notes when a crewmate plays with a later version of the mod that
+  can still play with yours. Nothing is checked on the internet and nothing is installed.
+- A full session now refuses a join with "the session is full".
 
 ### Changed
 

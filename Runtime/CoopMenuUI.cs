@@ -32,6 +32,7 @@ namespace SailwindCoop.Runtime
         private string _playerName;
         private string _status = "";
         private SessionMemberInfo[] _drawRoster = new SessionMemberInfo[0];
+        private string _viewUpdate = "";   // a crewmate runs a later mod version
         private uint _kickConfirmNetId;
         private float _kickConfirmUntil;
         private Vector2 _scroll;
@@ -289,6 +290,8 @@ namespace SailwindCoop.Runtime
         {
             RefreshSteamView();
             _drawRoster = _net.RosterSnapshot;
+            _viewUpdate = _net.NewerModVersion.Length == 0 ? ""
+                : ModVersions.Notice(_net.NewerModVersionHolder, _net.NewerModVersion, Plugin.Version);
             _sharedWallet = _net.Role == Role.Host ? Plugin.Cfg.SharedWallet.Value : _coop.Wallet.Shared;
             _modView = _coop.Mods.BuildView();
 #if !THUNDERSTORE
@@ -738,6 +741,7 @@ namespace SailwindCoop.Runtime
                 else GUILayout.Label("", _cell, GUILayout.Width(KickColumn));
                 GUILayout.EndHorizontal();
             }
+            if (_viewUpdate.Length > 0) GUILayout.Label(_viewUpdate, _muted);
             GUILayout.EndVertical();
         }
 

@@ -25,6 +25,7 @@
     <Compile Include="..\..\Net\Messages.cs" Link="Net\Messages.cs" />
     <Compile Include="..\..\Net\DiceMessages.cs" Link="Net\DiceMessages.cs" />
     <Compile Include="..\..\Net\ModManifest.cs" Link="Net\ModManifest.cs" />
+    <Compile Include="..\..\Net\ModVersions.cs" Link="Net\ModVersions.cs" />
     <Compile Include="..\..\Net\ModMessages.cs" Link="Net\ModMessages.cs" />
     <Compile Include="..\..\Net\Protocol.cs" Link="Net\Protocol.cs" />
     <Compile Include="..\..\Net\MessageDirection.cs" Link="Net\MessageDirection.cs" />
