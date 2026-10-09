@@ -33,9 +33,12 @@ Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sail
 
 #### Prerequisites
 1. **Sailwind 0.39** installed via Steam
-2. **BepInEx 5.x** installed for Sailwind
-   - If not installed, download from: https://github.com/BepInEx/BepInEx/releases
-   - Extract to your Sailwind game folder
+<!--full-->
+2. The GitHub Full archive includes **BepInEx 5 for Windows x64**. No separate loader download is needed.
+<!--/full-->
+<!--thunderstore:
+2. Install the **BepInEx 5** dependency through your Thunderstore mod manager.
+-->
 
 <!--full-->
 #### Editions
@@ -53,10 +56,23 @@ The title of the status overlay (F8 -> Settings -> Show Status) shows which edit
 
 <!--/full-->
 #### Mod Installation
-1. Download the latest release archive
-2. Extract every file of the archive to: `Sailwind/BepInEx/plugins/SailwindCoop/`<!--full--> (see the table above for the files of each edition)<!--/full-->
-3. Launch the game
-4. To change your avatar, press **F8**, open **Settings** and click **Avatar**
+<!--full-->
+1. Close the game. Download `SailwindCoop-<version>.zip` from [GitHub Releases](https://github.com/pander33/SailwindCoop/releases) or Nexus Mods. Choose the ZIP asset, not **Source code**. This is the complete manual-install bundle, including BepInEx 5.4.23.5 for Windows x64.
+2. In Steam, right-click **Sailwind** -> **Manage** -> **Browse local files**. This opens the folder containing `Sailwind.exe`.
+3. Extract the **contents** of the ZIP directly into that folder. Merge folders and replace included files when asked. Do not extract into `BepInEx/plugins/` or an extra folder named after the ZIP.
+4. Check that `winhttp.dll` and `doorstop_config.ini` are next to `Sailwind.exe`, and the mod is at `BepInEx/plugins/SailwindCoop/SailwindCoop.dll`. The archive includes the loader, mod dependencies, avatar and sounds; it does not include saves or personal configs.
+5. Launch the game normally and press **F8** to open the co-op menu. To change your avatar, open **Settings** -> **Avatar**.
+
+**Updating:** close the game and repeat the extraction into the same game folder. Your saves and existing configs are not replaced. Back up a custom `avatar.bundle` before updating, since the included default replaces it. If BepInEx is already installed and you want to keep it as it is (another version, your own `doorstop_config.ini`), do not extract the whole archive: copy only the `BepInEx/plugins/SailwindCoop` folder from it into your `BepInEx/plugins/`. Otherwise back up the loader files before replacing them.
+
+**Thunderstore alternative:** install SailwindCoop and its dependencies through the mod manager and launch the modded profile. Do not mix that profile with this manual installation.
+<!--/full-->
+<!--thunderstore:
+1. Install **SailwindCoop** and its dependencies through your Thunderstore mod manager.
+2. Launch Sailwind from the modded profile and press **F8** to open the co-op menu.
+3. For manual installation, first install BepInEx 5 for Windows x64 into the folder containing `Sailwind.exe`, then extract this package into `BepInEx/plugins/SailwindCoop/`.
+4. To change your avatar, open **Settings** -> **Avatar** in the F8 menu.
+-->
 
 ### 🎮 How to Play
 
@@ -66,7 +82,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 1. Launch Sailwind
 2. Load or start a save game
 3. Press **F8** to open the **Sailwind Co-op** menu
-4. Click **Host**
+4. Click **Host a game**: the session opens at once. Use **Copy address** or **Copy Steam ID** in the session card.
 5. Share your IP address with friends (see "Finding Your IP" below), or switch the menu to **Steam** before pressing **Host** so Steam friends can join without an IP address (see [MULTIPLAYER_GUIDE.md](MULTIPLAYER_GUIDE.md#playing-over-steam))
 6. Wait for friends to connect
 
@@ -74,14 +90,14 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 1. Launch Sailwind
 2. Stay at the main menu, or join from a loaded world: the game then saves it, returns to the title screen by itself and joins
 3. Press **F8** to open the **Sailwind Co-op** menu
-4. Enter the host IP and click **Join**
+4. Enter the host address in the **Join** field (an IP address or a host name, optionally `address:port`) and click **Join** or press Enter. From a loaded world, confirm **Save and join** (**Leave and join** when the world is a host's copy); **Cancel** leaves it open. A failed save stops the transition. A world of your own kept in the co-op save slot is replaced by the host's world: the confirmation says so.
    - Default IP is `127.0.0.1` (localhost)
    - The menu writes the value to `BepInEx/config/com.sailwind.coop.cfg`
 5. The host's world is sent to you automatically and loaded into the co-op save slot — wait for it to finish
 
 #### Disconnecting
 - Press **F8** and click **Disconnect**
-- After a connection has succeeded once, **Reconnect** repeats the join. From a loaded world the game first returns to the title screen by itself.
+- After a client reaches Ready, **Join again** remembers that successful host across restarts. Failed attempts do not replace it. Connection errors offer **Retry** for the attempted host and **Back**.
 
 #### Crew And Host Controls
 - The **Crew** section shows each player's loading state, ping, and current boat.
@@ -225,9 +241,12 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 #### Необходимые условия
 1. **Sailwind 0.39** установлен через Steam
-2. **BepInEx 5.x** установлен для Sailwind
-   - Если не установлен, скачайте: https://github.com/BepInEx/BepInEx/releases
-   - Распакуйте в папку с игрой Sailwind
+<!--full-->
+2. Архив полной редакции с GitHub уже включает **BepInEx 5 для Windows x64**. Отдельно скачивать загрузчик не нужно.
+<!--/full-->
+<!--thunderstore:
+2. Установите зависимость **BepInEx 5** через менеджер модов Thunderstore.
+-->
 
 <!--full-->
 #### Редакции
@@ -245,10 +264,23 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 <!--/full-->
 #### Установка мода
-1. Скачайте последний архив релиза
-2. Распакуйте все файлы архива в: `Sailwind/BepInEx/plugins/SailwindCoop/`<!--full--> (состав файлов каждой редакции — в таблице выше)<!--/full-->
-3. Запустите игру
-4. Чтобы сменить аватар, нажмите **F8**, откройте **Settings** и нажмите **Avatar**
+<!--full-->
+1. Закройте игру. Скачайте `SailwindCoop-<version>.zip` со страницы [GitHub Releases](https://github.com/pander33/SailwindCoop/releases) или Nexus Mods. Нужен ZIP из **Assets**, не **Source code**. Это полный комплект для ручной установки, включая BepInEx 5.4.23.5 для Windows x64.
+2. В Steam нажмите правой кнопкой на **Sailwind** -> **Управление** -> **Просмотреть локальные файлы**. Откроется папка с `Sailwind.exe`.
+3. Распакуйте **содержимое** ZIP прямо в эту папку. При запросе объедините папки и замените включённые файлы. Не распаковывайте в `BepInEx/plugins/` или дополнительную папку с названием архива.
+4. Проверьте: `winhttp.dll` и `doorstop_config.ini` лежат рядом с `Sailwind.exe`, а мод находится по пути `BepInEx/plugins/SailwindCoop/SailwindCoop.dll`. В архиве есть загрузчик, зависимости мода, аватар и звуки; сохранений и личных конфигов нет.
+5. Запустите игру обычным способом и нажмите **F8**, чтобы открыть меню кооператива. Для смены аватара откройте **Settings** -> **Avatar**.
+
+**Обновление:** закройте игру и повторите распаковку в ту же папку. Сохранения и существующие конфиги не заменяются. Если используете свой `avatar.bundle`, сделайте его копию: обновление заменит его стандартным. Если BepInEx уже установлен и вы хотите оставить его как есть (другая версия, свой `doorstop_config.ini`), не распаковывайте архив целиком: скопируйте из него только папку `BepInEx/plugins/SailwindCoop` в свою `BepInEx/plugins/`. Иначе сделайте резервную копию файлов загрузчика перед заменой.
+
+**Альтернатива Thunderstore:** установите SailwindCoop и зависимости через менеджер модов и запускайте модифицированный профиль. Не смешивайте этот профиль с ручной установкой.
+<!--/full-->
+<!--thunderstore:
+1. Установите **SailwindCoop** и зависимости через менеджер модов Thunderstore.
+2. Запустите Sailwind из модифицированного профиля и нажмите **F8**, чтобы открыть меню кооператива.
+3. Для ручной установки сначала установите BepInEx 5 для Windows x64 в папку с `Sailwind.exe`, затем распакуйте этот пакет в `BepInEx/plugins/SailwindCoop/`.
+4. Для смены аватара откройте **Settings** -> **Avatar** в меню F8.
+-->
 
 ### 🎮 Как играть
 
@@ -258,7 +290,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 1. Запустите Sailwind
 2. Загрузите или начните новую игру
 3. Нажмите **F8**, чтобы открыть меню **Sailwind Co-op**
-4. Нажмите **Host**
+4. Нажмите **Host a game** — сессия откроется сразу. В карточке сессии доступны **Copy address** или **Copy Steam ID**.
 5. Сообщите друзьям свой IP адрес (см. "Как узнать свой IP" ниже)
 6. Ждите подключения друзей
 
@@ -266,7 +298,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 1. Запустите Sailwind
 2. Останьтесь в главном меню или подключайтесь из загруженного мира: игра сама сохранит его, вернётся на титульный экран и подключится
 3. Нажмите **F8**, чтобы открыть меню **Sailwind Co-op**
-4. Введите IP хоста и нажмите **Join**
+4. Введите адрес хоста в поле **Join** (IP-адрес или имя, можно `адрес:порт`) и нажмите **Join** или Enter. Из загруженного мира подтвердите **Save and join** (**Leave and join**, если это копия мира хоста); **Cancel** оставляет мир открытым. Ошибка сохранения останавливает переход. Собственный мир в слоте кооператива будет заменён миром хоста — окно подтверждения об этом предупреждает. **Join again** запоминает только готовое успешное подключение и работает после перезапуска.
    - IP по умолчанию: `127.0.0.1` (локальный)
    - Меню сохраняет значение в `BepInEx/config/com.sailwind.coop.cfg`
 5. Мир хоста передаётся автоматически и загружается в co-op слот сохранения — дождитесь окончания

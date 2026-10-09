@@ -60,6 +60,55 @@ namespace SailwindCoop.Runtime
         // The loaded world is the copy of a host's world, connected or not. A guest who lost the session
         // goes on playing in it, and its character still belongs to the profile.
         private bool _inHostWorldCopy;
+        private System.Action _pendingWorldJoin;
+        private JoinTarget _pendingJoinTarget;
+        private bool _waitingForOwnSave;
+        // One join attempt, from the connect to Ready or to its failure; then the host of the running
+        // session; and what Retry repeats after a failed attempt.
+        private JoinTarget _activeJoinTarget;
+        private JoinTarget _sessionJoinTarget;
+        private JoinTarget _retryJoinTarget;
+        private float _transferFailedAt = -1f;
+        private CoopLog.Repeat _joinFlowFailures;
+        /// <summary>Where the join in question goes: the one awaiting confirmation, else the attempt in
+        /// flight, else the running session, else the failed attempt.</summary>
+        public string JoinDestination =>
+            (_pendingJoinTarget ?? _activeJoinTarget ?? _sessionJoinTarget ?? _retryJoinTarget)?.Label ?? "";
+        /// <summary>Why the last join attempt ended without a session; empty when there is nothing to
+        /// answer. The menu shows it with Retry / Back until one of them is pressed.</summary>
+        public string JoinFailure { get; private set; } = "";
+        /// <summary>The world a pending join leaves is a host's copy: nothing of it is saved.</summary>
+        public bool PendingJoinLeavesHostCopy => _inHostWorldCopy;
+        /// <summary>The world a pending join leaves is the player's own and sits in the slot the join
+        /// writes the host's world into.</summary>
+        public bool PendingJoinReplacesOwnSave =>
+            !_inHostWorldCopy && SaveSlots.currentSlot == Mathf.Clamp(Plugin.Cfg.CoopSaveSlot.Value, 0, 5);
+        public bool ClientJoined
+        {
+            get
+            {
+                if (!_clientCoopWorldLoaded || Net.Role != Role.Client || Net.State != LinkState.Connected) return false;
+                foreach (var member in Net.RosterSnapshot)
+                    if (member.NetId == Net.MyNetId && member.State == MemberJoinState.Ready) return true;
+                return false;
+            }
+        }
+        public bool HasPendingWorldJoin => _pendingWorldJoin != null;
+        public string JoinProgress
+        {
+            get
+            {
+                if (_waitingForOwnSave || _leavingWorld) return "Saving your world and returning to the title screen";
+                if (SaveTransfer.Receiving) return "Receiving world (" + Mathf.RoundToInt(SaveTransfer.Progress * 100f) + "%)";
+                if (GameState.currentlyLoading && Net.Role == Role.Client) return "Loading world";
+                if (_inHostWorldCopy && Net.Role == Role.Client && Net.State == LinkState.Connected) return ClientJoined ? "Joined" : "Preparing session";
+                if (Mods.BuildView().Deciding) return "Checking compatibility: review the mod differences";
+                if (Net.State == LinkState.Handshaking) return "Checking compatibility";
+                if (Net.State == LinkState.Connecting) return "Connecting";
+                if (Net.Role == Role.Client && Net.State == LinkState.Connected) return "Checking compatibility / waiting for the host world";
+                return "";
+            }
+        }
 
         /// <summary>Is OUR co-op menu the thing holding the cursor? Lets <see cref="JoinPause"/> tell a
         /// game menu (which stops the clock) from this one (which does not).</summary>
@@ -174,7 +223,9 @@ namespace SailwindCoop.Runtime
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
-            SaveTransfer.OnSaveLoaded += () => _clientCoopWorldLoaded = _inHostWorldCopy = true;
+            // Two facts, not one: the loaded world is a host's copy whenever the load finished, and
+            // the guest is in that host's session only if the session outlived the load.
+            SaveTransfer.OnSaveLoaded += current => { _inHostWorldCopy = true; _clientCoopWorldLoaded = current; };
             Mods = new ModSync(Net)
             {
                 // Stream the host's world to the client once it answered the mod check, so it loads
@@ -380,12 +431,17 @@ namespace SailwindCoop.Runtime
             // is the sustained disk I/O this containment exists to avoid.
             try
             {
-                if (Input.GetKeyDown(Plugin.Cfg.MenuKey.Value))
-                    _menuUI.Toggle();
+                if (Input.GetKeyDown(Plugin.Cfg.MenuKey.Value)) _menuUI.Toggle();
             }
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Menu toggle failed", e, ref _menuFailures);
+            }
+
+            try { TickJoinFlow(); }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] Join flow failed", e, ref _joinFlowFailures);
             }
 
             try
@@ -441,6 +497,12 @@ namespace SailwindCoop.Runtime
                 _clientCoopWorldLoaded = false;
             }
 
+            try { EndLostSession(); }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] Closing a lost session failed", e, ref _joinFlowFailures);
+            }
+
             if (Net.Role == Role.Host && Net.State == LinkState.Connected)
             {
                 _rosterTimer += Time.unscaledDeltaTime;
@@ -462,6 +524,108 @@ namespace SailwindCoop.Runtime
                 var step = _steps[i];
                 try { step.Run(); }
                 catch (System.Exception e) { ReportStepFailure(step, e); }
+            }
+        }
+
+        /// <summary>Ends a join attempt one way or the other, and starts a confirmed join from a
+        /// loaded world. Every step forgets its trigger before acting, so a throw cannot repeat it
+        /// on the next frame.</summary>
+        private void TickJoinFlow()
+        {
+            if (_activeJoinTarget != null && ClientJoined)
+            {
+                JoinTarget joined = _activeJoinTarget;
+                _activeJoinTarget = null;
+                _retryJoinTarget = null;
+                _sessionJoinTarget = joined;
+                JoinFailure = "";
+                if (_menuUI != null) _menuUI.Visible = false;
+                SaveSuccessfulJoin(joined);
+            }
+            if (_activeJoinTarget != null && (Net.State == LinkState.Failed || Net.State == LinkState.Rejected))
+            {
+                _activeJoinTarget = null;
+                JoinFailure = string.IsNullOrEmpty(Net.LastError) ? "The connection ended before your world was ready." : Net.LastError;
+                if (_menuUI != null) _menuUI.Visible = true;
+            }
+
+            // The host's world was not received or not loaded: the link is up, but this attempt has
+            // nowhere to go. The host is told by a reliable message, which a stop in the same frame
+            // would cut off; hence the short wait before the session is closed.
+            if (_activeJoinTarget != null && SaveTransfer.Failed)
+            {
+                float now = Time.realtimeSinceStartup;
+                if (_transferFailedAt < 0f) _transferFailedAt = now;
+                else if (now - _transferFailedAt >= 0.5f)
+                {
+                    string reason = string.IsNullOrEmpty(LastNotice)
+                        ? "The host's world could not be received or loaded." : LastNotice;
+                    _activeJoinTarget = null;
+                    _transferFailedAt = -1f;
+                    Plugin.Logger.LogWarning("[Coop] Join stopped: the host's world was not received or loaded");
+                    TeardownSession("join-failed", saveClientProfile: true);
+                    JoinFailure = reason;
+                    if (_menuUI != null) _menuUI.Visible = true;
+                }
+            }
+            else _transferFailedAt = -1f;
+
+            if (_pendingWorldJoin != null && _menuUI != null && _menuUI.JoinConfirmationAccepted)
+            {
+                System.Action join = _pendingWorldJoin;
+                _pendingWorldJoin = null;
+                _pendingJoinTarget = null;
+                _menuUI.JoinConfirmationAccepted = false;
+                BeginWorldJoin(join);
+            }
+        }
+
+        /// <summary>The host closed the session, removed this player, or the link dropped. The
+        /// transport then reports Failed and keeps the Client role, and most of <c>Sync/</c> tells a
+        /// guest by the role alone: left like that, every action of the player went on as a request
+        /// to a host that was gone, so nothing in the world answered. The session is closed here the
+        /// way the Disconnect button closes it, which hands the world back to the local game, and
+        /// the player is told why. An attempt that never became a session is not this case: it ends
+        /// in <see cref="TickJoinFlow"/> with its own screen.</summary>
+        private void EndLostSession()
+        {
+            if (Net.Role != Role.Client) return;
+            if (Net.State != LinkState.Failed && Net.State != LinkState.Rejected) return;
+            if (_activeJoinTarget != null || JoinFailure.Length > 0) return;
+
+            string host = _sessionJoinTarget != null ? _sessionJoinTarget.Label : Net.HostLabel;
+            string detail = Net.LastError ?? "";
+            string reason =
+                !string.IsNullOrEmpty(Net.LastDisconnectReason) ? Net.LastDisconnectReason
+                : detail.IndexOf("RemoteConnectionClose", System.StringComparison.OrdinalIgnoreCase) >= 0 ? "the host closed the session"
+                : detail.IndexOf("Timeout", System.StringComparison.OrdinalIgnoreCase) >= 0 ? "the connection to the host was lost"
+                : detail.Length > 0 ? detail : "the connection ended";
+            Plugin.Logger.LogWarning("[Coop] Session lost (" + Net.State + "): " + detail);
+            TeardownSession("session-lost", saveClientProfile: true);
+
+            string text = "Session" + (string.IsNullOrEmpty(host) ? "" : " with " + host) + " ended: " + reason + ".";
+            Notice(text + (_inHostWorldCopy && GameState.playing
+                ? " You are still in a copy of the host's world and can go on playing alone; your character's progress is kept in your guest profile."
+                : ""));
+            _notifications?.Add(text, 12f);
+            if (_menuUI != null) _menuUI.Visible = true;
+        }
+
+        private static void SaveSuccessfulJoin(JoinTarget target)
+        {
+            Plugin.Cfg.LastJoinWasSteam.Value = target.Transport == JoinTransport.Steam;
+            if (target.Transport == JoinTransport.Lan)
+            {
+                Plugin.Cfg.LastJoinAddress.Value = target.Address;
+                Plugin.Cfg.LastJoinPort.Value = target.Port;
+            }
+            else
+            {
+                // Steam may not know the name yet; an older one of the same host is better than none.
+                string name = target.HostName.Length > 0 ? target.HostName : SteamLink.NameOf(ulong.Parse(target.Address));
+                if (!string.IsNullOrEmpty(name)) Plugin.Cfg.LastJoinPlayerName.Value = name;
+                else if (Plugin.Cfg.LastJoinSteamId.Value != target.Address) Plugin.Cfg.LastJoinPlayerName.Value = "";
+                Plugin.Cfg.LastJoinSteamId.Value = target.Address;
             }
         }
 
@@ -1097,8 +1261,14 @@ namespace SailwindCoop.Runtime
         public void StartHostSession(int port, bool steam = false)
         {
             if (SessionBlocked()) return;
+            if (!GameState.playing || GameState.currentlyLoading)
+            {
+                Notice("Load a save or start a new game, then open a co-op session.");
+                return;
+            }
             if (_leavingWorld) return;
             Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
+            ForgetJoinAttempt();
             TeardownSession("start-host", saveClientProfile: true);
             // Hosting a copy of a host's world makes it this player's own world.
             _inHostWorldCopy = false;
@@ -1114,16 +1284,81 @@ namespace SailwindCoop.Runtime
 
         public void StartClientSession(string ip, int port)
         {
+            if (!JoinPreferences.TryParseLan(ip, port.ToString(), Net.PlayerName, out JoinTarget target)) { Notice("Invalid LAN address or port."); return; }
             if (SessionBlocked() || RestartPending()) return;
-            if (LeaveWorldFirst(() => StartClientSession(ip, port))) return;
-            Plugin.Logger.LogInfo("[Coop] Joining via UI to " + ip);
+            if (AlreadyJoining(target)) return;
+            if (RequestWorldJoin(() => StartClientSession(ip, port), target)) return;
+            BeginJoinAttempt(target);
+            Plugin.Logger.LogInfo("[Coop] Joining via UI to " + target.Label);
+            // A host name is resolved by the transport, and a name that does not resolve throws.
+            try { Net.StartClient(target.Address, target.Port); }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.LogWarning("[Coop] Join not started: " + e.Message);
+                FailJoinAttempt("Could not reach " + target.Label + ": " + e.Message);
+                return;
+            }
+            NoticeFaultedPatchSets();
+        }
+
+        /// <summary>A join asked for while one is running. The same host again is a repeated click or
+        /// a repeated Steam callback and changes nothing; while an attempt is still on its way nothing
+        /// else is started either. Only a session that is up can be left for another host.</summary>
+        private bool AlreadyJoining(JoinTarget target)
+        {
+            if (Net.Role != Role.Client) return false;
+            if (Net.State != LinkState.Connecting && Net.State != LinkState.Handshaking && Net.State != LinkState.Connected) return false;
+            JoinTarget current = _activeJoinTarget ?? _sessionJoinTarget;
+            if (target.SameHost(current))
+            {
+                if (_sessionJoinTarget != null) Notice("You are already in this session.");
+                return true;
+            }
+            return _activeJoinTarget != null;
+        }
+
+        private void BeginJoinAttempt(JoinTarget target)
+        {
             TeardownSession("start-client", saveClientProfile: true);
+            _activeJoinTarget = target;
+            _retryJoinTarget = target;
+            JoinFailure = "";
             ClearNotice();
             _clientProfileSavedOnShutdown = false;
             _clientCoopWorldLoaded = false;
             Mods.BeginClient();
-            Net.StartClient(ip, port);
-            NoticeFaultedPatchSets();
+        }
+
+        private void FailJoinAttempt(string reason)
+        {
+            _activeJoinTarget = null;
+            TeardownSession("join-failed", saveClientProfile: true);
+            JoinFailure = reason;
+            if (_menuUI != null) _menuUI.Visible = true;
+        }
+
+        private void ForgetJoinAttempt()
+        {
+            _activeJoinTarget = null;
+            _retryJoinTarget = null;
+            JoinFailure = "";
+        }
+
+        /// <summary>What a Steam join request needs before it becomes a join: Steam itself, the Steam
+        /// mode in the menu, and the persona name in place of an untouched default one.</summary>
+        private bool PrepareSteamRequest(ulong host)
+        {
+            if (!SteamLink.EnsureReady())
+            {
+                Notice("Cannot join through Steam: " + SteamLink.Error);
+                return false;
+            }
+            Plugin.Cfg.UseSteam.Value = true;
+            Plugin.Cfg.SteamJoinId.Value = host.ToString();
+            // The same rule as the menu's Join: an untouched default name becomes the Steam name.
+            string persona = SteamLink.MyName;
+            if (Net.PlayerName == "Player" && !string.IsNullOrWhiteSpace(persona)) Net.PlayerName = persona.Trim();
+            return true;
         }
 
         // "Join Game" in the Steam friends list, or an accepted Steam invite. Steam gives the host's id
@@ -1174,8 +1409,12 @@ namespace SailwindCoop.Runtime
             // From a loaded world the join leaves it first; the request waits for the title screen below.
             if (GameState.playing && !GameState.currentlyLoading && !_leavingWorld)
             {
-                _steamJoinSince = now;
-                LeaveWorldFirst(null);
+                // The confirmation in the menu takes the request over; after it the join goes on by
+                // itself, so everything the title screen branch below prepares is prepared here.
+                _steamJoinHost = 0UL;
+                if (!PrepareSteamRequest(host)) return;
+                Plugin.Logger.LogInfo("[Coop] Joining " + host + " on a request from Steam, from a loaded world");
+                StartSteamClientSession(host);
                 return;
             }
             if (_leavingWorld || GameState.currentlyLoading) return;
@@ -1191,16 +1430,7 @@ namespace SailwindCoop.Runtime
             }
 
             _steamJoinHost = 0UL;
-            if (!SteamLink.EnsureReady())
-            {
-                Notice("Cannot join through Steam: " + SteamLink.Error);
-                return;
-            }
-            Plugin.Cfg.UseSteam.Value = true;
-            Plugin.Cfg.SteamJoinId.Value = host.ToString();
-            // The same rule as the menu's Join: an untouched default name becomes the Steam name.
-            string persona = SteamLink.MyName;
-            if (Net.PlayerName == "Player" && !string.IsNullOrWhiteSpace(persona)) Net.PlayerName = persona.Trim();
+            if (!PrepareSteamRequest(host)) return;
             Plugin.Logger.LogInfo("[Coop] Joining " + host + " on a request from Steam");
             StartSteamClientSession(host);
             // Not started when co-op is blocked or a restart is pending; that case has its own notice.
@@ -1209,47 +1439,86 @@ namespace SailwindCoop.Runtime
 
         public void StartSteamClientSession(ulong hostSteamId)
         {
+            if (hostSteamId == 0UL) { Notice("Invalid Steam host ID."); return; }
             if (SessionBlocked() || RestartPending()) return;
-            if (LeaveWorldFirst(() => StartSteamClientSession(hostSteamId))) return;
+            var target = new JoinTarget(JoinTransport.Steam, hostSteamId.ToString(), 0, Net.PlayerName, SteamLink.NameOf(hostSteamId));
+            if (AlreadyJoining(target)) return;
+            if (RequestWorldJoin(() => StartSteamClientSession(hostSteamId), target)) return;
+            BeginJoinAttempt(target);
             Plugin.Logger.LogInfo("[Coop] Joining via UI over Steam to " + hostSteamId);
-            TeardownSession("start-client", saveClientProfile: true);
-            ClearNotice();
-            _clientProfileSavedOnShutdown = false;
-            _clientCoopWorldLoaded = false;
-            Mods.BeginClient();
             Net.StartSteamClient(hostSteamId);
             NoticeFaultedPatchSets();
         }
 
-        public void ReconnectSession(string ip, int port) => StartClientSession(ip, port);
+        /// <summary>Repeats the attempt that failed, through the same path as the first one.</summary>
+        public void RetryJoin()
+        {
+            var target = _retryJoinTarget;
+            if (target == null) return;
+            DisconnectSession("retry");
+            if (target.Transport == JoinTransport.Steam) StartSteamClientSession(ulong.Parse(target.Address));
+            else StartClientSession(target.Address, target.Port);
+        }
+
+        /// <summary>Back on the failure screen: the attempt is over and nothing is repeated.</summary>
+        public void DismissJoinFailure()
+        {
+            DisconnectSession("back");
+            _retryJoinTarget = null;
+        }
 
         // The game has no way back to its title screen, and the host's world is loaded through that
         // screen. A join from a loaded world therefore starts the game's scenes over, exactly as the
         // game starts them itself, and repeats the join from the title screen.
         private bool _leavingWorld;
         public bool LeavingWorld => _leavingWorld;
+        public bool SavingBeforeJoin => _waitingForOwnSave;
 
         /// <summary>True when the join was put off until the title screen is back.</summary>
-        private bool LeaveWorldFirst(System.Action join)
+        private bool RequestWorldJoin(System.Action join, JoinTarget target)
         {
-            if (_leavingWorld) return true;
+            if (_leavingWorld || _waitingForOwnSave || _pendingWorldJoin != null) return true;
             if (!GameState.playing && !GameState.currentlyLoading) return false;
             if (GameState.currentlyLoading)
             {
                 Notice("The world is still loading. Join when it has finished.");
                 return true;
             }
+            _pendingWorldJoin = join;
+            _pendingJoinTarget = target;
+            if (_menuUI != null)
+            {
+                _menuUI.ConfirmWorldJoin = true;
+                _menuUI.Visible = true;
+            }
+            return true;
+        }
+
+        public void CancelWorldJoin()
+        {
+            _pendingWorldJoin = null;
+            _pendingJoinTarget = null;
+            _steamJoinHost = 0UL;
+            if (_menuUI != null) _menuUI.ConfirmWorldJoin = false;
+            if (_menuUI != null) _menuUI.JoinConfirmationAccepted = false;
+            Notice("Join cancelled. Your world was not changed.");
+        }
+
+        private void BeginWorldJoin(System.Action join)
+        {
+            // A host's copy belongs to its host: nothing of it is saved, only the guest's profile.
+            if (!_inHostWorldCopy)
+            {
+                SaveOwnWorldBeforeJoin(join);
+                return;
+            }
             _leavingWorld = true;
             StartCoroutine(LeaveWorld(join));
-            return true;
         }
 
         private IEnumerator LeaveWorld(System.Action join)
         {
-            // What can throw sits in methods of its own: a coroutine cannot yield inside a try block.
             if (!Guarded("Leaving the world", PrepareToLeaveWorld)) { _leavingWorld = false; yield break; }
-
-            // An own world is saved first; the save starts at the end of this frame.
             yield return null;
             for (float t = 0f; t < 10f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
 
@@ -1273,6 +1542,79 @@ namespace SailwindCoop.Runtime
             if (join != null) Guarded("Join after leaving the world", join);
         }
 
+        private void SaveOwnWorldBeforeJoin(System.Action join)
+        {
+            if (SaveLoadManager.instance == null || !SaveLoadManager.readyToSave || GameState.inBed != null || GameState.currentShipyard)
+            {
+                CancelWorldJoin();
+                Notice("Cannot save this world now. Leave bed/shipyard and try again; your world is unchanged.");
+                return;
+            }
+            string path;
+            System.DateTime before;
+            long oldLength;
+            try
+            {
+                if (SaveTransferSync.HostSaveBusy())
+                {
+                    CancelWorldJoin();
+                    Notice("A save is already in progress. Wait for it to finish, then try joining again.");
+                    return;
+                }
+                path = SaveSlots.GetCurrentSavePath();
+                before = System.IO.File.Exists(path) ? System.IO.File.GetLastWriteTimeUtc(path) : System.DateTime.MinValue;
+                oldLength = System.IO.File.Exists(path) ? new System.IO.FileInfo(path).Length : -1;
+                SaveLoadManager.instance.SaveGame(compressed: true);
+            }
+            catch (System.Exception e)
+            {
+                CancelWorldJoin();
+                Notice("Could not start saving your world: " + e.Message + ". Your world was not left.");
+                return;
+            }
+            _waitingForOwnSave = true;
+            StartCoroutine(CompleteOwnSave(path, before, oldLength, join));
+        }
+
+        private IEnumerator CompleteOwnSave(string path, System.DateTime before, long oldLength, System.Action join)
+        {
+            bool started = false;
+            for (float t = 0f; t < 10f; t += Time.unscaledDeltaTime)
+            {
+                if (SaveTransferSync.HostSaveBusy()) { started = true; break; }
+                yield return null;
+            }
+            if (started)
+            {
+                for (float t = 0f; t < 30f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
+                if (SaveTransferSync.HostSaveBusy()) started = false;
+            }
+            bool written = false;
+            if (started)
+            {
+                try
+                {
+                    var info = new System.IO.FileInfo(path);
+                    written = info.Exists && info.Length > 0 &&
+                              (info.LastWriteTimeUtc > before || info.Length != oldLength);
+                    if (written)
+                        using (var stream = System.IO.File.OpenRead(path))
+                            written = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter().Deserialize(stream) is SaveContainer;
+                }
+                catch (System.Exception e) { written = false; Plugin.Logger.LogError("[Coop] Save verification failed: " + e); }
+            }
+            _waitingForOwnSave = false;
+            if (!written)
+            {
+                _leavingWorld = false;
+                CancelWorldJoin();
+                Notice("Your world could not be confirmed saved. The join stopped and the current world remains open.");
+                yield break;
+            }
+            _leavingWorld = true;
+            StartCoroutine(LeaveWorld(join));
+        }
+
         private static bool Guarded(string what, System.Action action)
         {
             try { action(); return true; }
@@ -1290,9 +1632,6 @@ namespace SailwindCoop.Runtime
             TeardownSession("leave-world", saveClientProfile: true);
             SaveProfileAfterSession("leave-world");
             Notice("Leaving this world to join...");
-            // The co-op slot holds a copy of a host's world and is rewritten by the join; an own world is kept.
-            if (SaveSlots.currentSlot != Mathf.Clamp(Plugin.Cfg.CoopSaveSlot.Value, 0, 5) && SaveLoadManager.instance != null)
-                SaveLoadManager.instance.SaveGame(compressed: true);
         }
 
         // The game sets these while a world runs and never clears them, because it never leaves a world.
@@ -1349,6 +1688,8 @@ namespace SailwindCoop.Runtime
 
         public void DisconnectSession(string reason)
         {
+            _activeJoinTarget = null;
+            JoinFailure = "";
             Plugin.Logger.LogInfo("[Coop] Disconnect via UI: " + reason);
             TeardownSession("disconnect:" + reason, saveClientProfile: true);
         }
@@ -1357,6 +1698,8 @@ namespace SailwindCoop.Runtime
         {
             if (saveClientProfile)
                 SaveClientProfileBeforeStop(reason);
+            _sessionJoinTarget = null;
+            _transferFailedAt = -1f;
             SaveTransfer.Reset();
             Mods.Reset();
             Pause.Clear();

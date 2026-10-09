@@ -1,5 +1,8 @@
 using SailwindCoop.Avatar;
 using SailwindCoop.Net;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using UnityEngine;
 
 namespace SailwindCoop.Runtime
@@ -67,6 +70,17 @@ namespace SailwindCoop.Runtime
         private enum Mode { Offline, Connecting, Hosting, Joined }
         private Mode _mode;
         private bool _settingsOpen;
+        private bool _technicalSettingsOpen;
+        private bool _viewConfirmWorldJoin;
+        private bool _viewInWorld;
+        private bool _viewAdvanced;
+        private bool _viewLeavesHostCopy;
+        private bool _viewReplacesOwnSave;
+        private string _viewJoinFailure = "";
+        private string _viewSavedTarget = "";
+        // Snapshotted: finding it is a system call, far too heavy for every IMGUI event.
+        private string _viewHostAddress = "";
+        private float _hostAddressAt;
         private bool _viewSettings;
         private bool _viewModsPrompt;
         private string _viewError = "";
@@ -131,6 +145,81 @@ namespace SailwindCoop.Runtime
         /// <summary>The menu's own status line. Not <see cref="CoopBehaviour.Notice"/>: that one holds
         /// a failure the player still has to act on.</summary>
         public string Status { set => _status = value; }
+        public bool ConfirmWorldJoin { get; set; }
+        public bool JoinConfirmationAccepted { get; set; }
+
+        /// <summary>The host joined last, as "Join again" names it; empty when there is none.</summary>
+        private string SavedTargetLabel()
+        {
+            if (Plugin.Cfg.LastJoinWasSteam.Value)
+            {
+                if (!JoinPreferences.TryParseSteam(Plugin.Cfg.LastJoinSteamId.Value, _playerName, out JoinTarget steam)) return "";
+                string name = Plugin.Cfg.LastJoinPlayerName.Value;
+                return string.IsNullOrWhiteSpace(name) ? steam.Label : name.Trim() + " (Steam)";
+            }
+            // An empty address is "never joined", not the local machine.
+            if (string.IsNullOrWhiteSpace(Plugin.Cfg.LastJoinAddress.Value)) return "";
+            return JoinPreferences.TryParseLan(Plugin.Cfg.LastJoinAddress.Value, Plugin.Cfg.LastJoinPort.Value.ToString(),
+                                               _playerName, out JoinTarget lan) ? lan.Label : "";
+        }
+
+        private void RefreshHostAddresses()
+        {
+            if (_mode != Mode.Hosting || _hostingOverSteam) return;
+            if (_viewHostAddress.Length > 0 && Time.realtimeSinceStartup < _hostAddressAt) return;
+            _hostAddressAt = Time.realtimeSinceStartup + 3f;
+            // The address the system sends from: a UDP socket "connected" to an outside address is
+            // given the local address of the default route, and nothing is sent. Used only when no
+            // adapter below looks like a real network.
+            string routed = "";
+            try
+            {
+                using (var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    probe.Connect("8.8.8.8", 65530);
+                    var local = probe.LocalEndPoint as IPEndPoint;
+                    if (local != null && !IPAddress.IsLoopback(local.Address) && !local.Address.Equals(IPAddress.Any))
+                        routed = local.Address.ToString();
+                }
+            }
+            catch (System.Exception) { }   // no route out: a LAN without a gateway, decided below
+            // A cable or Wi-Fi adapter with a gateway is a real network; tunnels and virtual switches
+            // either are of another type or have no gateway.
+            var network = new System.Collections.Generic.List<string>();
+            var adapters = new System.Collections.Generic.List<string>();
+            try
+            {
+                foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (adapter.OperationalStatus != OperationalStatus.Up || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    IPInterfaceProperties properties = adapter.GetIPProperties();
+                    NetworkInterfaceType type = adapter.NetworkInterfaceType;
+                    bool physical = type == NetworkInterfaceType.Ethernet || type == NetworkInterfaceType.Wireless80211 ||
+                                    type == NetworkInterfaceType.GigabitEthernet || type == NetworkInterfaceType.FastEthernetT ||
+                                    type == NetworkInterfaceType.FastEthernetFx || type == NetworkInterfaceType.Ethernet3Megabit;
+                    bool gateway = false;
+                    // Not every runtime reports gateways; without them the adapter is just "another one".
+                    try
+                    {
+                        foreach (GatewayIPAddressInformation hop in properties.GatewayAddresses)
+                            if (hop.Address.AddressFamily == AddressFamily.InterNetwork && !hop.Address.Equals(IPAddress.Any)) gateway = true;
+                    }
+                    catch (System.Exception) { }
+                    foreach (UnicastIPAddressInformation unicast in properties.UnicastAddresses)
+                    {
+                        IPAddress address = unicast.Address;
+                        if (IPAddress.IsLoopback(address) || address.AddressFamily != AddressFamily.InterNetwork) continue;
+                        (physical && gateway ? network : adapters).Add(address.ToString());
+                    }
+                }
+            }
+            catch (System.Exception e)
+            {
+                // The list is a convenience; the port line above it is always shown.
+                Plugin.Logger.LogWarning("[Coop] Network adapters not listed: " + e.Message);
+            }
+            _viewHostAddress = JoinPreferences.HostAddress(Plugin.Cfg.ListenIp.Value, network, routed, adapters, Plugin.Cfg.Port.Value);
+        }
 
         public void Toggle()
         {
@@ -208,7 +297,8 @@ namespace SailwindCoop.Runtime
             _debugTools = Plugin.Cfg.EnableDebugPanel.Value;
             _logging = Plugin.Logger.Enabled;
 
-            bool busy = _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking;
+            bool busy = _coop.LeavingWorld || _coop.SavingBeforeJoin || _net.State == LinkState.Connecting || _net.State == LinkState.Handshaking ||
+                        (_net.Role == Role.Client && _net.State == LinkState.Connected && !_coop.ClientJoined);
             _mode = busy ? Mode.Connecting
                   : _net.Role == Role.Host ? Mode.Hosting
                   : _net.Role == Role.Client && _net.State == LinkState.Connected ? Mode.Joined
@@ -221,6 +311,14 @@ namespace SailwindCoop.Runtime
             _viewStatus = _status ?? "";
             // Shown even with logging switched off — this is the only surface for an actionable failure.
             _viewNotice = CoopBehaviour.LastNotice ?? "";
+            _viewConfirmWorldJoin = ConfirmWorldJoin;
+            _viewLeavesHostCopy = _coop.PendingJoinLeavesHostCopy;
+            _viewReplacesOwnSave = _coop.PendingJoinReplacesOwnSave;
+            _viewJoinFailure = _coop.JoinFailure ?? "";
+            _viewSavedTarget = SavedTargetLabel();
+            RefreshHostAddresses();
+            _viewInWorld = GameState.playing && !GameState.currentlyLoading;
+            _viewAdvanced = _technicalSettingsOpen;
         }
 
         private void DrawWindow()
@@ -290,6 +388,15 @@ namespace SailwindCoop.Runtime
         private void DrawSession()
         {
             GUILayout.BeginVertical(_card);
+            if (_viewConfirmWorldJoin) { DrawWorldJoinConfirmation(); GUILayout.EndVertical(); return; }
+            // A failed attempt, not any lost link: a session that ran and then dropped is no failed
+            // join, and its reason is in the message lines below.
+            if (_mode == Mode.Offline && _viewJoinFailure.Length > 0)
+            {
+                DrawConnectionFailure();
+                GUILayout.EndVertical();
+                return;
+            }
             switch (_mode)
             {
                 case Mode.Offline: DrawSessionOffline(); break;
@@ -302,13 +409,18 @@ namespace SailwindCoop.Runtime
 
         private void DrawSessionOffline()
         {
+            // One screen, no steps: every way in is one press from here. Host a game starts at once
+            // with the remembered settings; what is rarely changed sits under Advanced.
+            bool leaving = _coop.LeavingWorld;
+            bool available = PatchHealth.Blocker == null && !leaving;
+            bool canJoin = available && !_restartPending;
+            bool steamUsable = !_steamMode || _steamReady;
+
             GUILayout.BeginHorizontal();
-            GUILayout.Label("SESSION", _caption);
+            GUILayout.Label("CO-OP", _caption);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("LAN", _steamMode ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f)))
-                SetSteamMode(false);
-            if (GUILayout.Button("Steam", _steamMode ? _tabOn : _tab, GUILayout.Width(70f), GUILayout.Height(22f)))
-                SetSteamMode(true);
+            if (GUILayout.Button("LAN", _steamMode ? _tab : _tabOn, GUILayout.Width(70f), GUILayout.Height(22f))) SetSteamMode(false);
+            if (GUILayout.Button("Steam", _steamMode ? _tabOn : _tab, GUILayout.Width(70f), GUILayout.Height(22f))) SetSteamMode(true);
             GUILayout.EndHorizontal();
             GUILayout.Space(4f);
 
@@ -317,74 +429,128 @@ namespace SailwindCoop.Runtime
             _playerName = GUILayout.TextField(_playerName, 32, _textField, GUILayout.Height(FieldHeight));
             GUILayout.EndHorizontal();
 
+            GUI.enabled = available && _viewInWorld && steamUsable;
+            if (GUILayout.Button(_viewInWorld ? "Host a game" : "Host a game (load a save first)", _primaryButton,
+                                 GUILayout.Height(ButtonHeight + 4f)))
+                StartHost();
+            GUI.enabled = true;
+
+            if (_viewSavedTarget.Length > 0)
+            {
+                GUI.enabled = canJoin;
+                if (GUILayout.Button("Join again: " + _viewSavedTarget, _button, GUILayout.Height(ButtonHeight))) JoinSavedTarget();
+                GUI.enabled = true;
+            }
+
             if (_steamMode && !_steamReady)
             {
                 GUILayout.Label(string.IsNullOrEmpty(_steamError) ? "Starting Steam..." : _steamError, _muted);
-                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
-                    _steamInitTried = false;
+                if (GUILayout.Button("Retry Steam", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f))) _steamInitTried = false;
             }
             else if (_steamMode)
             {
-                DrawSteam();
+                DrawSteam(canJoin);
             }
             else
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Host IP", _muted, GUILayout.Width(CaptionWidth));
+                GUILayout.Label("Join", _muted, GUILayout.Width(CaptionWidth));
                 _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(FieldHeight));
-                GUILayout.Label("Port", _muted, GUILayout.Width(34f));
-                _port = GUILayout.TextField(_port, 5, _textField, GUILayout.Width(62f), GUILayout.Height(FieldHeight));
+                GUI.enabled = canJoin;
+                if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(70f), GUILayout.Height(FieldHeight))) Join();
+                GUI.enabled = true;
                 GUILayout.EndHorizontal();
+                GUILayout.Label("The host's address, as shown in the host's menu. Blank means this PC.", _muted);
             }
-
-            GUILayout.Space(6f);
-            float third = Split(3);
-            bool canReconnect = _net.HasConnectedSuccessfully &&
-                                (_net.State == LinkState.Idle || _net.State == LinkState.Failed || _net.State == LinkState.Rejected);
-            bool leaving = _coop.LeavingWorld;
-            GUILayout.BeginHorizontal();
-            GUI.enabled = PatchHealth.Blocker == null && !leaving;
-            if (GUILayout.Button("Host", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
-                StartHost();
-            GUI.enabled = PatchHealth.Blocker == null && !_restartPending && !leaving;
-            if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
-                Join();
-            GUI.enabled = canReconnect && !_restartPending && !leaving;
-            if (GUILayout.Button("Reconnect", _button, GUILayout.Width(third), GUILayout.Height(ButtonHeight)))
+            // Enter is the Join button: it joins only when the button would.
+            if (canJoin && steamUsable && Event.current.type == EventType.KeyDown &&
+                (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
             {
-                if (_steamMode)
-                    JoinSteamFromField();
-                else if (TryApplyConnectionFields(out int reconnectPort))
-                {
-                    _coop.ReconnectSession(_joinIp.Trim(), reconnectPort);
-                    _status = "Reconnecting to " + _joinIp.Trim() + ":" + reconnectPort;
-                }
+                Join();
+                Event.current.Use();
             }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
 
-            GUILayout.Label(leaving ? "Returning to the title screen to join..."
-                : PatchHealth.Blocker != null ? "Co-op is unavailable: " + PatchHealth.Blocker
-                : PatchHealth.FaultedSets != null ? "Will not sync (patch failed): " + PatchHealth.FaultedSets
-                : "Host: load a world first. Guest: join from the main menu or from a loaded world.", _muted);
+            if (leaving) GUILayout.Label("Returning to the title screen to join...", _muted);
+            else if (PatchHealth.Blocker != null) GUILayout.Label("Co-op is unavailable: " + PatchHealth.Blocker, _muted);
+            else if (PatchHealth.FaultedSets != null) GUILayout.Label("Will not sync (patch failed): " + PatchHealth.FaultedSets, _muted);
+
+            DrawTechnicalSettings();
+        }
+
+        private void DrawTechnicalSettings()
+        {
+            if (GUILayout.Button(_technicalSettingsOpen ? "Advanced settings (hide)" : "Advanced settings (show)", _ghostButton, GUILayout.Height(25f)))
+                _technicalSettingsOpen = !_technicalSettingsOpen;
+            if (_viewAdvanced)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Port", _muted, GUILayout.Width(CaptionWidth));
+                _port = GUILayout.TextField(_port, 5, _textField, GUILayout.Width(80f), GUILayout.Height(FieldHeight));
+                GUILayout.EndHorizontal();
+                if (_steamMode && _steamReady)
+                {
+                    DrawSteamSelf();
+                    DrawSteamAdmission();
+                }
+                GUILayout.Label("Listen interface: " + Plugin.Cfg.ListenIp.Value + "    Guests: " + Plugin.Cfg.MaxClients.Value +
+                                "    Save slot: " + Plugin.Cfg.CoopSaveSlot.Value, _muted);
+            }
+        }
+
+        private void StartHost()
+        {
+            if (!TryApplyConnectionFields(out int port)) return;
+            _coop.StartHostSession(port, _steamMode && _steamReady);
+            // A refused start explains itself in the notice line.
+            _status = _net.Role == Role.Host ? "Session opened" : "";
+        }
+
+        private void DrawWorldJoinConfirmation()
+        {
+            // Three different things are left behind, and the text says which: a host's world (not
+            // saved, it is the host's), an own world (saved), or an own world sitting in the very
+            // slot the join writes into (saved, then replaced).
+            GUILayout.Label(_viewLeavesHostCopy ? "LEAVE AND JOIN?" : "SAVE AND JOIN?", _caption);
+            GUILayout.Label("Join " + _coop.JoinDestination, _text);
+            GUILayout.Label(_viewLeavesHostCopy
+                ? "You will leave this host's world. Your character's progress is saved to your guest profile; the world itself belongs to its host and is not saved here."
+                : _viewReplacesOwnSave
+                    ? "This world is in save slot " + Plugin.Cfg.CoopSaveSlot.Value + ", the slot co-op uses for a host's world. It will be saved and then REPLACED by the host's world. One copy is kept next to the save as a .bak file until the next join."
+                    : "Your current world will be saved and closed before connecting. The host's world goes into its own save slot, not over this one.",
+                _viewReplacesOwnSave ? _error : _text);
+            GUILayout.Label(_viewReplacesOwnSave
+                ? "To keep this world, cancel and set Save/CoopSaveSlot in the config to a free slot."
+                : "After leaving, this world is not reopened automatically if the connection fails.", _muted);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Cancel", _button, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight))) _coop.CancelWorldJoin();
+            if (GUILayout.Button(_viewLeavesHostCopy ? "Leave and join" : "Save and join", _primaryButton, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight)))
+            {
+                ConfirmWorldJoin = false;
+                JoinConfirmationAccepted = true;
+            }
+            GUILayout.EndHorizontal();
         }
 
         private void DrawSessionConnecting()
         {
             GUILayout.Label("SESSION", _caption);
-            GUILayout.Label(_net.OverSteam ? "Connecting to " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")..."
-                                           : "Connecting to " + _joinIp + ":" + _port + "...", _text);
+            GUILayout.Label(_coop.JoinProgress.Length > 0 ? _coop.JoinProgress :
+                _net.OverSteam ? "Connecting to " + _net.HostLabel + " over Steam (" + _net.TransportStatus + ")..."
+                               : "Connecting to " + _coop.JoinDestination + "...", _text);
             GUILayout.Space(4f);
+            GUI.enabled = !_coop.LeavingWorld && !_coop.SavingBeforeJoin && !GameState.currentlyLoading;
             if (GUILayout.Button("Cancel", _dangerButton, GUILayout.Width(Split(3)), GUILayout.Height(ButtonHeight)))
             {
                 _coop.DisconnectSession("menu");
                 _status = "Connection cancelled";
             }
+            GUI.enabled = true;
+            GUILayout.Label("Scene loading may block input. After leaving, cancellation does not restore your previous world.", _muted);
         }
 
         private void DrawSessionHosting()
         {
-            GUILayout.Label("SESSION", _caption);
+            GUILayout.Label("Your session is open", _caption);
             GUILayout.Label("Hosting on port " + Plugin.Cfg.Port.Value + (_net.AcceptingClients ? "" : " - locked"), _text);
             GUILayout.Label((!_net.OverSteam ? "LAN"
                              : _net.SteamFriendsOnly ? "Steam friends only (" + _net.TransportStatus + ")"
@@ -395,7 +561,20 @@ namespace SailwindCoop.Runtime
                 DrawSteamSelf();
                 DrawSteamAdmission();
             }
+            else
+            {
+                GUILayout.Label("Your LAN address (local network/VPN only):", _muted);
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(_viewHostAddress, _text);
+                if (GUILayout.Button("Copy address", _smallButton, GUILayout.Width(ButtonWidth), GUILayout.Height(22f)))
+                {
+                    GUIUtility.systemCopyBuffer = JoinPreferences.EndpointOf(_viewHostAddress);
+                    _status = "LAN address copied";
+                }
+                GUILayout.EndHorizontal();
+            }
             DrawWalletMode();
+            GUILayout.Label("Guests: " + _net.PeerCount + " / " + Plugin.Cfg.MaxClients.Value, _muted);
             GUILayout.Space(4f);
             float half = Split(2);
             GUILayout.BeginHorizontal();
@@ -405,7 +584,7 @@ namespace SailwindCoop.Runtime
                 _net.SetAcceptingClients(!_net.AcceptingClients);
                 _status = _net.AcceptingClients ? "Session open" : "Session locked";
             }
-            if (GUILayout.Button("Disconnect", _dangerButton, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
+            if (GUILayout.Button("End session", _dangerButton, GUILayout.Width(half), GUILayout.Height(ButtonHeight)))
             {
                 _coop.DisconnectSession("menu");
                 _status = "Session stopped";
@@ -438,7 +617,8 @@ namespace SailwindCoop.Runtime
         {
             GUILayout.Label("SESSION", _caption);
             GUILayout.Label(_net.OverSteam ? "Connected to " + _net.HostLabel + " over Steam"
-                                           : "Connected to " + _joinIp + ":" + _port, _text);
+                                           : "Connected to " + _coop.JoinDestination, _text);
+            GUILayout.Label("Joined", _muted);
             GUILayout.Label(_net.OverSteam ? _net.TransportStatus : "LAN", _muted);
             GUILayout.Label(_sharedWallet ? "Money: the crew shares the host's wallet. Your own money is kept for you."
                                           : "Money: personal wallets; mission rewards are divided equally.", _muted);
@@ -448,6 +628,25 @@ namespace SailwindCoop.Runtime
                 _coop.DisconnectSession("menu");
                 _status = "Session stopped";
             }
+        }
+
+        private void DrawConnectionFailure()
+        {
+            GUILayout.Label("COULD NOT JOIN", _caption);
+            GUILayout.Label(_viewJoinFailure, _error);
+            GUILayout.Label("Host: " + _coop.JoinDestination, _muted);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Back", _button, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight)))
+            {
+                _status = "";
+                _coop.DismissJoinFailure();
+            }
+            if (GUILayout.Button("Retry", _primaryButton, GUILayout.Width(Split(2)), GUILayout.Height(ButtonHeight))) _coop.RetryJoin();
+            GUILayout.EndHorizontal();
+            if (GUILayout.Button("Technical details (show)", _ghostButton, GUILayout.Height(24f))) _technicalSettingsOpen = !_technicalSettingsOpen;
+            if (_viewAdvanced)
+                GUILayout.Label("State: " + _net.State + "    Transport: " + (_net.OverSteam ? "Steam" : "LAN") +
+                                "    Host: " + _net.HostLabel + "    Detail: " + _net.LastDisconnectReason, _muted);
         }
 
         private void DrawModsPrompt()
@@ -683,6 +882,12 @@ namespace SailwindCoop.Runtime
 
         private void RefreshSteamView()
         {
+            if (!Plugin.Cfg.TransportChosen.Value)
+            {
+                _steamModeWanted = SteamLink.EnsureReady();
+                Plugin.Cfg.UseSteam.Value = _steamModeWanted;
+                Plugin.Cfg.TransportChosen.Value = true;
+            }
             _steamMode = _steamModeWanted;
             // Snapshotted for the layout: the admission row adds controls to the hosting screen.
             _hostingOverSteam = _net.Role == Role.Host && _net.OverSteam;
@@ -718,6 +923,7 @@ namespace SailwindCoop.Runtime
         {
             _steamModeWanted = steam;
             Plugin.Cfg.UseSteam.Value = steam;
+            Plugin.Cfg.TransportChosen.Value = true;
             if (steam) _steamInitTried = false;
         }
 
@@ -757,7 +963,7 @@ namespace SailwindCoop.Runtime
             GUILayout.BeginHorizontal();
             GUILayout.Label("You: " + _steamSelf + " (" + _steamMyId + ")", _muted);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Copy ID", _smallButton, GUILayout.Width(70f), GUILayout.Height(22f)))
+            if (GUILayout.Button("Copy Steam ID", _smallButton, GUILayout.Width(110f), GUILayout.Height(22f)))
             {
                 GUIUtility.systemCopyBuffer = _steamMyId.ToString();
                 _status = "Your Steam ID is in the clipboard";
@@ -765,15 +971,15 @@ namespace SailwindCoop.Runtime
             GUILayout.EndHorizontal();
         }
 
-        private void DrawSteam()
+        private void DrawSteam(bool canJoin)
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label("Host ID", _muted, GUILayout.Width(CaptionWidth));
             _steamJoinId = GUILayout.TextField(_steamJoinId, 20, _textField, GUILayout.Height(FieldHeight));
+            GUI.enabled = canJoin;
+            if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(70f), GUILayout.Height(FieldHeight))) JoinSteamFromField();
+            GUI.enabled = true;
             GUILayout.EndHorizontal();
-
-            DrawSteamSelf();
-            DrawSteamAdmission();
 
             GUILayout.Label(_friends.Length == 0
                 ? "No Steam friends are in Sailwind right now. A friend not listed here can still be joined by Host ID."
@@ -786,7 +992,7 @@ namespace SailwindCoop.Runtime
                 GUILayout.Label(friend.Name, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
                 GUILayout.Label(!friend.Hosting ? "in game" : friend.SameVersion ? "hosting" : "hosting, other version",
                                 friend.Hosting && friend.SameVersion ? _cellGood : _cell, GUILayout.Width(136f));
-                GUI.enabled = PatchHealth.Blocker == null && !_restartPending;
+                GUI.enabled = friend.Hosting && PatchHealth.Blocker == null && !_restartPending && !_coop.HasPendingWorldJoin;
                 if (GUILayout.Button("Join", _smallButton, GUILayout.Width(KickColumn - 4f), GUILayout.Height(20f)))
                 {
                     _steamJoinId = friend.Id.ToString();
@@ -799,24 +1005,17 @@ namespace SailwindCoop.Runtime
 
         private void JoinSteamFromField()
         {
-            string text = (_steamJoinId ?? "").Trim();
-            if (!ulong.TryParse(text, out ulong hostId) || hostId == 0UL)
+            if (!JoinPreferences.TryParseSteam(_steamJoinId, _playerName, out JoinTarget target))
             {
                 _status = "Enter the Steam ID of the host (17 digits) or pick a friend";
                 return;
             }
-            if (!TryApplyConnectionFields(out _)) return;
-            Plugin.Cfg.SteamJoinId.Value = text;
+            ApplyPlayerName(target.PlayerName);
+            _steamJoinId = target.Address;
+            Plugin.Cfg.SteamJoinId.Value = target.Address;
+            ulong hostId = ulong.Parse(target.Address);
             _coop.StartSteamClientSession(hostId);
-            _status = "Connecting over Steam to " + (string.IsNullOrEmpty(_net.HostLabel) ? text : _net.HostLabel);
-        }
-
-        private void StartHost()
-        {
-            if (!TryApplyConnectionFields(out int port)) return;
-            bool steam = _steamMode && _steamReady;
-            _coop.StartHostSession(port, steam);
-            _status = steam ? "Host started (Steam + LAN)" : "Host started";
+            _status = "Joining over Steam: " + _coop.JoinDestination;
         }
 
         private void Join()
@@ -826,9 +1025,60 @@ namespace SailwindCoop.Runtime
                 JoinSteamFromField();
                 return;
             }
-            if (!TryApplyConnectionFields(out int port)) return;
-            _coop.StartClientSession(_joinIp.Trim(), port);
-            _status = "Connecting to " + _joinIp.Trim() + ":" + port;
+            if (!JoinPreferences.TryParseLan(_joinIp, _port, _playerName, out JoinTarget target))
+            {
+                _status = "Enter an IP address or a host name, and a port from 1 to 65535";
+                return;
+            }
+            ApplyPlayerName(target.PlayerName);
+            // The Port field is also the port this player hosts on. A port typed into the address
+            // belongs to that host alone and stays in the address.
+            bool ownPort = int.TryParse(_port, out int fieldPort) && fieldPort == target.Port;
+            _joinIp = ownPort ? target.Address : target.Label;
+            Plugin.Cfg.JoinIp.Value = _joinIp;
+            if (ownPort) Plugin.Cfg.Port.Value = target.Port;
+            _coop.StartClientSession(target.Address, target.Port);
+            _status = "Joining " + target.Label;
+        }
+
+        private void JoinSavedTarget()
+        {
+            if (Plugin.Cfg.LastJoinWasSteam.Value)
+            {
+                if (!JoinPreferences.TryParseSteam(Plugin.Cfg.LastJoinSteamId.Value, _playerName, out JoinTarget target))
+                {
+                    _status = "The saved Steam join target is invalid";
+                    return;
+                }
+                _steamJoinId = target.Address;
+                _steamModeWanted = true;
+                ApplyPlayerName(target.PlayerName);
+                _coop.StartSteamClientSession(ulong.Parse(target.Address));
+                _status = "Joining over Steam: " + _coop.JoinDestination;
+                return;
+            }
+            string address = Plugin.Cfg.LastJoinAddress.Value;
+            int port = Plugin.Cfg.LastJoinPort.Value;
+            if (string.IsNullOrWhiteSpace(address) ||
+                !JoinPreferences.TryParseLan(address, port.ToString(), _playerName, out JoinTarget lanTarget))
+            {
+                _status = "The saved LAN join target is invalid";
+                return;
+            }
+            ApplyPlayerName(lanTarget.PlayerName);
+            _coop.StartClientSession(lanTarget.Address, lanTarget.Port);
+            _status = "Joining " + lanTarget.Label;
+        }
+
+        private void ApplyPlayerName(string name)
+        {
+            name = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
+            // An untouched default name is replaced by the Steam persona name when Steam is in use.
+            if (_steamMode && _steamReady && name == "Player" && !string.IsNullOrWhiteSpace(_steamSelf))
+                name = _steamSelf.Trim();
+            Plugin.Cfg.PlayerName.Value = name;
+            _net.PlayerName = name;
+            _playerName = name;
         }
 
         private bool TryApplyConnectionFields(out int port)
@@ -885,6 +1135,7 @@ namespace SailwindCoop.Runtime
         private void SetVisible(bool visible)
         {
             if (_visible == visible) return;
+            if (!visible && ConfirmWorldJoin) _coop.CancelWorldJoin();
             if (!visible)
                 _coop.CloseCompanionMenus();
             _visible = visible;

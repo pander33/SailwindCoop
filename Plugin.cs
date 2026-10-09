@@ -94,6 +94,12 @@ namespace SailwindCoop
         public readonly ConfigEntry<bool> UseSteam;
         public readonly ConfigEntry<bool> SteamFriendsOnly;
         public readonly ConfigEntry<string> SteamJoinId;
+        public readonly ConfigEntry<string> LastJoinAddress;
+        public readonly ConfigEntry<string> LastJoinSteamId;
+        public readonly ConfigEntry<int> LastJoinPort;
+        public readonly ConfigEntry<bool> LastJoinWasSteam;
+        public readonly ConfigEntry<string> LastJoinPlayerName;
+        public readonly ConfigEntry<bool> TransportChosen;
 
         // Debug.
         public readonly ConfigEntry<bool> EnableLogging;
@@ -111,9 +117,19 @@ namespace SailwindCoop
 
         public CoopConfig(ConfigFile c)
         {
+            // A config written by an earlier version already holds a transport: it is kept, and only a
+            // first start picks one. Read before Bind adds the key. An unreadable file counts as
+            // "chosen", the answer that changes nothing for the player.
+            bool hadTransport = true;
+            try
+            {
+                hadTransport = File.Exists(c.ConfigFilePath) && System.Text.RegularExpressions.Regex.IsMatch(
+                    File.ReadAllText(c.ConfigFilePath), @"(?m)^\s*UseSteam\s*=");
+            }
+            catch (System.Exception) { }
             Port = c.Bind("Network", "Port", 7777, "Host UDP port.");
             ListenIp = c.Bind("Network", "ListenIp", "0.0.0.0", "IP/interface the host listens on (0.0.0.0 = all interfaces). Applied when starting the host: a specific address accepts connections only on that interface.");
-            JoinIp = c.Bind("Network", "JoinIp", "127.0.0.1", "Host IP for the client to join.");
+            JoinIp = c.Bind("Network", "JoinIp", "127.0.0.1", "Host for the client to join: an IP address or a host name, optionally with :port.");
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Displayed player name.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "State snapshot send rate (Hz), Stage 1+.");
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Interpolation buffer delay (ms), Stage 1+.");
@@ -139,8 +155,14 @@ namespace SailwindCoop
             ModSyncExclude = c.Bind("Mods", "ModSyncExclude", "gravydevsupreme.xunity.autotranslator,gravydevsupreme.xunity.resourceredirector", "Comma-separated plugin GUIDs that are never listed, compared or shared (personal mods such as a UI translator, or mods only the host needs). A folder containing an excluded plugin is skipped whole. Applied on both host and client.");
 
             UseSteam = c.Bind("Steam", "UseSteam", false, "The co-op menu opens in Steam mode: host for Steam friends and join them without an IP address. Steam must be running and own Sailwind. Switch it in the co-op menu (F8 -> Connection). With Steam/FriendsOnly off a Steam host also accepts LAN clients on its UDP port.");
-            SteamFriendsOnly = c.Bind("Steam", "FriendsOnly", true, "Steam host: accept only players on your Steam friends list, and nobody through the LAN port. Turn off to let in anyone: by your Steam ID and on the LAN port. A host started in LAN mode is not affected.");
+            TransportChosen = c.Bind("UI", "TransportChosen", hadTransport, "A transport preference has been selected. Existing Steam/UseSteam configurations are respected.");
+            SteamFriendsOnly = c.Bind("Steam", "FriendsOnly", false, "Steam host: accept only players on your Steam friends list, and nobody through the LAN port. Off by default: anyone can join, by your Steam ID and on the LAN port. A host started in LAN mode is not affected. A config written by an earlier version keeps its saved value.");
             SteamJoinId = c.Bind("Steam", "JoinId", "", "SteamID64 of the host joined last (17 digits). Filled in from the co-op menu.");
+            LastJoinAddress = c.Bind("Join", "LastAddress", "", "Last successfully joined LAN host (IP address or host name). Set by the mod only after the world is ready.");
+            LastJoinSteamId = c.Bind("Join", "LastSteamId", "", "Steam ID of the last successfully joined host.");
+            LastJoinPort = c.Bind("Join", "LastPort", 0, "Port of the last successfully joined LAN host.");
+            LastJoinWasSteam = c.Bind("Join", "LastWasSteam", false, "Transport of the last successfully joined host.");
+            LastJoinPlayerName = c.Bind("Join", "LastPlayerName", "", "Steam display name of the last successfully joined Steam host, shown on the Join again button.");
             EnableLogging = c.Bind("Debug", "EnableLogging", false, "Write this mod's diagnostics to BepInEx/LogOutput.log. Off by default: a normal session stays silent and costs no disk I/O. Hard errors are still written even when this is off, but only a handful of lines - just enough to show that something broke. Toggle in-game from the co-op menu (F8 -> Logging); turn it on BEFORE reproducing a problem, otherwise the log will contain nothing useful about the mod.");
             EnableDebugPanel = c.Bind("Debug", "EnableDebugPanel", false, "Developer/test panel for gold/spawn/reputation/world tools. Keep false for public builds.");
             MenuKey = c.Bind("UI", "MenuKey", KeyCode.F8, "Show/hide the co-op menu.");

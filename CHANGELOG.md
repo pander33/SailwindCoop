@@ -27,6 +27,12 @@ The development build uses protocol 92; it cannot connect to builds with an earl
   and then joins. It is no longer necessary to restart the game or to stay at the main menu.
 - A Steam host sees their Steam ID and the **Copy ID** button while hosting, not only before it.
 
+### Changed
+
+- A Steam session is open to anyone by default, over Steam and on the LAN port
+  (`Steam/FriendsOnly` is now off). Existing configs retain their saved value: press **Anyone** in
+  the F8 menu, or set `FriendsOnly = false` under `[Steam]`.
+
 ### Fixed
 
 - With three or more players, the avatar of a player who left stayed in the world on the other

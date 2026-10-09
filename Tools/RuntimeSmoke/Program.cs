@@ -54,6 +54,72 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("LAN join input normalizes optional address and rejects malformed endpoints", () => {
+                JoinTarget target;
+                Assert(JoinPreferences.TryParseLan("  ", "7777", "  Sailor ", out target), "empty address should use localhost");
+                Assert(target.Address == "127.0.0.1" && target.Port == 7777 && target.PlayerName == "Sailor", "LAN endpoint normalization");
+                foreach (string port in new[] { "", "0", "65536", "7x" })
+                    Assert(!JoinPreferences.TryParseLan("192.168.1.4", port, "Player", out target), "accepted port " + port);
+                Assert(!JoinPreferences.TryParseLan("host name", "7777", "Player", out target), "accepted malformed address");
+                Assert(JoinPreferences.TryParseLan("192.168.1.4:7788", "7777", "Player", out target) && target.Port == 7788, "embedded LAN port rejected");
+                Assert(JoinPreferences.TryParseLan("[::1]:7788", "7777", "Player", out target) && target.Port == 7788 && target.Address == "::1", "bracketed IPv6 rejected");
+                Assert(target.Label == "[::1]:7788", "IPv6 label " + target.Label);
+                Assert(JoinPreferences.TryParseLan("::1", "7777", "Player", out target) && target.Address == "::1" && target.Port == 7777, "bare IPv6 rejected");
+                Assert(JoinPreferences.TryParseLan(" 192.168.1.4 ", "65535", "Player", out target) &&
+                    target.Address == "192.168.1.4", "trimmed address or upper boundary rejected");
+                Assert(target.Label == "192.168.1.4:65535", "LAN label " + target.Label);
+            });
+            Test("LAN join input takes host names and refuses shorthand numbers", () => {
+                JoinTarget target;
+                Assert(JoinPreferences.TryParseLan("localhost", "7777", "Player", out target) && target.Address == "localhost", "localhost rejected");
+                Assert(JoinPreferences.TryParseLan("my-host.example.org:7788", "7777", "Player", out target) &&
+                    target.Address == "my-host.example.org" && target.Port == 7788, "host name with a port rejected");
+                // IPAddress.TryParse reads these as 0.0.0.1 and 192.168.0.1.
+                foreach (string typo in new[] { "1", "192.168.1", "192.168.1.", "1.2.3.4.5", "256.1.1.1", "-host", "host:", ":7777" })
+                    Assert(!JoinPreferences.TryParseLan(typo, "7777", "Player", out target), "accepted " + typo);
+            });
+            Test("Steam join input accepts only nonzero 17-digit ids", () => {
+                JoinTarget target;
+                Assert(JoinPreferences.TryParseSteam(" 76561198000000000 ", "Name", out target) &&
+                    target.Transport == JoinTransport.Steam && target.Address == "76561198000000000", "valid Steam id rejected");
+                Assert(target.Label == "Steam 76561198000000000", "Steam label without a name: " + target.Label);
+                Assert(new JoinTarget(JoinTransport.Steam, target.Address, 0, "Name", "Anna").Label == "Anna", "Steam label with a name");
+                foreach (string id in new[] { "", "123", "00000000000000000", "7656119800000000x" })
+                    Assert(!JoinPreferences.TryParseSteam(id, "Player", out target), "accepted Steam id " + id);
+            });
+            Test("a repeated join request is told from a join to another host", () => {
+                var lan = new JoinTarget(JoinTransport.Lan, "Host.Example", 7777, "A");
+                Assert(lan.SameHost(new JoinTarget(JoinTransport.Lan, "host.example", 7777, "B")), "same LAN host, other name and case");
+                Assert(!lan.SameHost(new JoinTarget(JoinTransport.Lan, "host.example", 7778, "A")), "another port is another host");
+                Assert(!lan.SameHost(new JoinTarget(JoinTransport.Steam, "host.example", 7777, "A")), "another transport");
+                Assert(!lan.SameHost(null), "no session");
+                var steam = new JoinTarget(JoinTransport.Steam, "76561198000000000", 0, "A", "Anna");
+                Assert(steam.SameHost(new JoinTarget(JoinTransport.Steam, "76561198000000000", 0, "A")), "same Steam host without a name");
+                Assert(!steam.SameHost(new JoinTarget(JoinTransport.Steam, "76561198000000001", 0, "A", "Anna")), "another Steam host with the same name");
+            });
+            Test("a LAN host shows one address: bound, else a real network, else routed, else the likeliest", () => {
+                var none = new string[0];
+                var others = new[] { "172.20.48.1", "169.254.7.7", "10.8.0.2", "192.168.112.1" };
+                // The maintainer's PC, 2026-10-09: Wi-Fi with a gateway, a sing-box tunnel that owns the
+                // default route, and two Hyper-V switches.
+                Assert(JoinPreferences.HostAddress("0.0.0.0", new[] { "192.168.0.40" }, "172.18.0.1",
+                    new[] { "172.18.0.1", "172.17.112.1", "192.168.112.1" }, 7777) == "192.168.0.40:7777", "a tunnel's end was preferred to the network");
+                Assert(JoinPreferences.HostAddress("0.0.0.0", new[] { "10.0.0.5", "192.168.1.4" }, "10.0.0.5", others, 7777) == "192.168.1.4:7777", "two networks: the home range");
+                Assert(JoinPreferences.HostAddress(" 10.8.0.2 ", new[] { "192.168.1.4" }, "192.168.1.4", others, 7777) == "10.8.0.2:7777", "a bound interface wins");
+                string local = JoinPreferences.HostAddress("127.0.0.1", new[] { "192.168.1.4" }, "192.168.1.4", others, 7777);
+                Assert(local == "127.0.0.1:7777 (this PC only)", "loopback bind: " + local);
+                Assert(JoinPreferences.EndpointOf(local) == "127.0.0.1:7777", "clipboard text of a labelled row");
+                // No adapter looks like a network (gateways unknown to the runtime): the route decides.
+                Assert(JoinPreferences.HostAddress("0.0.0.0", none, "10.8.0.2", others, 7777) == "10.8.0.2:7777", "routed address");
+                // Neither a network nor a route (a LAN without a gateway): the home range first.
+                Assert(JoinPreferences.HostAddress("0.0.0.0", none, "", others, 7777) == "192.168.112.1:7777", "unrouted pick");
+                Assert(JoinPreferences.HostAddress("0.0.0.0", null, null, new[] { "169.254.7.7", "172.20.48.1" }, 7777) == "172.20.48.1:7777", "self-assigned address comes last");
+                Assert(JoinPreferences.HostAddress("0.0.0.0", none, "", new[] { "172.32.0.1", "8.8.4.4" }, 7777) == "172.32.0.1:7777", "first of equals");
+                Assert(JoinPreferences.HostAddress("0.0.0.0", none, "", none, 7777) == "127.0.0.1:7777 (this PC only)", "no adapters");
+                // An unreadable setting is no bind.
+                Assert(JoinPreferences.HostAddress("garbage", new[] { "192.168.1.4" }, "", others, 7777) == "192.168.1.4:7777", "unparsable ListenIp");
+                Assert(JoinPreferences.HostAddress("::", new[] { "192.168.1.4" }, "", others, 7777) == "192.168.1.4:7777", "IPv6 any");
+            });
             ItemReliabilityTests.Run(Test);
             DiceTests.Run(Test);
             ModSharingTests.Run(Test);

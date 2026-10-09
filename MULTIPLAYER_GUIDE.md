@@ -21,9 +21,11 @@ for example `Sailwind Co-op 0.4.3 (Thunderstore)`. Sections below that apply to 
 ## Session Model
 
 - The host loads the real world save.
-- Joining players open the F8 co-op menu, enter the host IP, and press `Join`. The main menu is the
-  quickest place to join from. From a loaded world the game saves it (unless it is the co-op slot),
-  returns to the title screen by itself and then joins; this takes as long as starting the game.
+- Open F8 in a loaded world and press **Host a game**: the session opens at once with the remembered settings (port and Steam admission are under **Advanced settings**). At the title screen the button says that a save must be loaded first. The session card has **Copy address** / **Copy Steam ID** and **End session**.
+- To join, the same screen has the **Join** field for a LAN address (on the Steam tab: the friends list and **Host ID**), optionally including a port (`192.168.1.4:7777` or `[::1]:7777`), then **Join** or Enter. Steam friends advertising a session have an enabled Join button; merely playing Sailwind is not a hosted session.
+- From a loaded world, every join source asks for confirmation. Personal worlds are saved and checked before leaving (**Save and join**); failure stops the transition. A host's world copy is not saved as your personal world (**Leave and join**; only your guest profile is written). A personal world kept in the co-op save slot (`Save/CoopSaveSlot`, 5 by default) is saved and then replaced by the host's world, with one `.bak` copy left next to it; the confirmation warns about it. A repeated request to join the host you are already with changes nothing. Cancel before leaving changes no world; after leaving, your old scene cannot be restored automatically.
+- **Join again** remembers only a host whose session reached Ready, including across restarts. **Retry** repeats the failed attempt, not an unrelated saved host. There is no automatic reconnect after a kick.
+- The connection screen uses actual transfer/loading state. Synchronous scene loading can block input; Cancel does not promise immediate interruption. LAN addresses are for local networks/VPN, not a guarantee of internet access.
 - The host streams the current world save to the client.
 - The client loads that world into a dedicated co-op slot.
 - The guest keeps a local co-op profile for personal character progress such as money, reputation, needs, known prices, missions, journal data, and personal belt inventory.
@@ -334,10 +336,12 @@ guest types the host's IP address. Steam mode needs no IP address, port forwardi
   are hosting is refused with a notice; from a loaded world the game returns to the title screen first. If the game is not
   running, Steam starts it and the join begins when the title screen appears. For a running game
   this works only while the F8 menu is in Steam mode.
-- **Friends only / Anyone** (host): by default only your Steam friends can connect, and joining by
-  IP is refused. **Anyone** lets in whoever knows your Steam ID, and LAN players can join the same
-  session by IP. The **Who can join** row is in the F8 menu on the Steam tab before hosting and in
-  the session block while hosting; a change applies at once, and players already in stay.
+- **Friends only / Anyone** (host): by default a session is open to **Anyone**: whoever knows your
+  Steam ID can connect, and LAN players can join the same session by IP. **Friends only** lets in
+  only your Steam friends and refuses joining by IP. The **Who can join** row is in the F8 menu on
+  the Steam tab before hosting and in the session block while hosting; a change applies at once,
+  and players already in stay. A config written by an earlier version keeps its saved value
+  (`FriendsOnly = true` under `[Steam]`): press **Anyone** once to open the session.
 - A Steam player removed with **Kick** stays out until you host again.
 - A guest who is not on a **Friends only** host's friends list gets no answer and sees the
   connection time out.

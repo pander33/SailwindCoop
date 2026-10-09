@@ -78,3 +78,6 @@
 # Ensure batch files have CRLF line endings on Windows
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Third-party notices go into the release archive byte for byte: the same on every checkout
+Tools/ReleaseNotices/*.txt text eol=lf

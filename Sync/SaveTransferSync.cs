@@ -46,10 +46,17 @@ namespace SailwindCoop.Sync
         private int _rawBytes;      // announced size after unpacking; 0 = not compressed
         private int _hostGameVersion;
         private bool _receiving;
+        private int _loadEpoch;
 
         /// <summary>Raised on the client right after the merged save has been loaded, so the runtime
-        /// can flip into the "in host's world" state. Runs on the Unity main thread.</summary>
-        public event Action OnSaveLoaded;
+        /// can flip into the "in host's world" state. Runs on the Unity main thread. The argument is
+        /// false when the session that asked for the load was torn down while it ran: the loaded
+        /// world is still a host's copy, but nobody is connected to it.</summary>
+        public event Action<bool> OnSaveLoaded;
+
+        /// <summary>The transfer or the load of the host's world failed in this session. The host
+        /// has been told; the join cannot go on. Cleared by <see cref="Reset"/>.</summary>
+        public bool Failed { get; private set; }
 
         public bool Receiving => _receiving;
         public float Progress => _expectedChunks > 0 ? (float)_receivedChunks / _expectedChunks : 0f;
@@ -260,6 +267,7 @@ namespace SailwindCoop.Sync
         /// without waiting for the safety timeout.</summary>
         private void NotifyHostLoaded(bool ok)
         {
+            if (!ok) Failed = true;
             try { _net.Broadcast(new ClientWorldLoadedMsg { Ok = ok }, DeliveryMethod.ReliableOrdered); }
             catch (Exception e) { Plugin.Logger.LogWarning("[SaveTransfer] ClientWorldLoaded not sent: " + e.Message); }
         }
@@ -326,6 +334,7 @@ namespace SailwindCoop.Sync
 
         private IEnumerator LoadRoutine(int slot)
         {
+            int epoch = _loadEpoch;
             SaveSlots.currentSlot = slot;
             if (SaveSlots.slotsActive != null && slot < SaveSlots.slotsActive.Length)
                 SaveSlots.slotsActive[slot] = true;
@@ -334,6 +343,7 @@ namespace SailwindCoop.Sync
 
             for (float t = 0f; !GameState.currentlyLoading; t += Time.unscaledDeltaTime)
             {
+                if (epoch != _loadEpoch) yield break;
                 if (t >= 10f)
                 {
                     Plugin.Logger.LogError("[SaveTransfer] Failed to start host world load within 10 s " +
@@ -365,12 +375,17 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[SaveTransfer] Started host world load through menu (slot " + slot + ")");
 
             // The load itself takes a few seconds (blackout + LoadGame); report once the world is up.
+            // The game cannot stop a load it has started, so a session torn down meanwhile does not
+            // end this wait: the world that comes up is a host's copy either way.
             for (float t = 0f; !GameState.playing && t < 60f; t += Time.unscaledDeltaTime)
                 yield return null;
 
-            NotifyHostLoaded(GameState.playing);
+            // Checked here and not in the loop: only the session that asked for this load may hear
+            // its outcome, and a teardown can land in the very frame the world comes up.
+            bool current = epoch == _loadEpoch;
+            if (current) NotifyHostLoaded(GameState.playing);
             if (GameState.playing)
-                OnSaveLoaded?.Invoke();
+                OnSaveLoaded?.Invoke(current);
             else
                 Plugin.Logger.LogWarning("[SaveTransfer] Load started, but the world still did not come up within 60 s");
         }
@@ -383,6 +398,8 @@ namespace SailwindCoop.Sync
 
         public void Reset()
         {
+            _loadEpoch++;
+            Failed = false;
             _chunks = null;
             _receiving = false;
             _receivedChunks = 0;
