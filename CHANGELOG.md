@@ -2,9 +2,9 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-10
 
-The development build uses protocol 92; it cannot connect to builds with an earlier protocol.
+**Everyone must update.** The protocol is now 92: 0.5.0 cannot connect to 0.4.3 or earlier.
 
 ### Added
 
@@ -16,15 +16,18 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 - The table is set up from the gesture wheel (`G`, **Dice table**). One table per player, one per
   boat, five in a world. A table is not saved with the world and leaves with its owner.
 - A party can be paused and resumed, a player who reconnects returns to the same seat, and the
-  score board shows the rules and the history of finished parties.
+  score board shows the rules and the history of finished parties. The history belongs to the
+  world: it follows the save, its backups and its copies, and a new game starts an empty one.
 - Close view of the dice table: sitting down brings the table close and frees the cursor, and the
   table is played with the mouse buttons. `T` opens and closes it (`UI.DiceViewKey`);
   `Dice.CloseUp = false` leaves it to the key. The other players see no difference.
 - Optional stakes in coins, enabled by default (`Dice.AllowStakes`, personal wallets only).
   Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` to enable them
   if previously disabled.
-- Joining and reconnecting work from a loaded world: the game returns to the title screen by itself
-  and then joins. It is no longer necessary to restart the game or to stay at the main menu.
+- Reconnecting has been reworked. Joining or reconnecting from a loaded world now goes through
+  the main menu and a full reload: the game leaves the current world, returns to the title screen
+  and loads the host's world from scratch. It does this by itself; the game does not have to be
+  restarted.
 - A Steam host sees their Steam ID and the **Copy ID** button while hosting, not only before it.
 - A join refused because the two builds cannot play together now says so: which side has the
   older mod and who has to update. A host that still runs 0.4.3 or older refuses without a reason;
@@ -57,15 +60,19 @@ The development build uses protocol 92; it cannot connect to builds with an earl
   damages the boat or water coming over its side wakes a player asleep by himself. A player
   woken by his own hunger or thirst during the shared sleep gets up alone; the others sleep on.
 
+- The `[Avatar]` config section is gone: the avatar height offset is fixed, and old entries in
+  an existing config file are ignored.
+
 ### Fixed
 
 - On a game version the mod does not support, the co-op menu key did nothing and the log was
   empty. The mod now says on screen that it did not start and which game version it needs, and
   writes the reason to `BepInEx/LogOutput.log`.
+- The game's wind sound broke after a player joined: it stopped following the wind and the game
+  wrote "Attempt to set pitch to infinite value" to its log every frame.
+- During the shared sleep the host recovered much faster than the guests.
 - With three or more players, the avatar of a player who left stayed in the world on the other
   guests' machines.
-- Persistent player identity and a dice history that belongs to the world: it follows the save,
-  its backups and its copies, and a new game starts an empty one.
 
 ## [0.4.3] - 2026-10-07
 

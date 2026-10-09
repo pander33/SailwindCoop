@@ -1,8 +1,8 @@
 {
     "name": "SailwindCoop",
-    "version_number": "0.4.3",
+    "version_number": "0.5.0",
     "website_url": "https://github.com/pander33/SailwindCoop",
-    "description": "Play Sailwind with friends over Steam, LAN or VPN. Shared sailing, shared wallet, mod list check, gestures and crew sleep.",
+    "description": "Play Sailwind with friends over Steam, LAN or VPN. Shared sailing, shared wallet, mod list check, gestures, crew sleep and deck dice.",
     "dependencies": [
         "BepInEx-BepInExPack-5.4.2100"
     ]
