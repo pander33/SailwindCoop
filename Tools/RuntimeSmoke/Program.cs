@@ -825,6 +825,18 @@ internal static class Program
                 for (int i = 0; i < 1000; i++) log.ReportError("patch", "injected", ref repeat);
                 Assert(lines == 6, "enabled throttle: " + lines);
             });
+            Test("the report keeps the last log lines while logging is off, and writes none of them", () => {
+                var sink = new ManualLogSource("RuntimeSmoke"); int lines = 0;
+                sink.LogEvent += (sender, e) => lines++;
+                var log = new CoopLog(sink, false);
+                for (int i = 0; i < 1000; i++) log.LogInfo("line " + i);
+                log.LogWarning(new string('w', 1000));
+                string[] trail = log.TrailSnapshot();
+                Assert(lines == 0, "written with logging off: " + lines);
+                Assert(trail.Length == 400 && trail[0].EndsWith(" INFO line 601") && trail[398].EndsWith(" INFO line 999"), "the last lines, oldest first");
+                Assert(trail[399].Contains(" WARN www") && trail[399].Length < 330, "a long line is cut");
+                Assert(log.RecentSnapshot().Length == 1, "information does not push warnings out of the short list");
+            });
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Runtime smoke: " + _passed + " passed, " + _failed + " failed (.NET Framework; Unity Mono still needs in-game verification)");

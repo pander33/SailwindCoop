@@ -40,6 +40,9 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 
 ### Changed
 
+- **Export report** now also holds the last few hundred lines the mod would have logged, kept in
+  memory even when logging is off, the character's needs, the game's time scale, the sleep state
+  and the installed plugins. The file name ends with the role.
 - A Steam session is open to anyone by default, over Steam and on the LAN port
   (`Steam/FriendsOnly` is now off). Existing configs retain their saved value: press **Anyone** in
   the F8 menu, or set `FriendsOnly = false` under `[Steam]`.

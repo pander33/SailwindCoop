@@ -414,6 +414,11 @@ Details:
 - Removing a guest uses a two-step confirmation and sends that guest a readable reason.
 - Reconnect is a full fresh join. From a loaded world the game returns to the title screen first.
 - **Export report** (under **Settings**) creates a single diagnostic text file that can be attached to a bug report.
+  It holds the session state, your character's needs, the installed plugins and the last few
+  hundred lines the mod would have logged, even if logging was off. Press it on every machine
+  right after the problem, before restarting the game: the lines live in memory only. The file
+  name ends with the role (`-host`, `-client`). It can contain player names, LAN addresses and
+  Steam IDs.
 
 ## Reporting A Problem
 

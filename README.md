@@ -117,7 +117,7 @@ The buttons below sit under **Settings** in the F8 menu, which is collapsed unti
 - Press **F8**, open **Settings** and use **Show Status** / **Hide Status**
 - **Logging** switches the log file on and off without restarting the game. It is off by default; turn it on *before* reproducing a problem, otherwise the log will hold nothing useful
 - **Dump water state** writes `debug/water-*.txt`. Press it on both machines at the same moment if the sea ever looks different on one of them
-- **Export report** writes `debug/coop-report-*.txt` with session and recent error diagnostics, including when logging was off
+- **Export report** writes `debug/coop-report-*.txt` with the session state, your character's needs, the installed plugins and the last few hundred lines the mod would have logged, kept in memory even when logging was off
 - The **Debug** button opens the developer panel, and only works if `EnableDebugPanel` is set in the config
 
 #### Skin Selection

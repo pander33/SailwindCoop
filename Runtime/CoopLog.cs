@@ -56,6 +56,18 @@ namespace SailwindCoop.Runtime
         private readonly Queue<string> _recent = new Queue<string>();
         private const int RecentLimit = 32;
 
+        /// <summary>Everything the mod would have logged, kept in memory whether logging is on or
+        /// not, for the exported report: a problem is usually noticed after it happened, with
+        /// logging off. Nothing here touches the disk.</summary>
+        private struct TrailLine
+        {
+            internal DateTime At;
+            internal string Level, Text;
+        }
+
+        private readonly Queue<TrailLine> _trail = new Queue<TrailLine>();
+        private const int TrailLimit = 400, TrailLineLimit = 300;
+
         public CoopLog(ManualLogSource sink, bool enabled)
         {
             _sink = sink;
@@ -73,8 +85,8 @@ namespace SailwindCoop.Runtime
             }
         }
 
-        public void LogInfo(object data) { if (_enabled && _sink != null) _sink.LogInfo(data); }
-        public void LogMessage(object data) { if (_enabled && _sink != null) _sink.LogMessage(data); }
+        public void LogInfo(object data) { Trail("INFO", data); if (_enabled && _sink != null) _sink.LogInfo(data); }
+        public void LogMessage(object data) { Trail("INFO", data); if (_enabled && _sink != null) _sink.LogMessage(data); }
         public void LogWarning(object data) { Remember("WARN", data); if (_enabled && _sink != null) _sink.LogWarning(data); }
         public void LogDebug(object data) { if (_enabled && _sink != null) _sink.LogDebug(data); }
 
@@ -157,8 +169,31 @@ namespace SailwindCoop.Runtime
             lock (_recent) return _recent.ToArray();
         }
 
+        /// <summary>The last lines of every level, oldest first, with local time of day.</summary>
+        public string[] TrailSnapshot()
+        {
+            TrailLine[] lines;
+            lock (_trail) lines = _trail.ToArray();
+            var text = new string[lines.Length];
+            for (int i = 0; i < lines.Length; i++)
+                text[i] = lines[i].At.ToLocalTime().ToString("HH:mm:ss.fff") + " " + lines[i].Level + " " + lines[i].Text;
+            return text;
+        }
+
+        private void Trail(string level, object data)
+        {
+            string text = data == null ? "" : data.ToString();
+            if (text.Length > TrailLineLimit) text = text.Substring(0, TrailLineLimit);
+            lock (_trail)
+            {
+                while (_trail.Count >= TrailLimit) _trail.Dequeue();
+                _trail.Enqueue(new TrailLine { At = DateTime.UtcNow, Level = level, Text = text });
+            }
+        }
+
         private void Remember(string level, object data)
         {
+            Trail(level, data);
             string text = data == null ? "" : data.ToString();
             if (text.Length > 500) text = text.Substring(0, 500);
             lock (_recent)
