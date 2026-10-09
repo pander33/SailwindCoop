@@ -825,7 +825,8 @@ namespace SailwindCoop.Runtime
                             case ResyncDomain.Anchor: Anchor.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Mooring: Mooring.Resync(resync.BoatIndex); break;
                             case ResyncDomain.Damage: Damage.Resync(resync.BoatIndex); break;
-                            case ResyncDomain.World: Storms.Resync(); WindTotem.ResyncOrbs(); Items.ResyncInstruments(); break;
+                            // Orbs are not resent here: a client asks for each orb when it binds it.
+                            case ResyncDomain.World: Storms.Resync(); Items.ResyncInstruments(); break;
                         }
                     }
                     break;

@@ -34,6 +34,27 @@ internal static class ItemReliabilityTests
             Assert(authoring.Resolve(10, 10, 9, 12, 902) == null, "one request rebound to another host identity");
             authoring.Clear(); Assert(authoring.Resolve(10, 10, 9, 12, 901) == null, "previous session identity leaked");
         });
+        test("authored requests of destroyed items are dropped once bound, kept while waiting", () => {
+            var authoring = new ItemAuthoring<object>(); var bound = new object(); var waiting = new object(); var alive = new object();
+            authoring.Add(1, bound, 12); authoring.Add(2, waiting, 12); authoring.Add(3, alive, 12);
+            authoring.Bind(1, 901); authoring.Bind(3, 903);
+            authoring.Prune(item => ReferenceEquals(item, alive));
+            Assert(authoring.Count == 2, "bound request of a destroyed item kept, or a live one dropped");
+            Assert(authoring.Resolve(10, 10, 1, 12, 901) == null, "destroyed item still resolves");
+            Assert(ReferenceEquals(authoring.Resolve(10, 10, 2, 12, 902), waiting) && authoring.Contains(waiting), "request awaiting its id was dropped");
+            Assert(ReferenceEquals(authoring.Resolve(10, 10, 3, 12, 903), alive), "live bound item lost");
+        });
+        test("a host item without a local counterpart is reported once and then retried slowly", () => {
+            var wait = new SpawnWait(); bool report; int reports = 0, tries = 0;
+            for (float now = 0f; now < SpawnWait.ReportAfter; now += 0.25f)
+            { Assert(wait.Due(7, now, out report) && !report, "early wait throttled or reported"); }
+            for (float now = SpawnWait.ReportAfter; now < SpawnWait.ReportAfter + 5f; now += 0.25f)
+            { if (wait.Due(7, now, out report)) tries++; if (report) reports++; }
+            Assert(reports == 1, "long wait reported " + reports + " times");
+            Assert(tries >= 4 && tries <= 6, "slow retry ran " + tries + " times in 5 s");
+            wait.Remove(7); Assert(wait.Count == 0 && wait.Due(7, 100f, out report) && !report, "a resolved item kept its wait");
+            wait.Clear(); Assert(wait.Count == 0, "session reset");
+        });
         test("empty item baseline settles only in a loaded playing world", () => {
             Assert(ItemBaseline.Ready(true, false, 0, 4, 4), "valid empty baseline never ready");
             Assert(!ItemBaseline.Ready(false, false, 0, 100, 4), "main menu became a baseline");

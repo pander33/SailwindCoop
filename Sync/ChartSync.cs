@@ -86,11 +86,6 @@ namespace SailwindCoop.Sync
                 { Apply(doc, incoming.Header, incoming.Ready); _incoming.Remove(doc.Id); }
             }
         }
-        public void SendBaseline(NetPeer peer)
-        {
-            if (_net.Role != Role.Host) return;
-            foreach (var map in ItemSync.Instance.SharedMaps()) { var doc = Bind(map); if (doc != null) Send(doc, peer); }
-        }
         private ulong NewMark()
         { if (++_nextMark == 0) ++_nextMark; return ((ulong)_net.MyNetId << 32) | _nextMark; }
         internal void NotifyChanged(MapChart map, Dictionary<object, ChartMark> before)

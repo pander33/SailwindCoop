@@ -142,12 +142,6 @@ namespace SailwindCoop.Sync
                 Send(surface, null, ack.Key, ack.Value.Key, ack.Value.Value);
             surface.Acks.Clear();
         }
-        public void SendBaseline(NetPeer peer)
-        {
-            if (_net.Role != Role.Host) return;
-            foreach (var obj in SaveLoadManager.instance?.GetCurrentObjects() ?? Array.Empty<SaveableObject>())
-            { var surface = obj?.GetCleanable() != null ? Bind(obj.GetCleanable()) : null; if (surface != null) { Capture(surface); Send(surface, peer); } }
-        }
         public void OnRequest(DirtRequestMsg msg, NetPeer peer)
         {
             if (_net.Role != Role.Host) return;

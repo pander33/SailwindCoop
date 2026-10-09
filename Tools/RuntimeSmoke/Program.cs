@@ -897,6 +897,30 @@ internal static class Program
                 "held/alt catalog incomplete");
             foreach (var route in ItemActionCatalog.Routes)
                 Assert(Declares(types[route.Input.TypeName], route.Input), route.Input.TypeName + " action signature absent");
+            // The other direction: an alternative action the game declares on an item and the
+            // catalog does not know would be played by one machine only, without a word in the log.
+            var routed = new HashSet<string>(ItemActionCatalog.Routes.Select(r =>
+                r.Input.TypeName + "." + r.Input.Method + "(" + string.Join(",", r.Input.Parameters) + ")"));
+            var unrouted = new List<string>(); int declared = 0;
+            foreach (var type in types.Values)
+            {
+                var current = type; bool item = false;
+                while (current != null)
+                {
+                    if (current.FullName == "ShipItem") { item = true; break; }
+                    if (current.BaseType == null || !types.TryGetValue(current.BaseType.FullName, out current)) break;
+                }
+                if (!item) continue;
+                foreach (var method in type.Methods)
+                {
+                    if ((method.Name != "OnAltActivate" && method.Name != "OnAltHeld") || method.IsAbstract) continue;
+                    string key = type.FullName + "." + method.Name + "(" + string.Join(",", method.Parameters.Select(p => p.ParameterType.Name)) + ")";
+                    declared++;
+                    if (!routed.Contains(key)) unrouted.Add(key);
+                }
+            }
+            Assert(unrouted.Count == 0, "item alternative actions without a route: " + string.Join(", ", unrouted));
+            Assert(declared == ItemActionCatalog.Routes.Length, "game declares " + declared + " item alternative actions, catalog has " + ItemActionCatalog.Routes.Length);
             Assert(InteractionActionCatalog.HostOnlyInputs.Any(input => input.TypeName == "GPButtonAutosaveToggle" && input.Method == "OnActivate"),
                 "host-only autosave guard missing");
             var autosave = InteractionActionCatalog.HostOnlyInputs.Single(input => input.TypeName == "GPButtonAutosaveToggle" && input.Method == "OnActivate");

@@ -22,6 +22,8 @@ namespace SailwindCoop.Sync
             internal string Id, Parent;
             internal uint Holder, Revision, Request, AckActor, AckRequest;
             internal bool Slaved;
+            // The remote copy's particles and sound are already off: OnDrop is not repeated every frame.
+            internal bool Quiet;
             internal int OriginalLayer;
             internal readonly ItemStateGate Gate = new ItemStateGate();
             internal readonly ItemRequestOrder Order = new ItemRequestOrder();
@@ -53,7 +55,7 @@ namespace SailwindCoop.Sync
             if (orb == null || orb.totem == null || !orb.gameObject.scene.IsValid() || !orb.gameObject.scene.isLoaded) return null;
             if (_orbByInstance.TryGetValue(orb, out var bound) && bound.Orb == orb) return bound;
             string id = Identity(orb.transform), parent = Identity(orb.totem);
-            if (_orbs.TryGetValue(id, out var carry)) { carry.Orb = orb; _orbByInstance[orb] = carry; return carry; }
+            if (_orbs.TryGetValue(id, out var carry)) { carry.Orb = orb; carry.Quiet = false; _orbByInstance[orb] = carry; return carry; }
             carry = new Carry { Orb = orb, Id = id, Parent = parent, OriginalLayer = orb.held != null ? 0 : orb.gameObject.layer };
             carry.Pose.InterpDelayMs = carry.ParentPose.InterpDelayMs = _net.Role == Role.Host ? 0 : 100;
             _orbs[id] = carry; _orbByInstance[orb] = carry;
@@ -74,7 +76,7 @@ namespace SailwindCoop.Sync
         {
             if (InteractionContext.Suppressed || _net.State != LinkState.Connected || !CoordSpace.Ready) return;
             var carry = BindOrb(orb); if (carry == null) return;
-            RestoreOrb(carry); carry.Holder = held ? _net.MyNetId : 0; carry.Pose.Clear(); carry.ParentPose.Clear();
+            RestoreOrb(carry); carry.Holder = held ? _net.MyNetId : 0; carry.Pose.Clear(); carry.ParentPose.Clear(); carry.Quiet = false;
             orb.gameObject.layer = held ? 2 : carry.OriginalLayer;
             if (_net.Role == Role.Client) SendOrbRequest(carry, held ? OrbAction.Pickup : OrbAction.Drop);
             else if (_net.Role == Role.Host) SendOrbState(carry, true);
@@ -122,8 +124,6 @@ namespace SailwindCoop.Sync
             var mode = carry.Stream.Next(OrbChanged(carry.SentState, probe, Local(carry.Orb) ? _net.MyNetId : carry.Holder));
             if (mode != StreamSend.None) SendOrbState(carry, mode == StreamSend.Reliable, periodic: true);
         }
-        /// <summary>Host: a client finished loading and has no orb state yet.</summary>
-        public void ResyncOrbs() { foreach (var carry in _orbs.Values) carry.Stream.Reset(); }
         private void TickOrbs(float dt)
         {
             if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || !CoordSpace.Ready) return;
@@ -207,7 +207,8 @@ namespace SailwindCoop.Sync
         private static void OrbVisual(Carry carry)
         {
             var orb = carry.Orb;
-            if (carry.Holder == 0) { orb.OnDrop(); return; }
+            if (carry.Holder == 0) { if (!carry.Quiet) { orb.OnDrop(); carry.Quiet = true; } return; }
+            carry.Quiet = false;
             float distance = Vector3.Distance(orb.transform.position, orb.totem.position), fraction = distance / orb.maxCarryDistance;
             if (orb.orbParticles != null)
             {

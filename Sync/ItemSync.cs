@@ -61,6 +61,7 @@ namespace SailwindCoop.Sync
         private readonly ItemMembership<ShipItem> _cargoMembership = new ItemMembership<ShipItem>();
         private readonly Dictionary<int, ItemStateMsg> _pendingStates = new Dictionary<int, ItemStateMsg>();
         private readonly Dictionary<int, SpawnObjectMsg> _pendingSpawns = new Dictionary<int, SpawnObjectMsg>();
+        private readonly SpawnWait _spawnWait = new SpawnWait();
         // Client: mission goods whose mission slot is not in our journal yet (item id -> slot).
         private readonly Dictionary<int, int> _pendingMissionGoods = new Dictionary<int, int>();
         private readonly CoopNet _net;
@@ -166,7 +167,15 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client && _baselineReady && _pendingSpawns.Count != 0)
             {
                 var waiting = new List<SpawnObjectMsg>(_pendingSpawns.Values);
-                foreach (var spawn in waiting) OnSpawnObject(spawn, null);
+                float now = Time.unscaledTime;
+                List<SpawnObjectMsg> reported = null;
+                foreach (var spawn in waiting)
+                {
+                    bool due = _spawnWait.Due(spawn.InstanceId, now, out bool report);
+                    if (report) (reported ?? (reported = new List<SpawnObjectMsg>())).Add(spawn);
+                    if (due) OnSpawnObject(spawn, null);
+                }
+                if (reported != null) ReportSpawnWait(reported);
             }
             if (_net.Role == Role.Client && _pendingStates.Count != 0)
                 foreach (var state in new List<ItemStateMsg>(_pendingStates.Values))
@@ -462,9 +471,9 @@ namespace SailwindCoop.Sync
             // it can match/remap its own copies to host ids. Reply with a SpawnObject for every item.
             if (msg.InstanceId == 0)
             {
+                // Charts and dirt textures are not pushed here: the client asks for each map and each
+                // surface when it binds it, and pushing them as well sent every texture twice.
                 SendManifest(fromPeer);
-                ChartSync.Instance?.SendBaseline(fromPeer);
-                DirtSync.Instance?.SendBaseline(fromPeer);
                 return;
             }
 
@@ -2021,6 +2030,65 @@ namespace SailwindCoop.Sync
 
         }
 
+        // A far boat or house keeps its items in a cache: waiting for those is the normal case.
+        private const string WaitsInCache = "in the cache of a boat or house that is not loaded here";
+
+        /// <summary>
+        /// Host items that still have no local counterpart: one line per cause, not per item — a far
+        /// boat alone can hold dozens. Only a cause other than the cache is a warning.
+        /// </summary>
+        private void ReportSpawnWait(List<SpawnObjectMsg> waiting)
+        {
+            var cached = CachedLocalItemIds();
+            var causes = new Dictionary<string, List<int>>();
+            foreach (var spawn in waiting)
+            {
+                string cause = SpawnWaitReason(spawn, cached);
+                if (!causes.TryGetValue(cause, out var ids)) causes[cause] = ids = new List<int>();
+                ids.Add(spawn.InstanceId);
+            }
+            foreach (var pair in causes)
+            {
+                string text = "[ItemSync] role=Client " + pair.Value.Count + " host item(s) without a local counterpart after " +
+                              SpawnWait.ReportAfter + " s, still waiting: " + pair.Key + " (ids " +
+                              string.Join(", ", pair.Value.GetRange(0, Math.Min(8, pair.Value.Count))) +
+                              (pair.Value.Count > 8 ? ", ..." : "") + ")";
+                if (pair.Key == WaitsInCache) Plugin.Logger.LogInfo(text); else Plugin.Logger.LogWarning(text);
+            }
+        }
+
+        private string SpawnWaitReason(SpawnObjectMsg msg, HashSet<int> cached)
+        {
+            bool local = _byInstanceId.TryGetValue(msg.InstanceId, out var entry) && entry.Item != null;
+            if (local && entry.PrefabIndex != msg.PrefabIndex) return "the local item with the same id has another prefab";
+            if (!local && cached.Contains(msg.InstanceId)) return WaitsInCache;
+            if (_saveIdentity.Contains(msg.InstanceId, msg.PrefabIndex))
+                return !local ? "in the save, but neither loaded nor cached on this machine"
+                     : !ItemComponents.SaveLoaded(entry.Item) ? "saved state has not finished loading"
+                     : "the local copy is still being created by this player";
+            if (msg.AuthorRequester == _net.MyNetId && msg.AuthorRequestId != 0) return "the item this player created is gone";
+            return "could not be created";
+        }
+
+        private static HashSet<int> CachedLocalItemIds()
+        {
+            var ids = new HashSet<int>();
+            try
+            {
+                if (_fBoatCachedItems == null)
+                    _fBoatCachedItems = typeof(BoatLocalItems).GetField("cachedItems", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (_fBoatCachedItems == null) return ids;
+                foreach (var localItems in UnityEngine.Object.FindObjectsOfType<BoatLocalItems>())
+                {
+                    var list = _fBoatCachedItems.GetValue(localItems) as List<SavePrefabData>;
+                    if (list == null) continue;
+                    foreach (var data in list) if (data != null) ids.Add(data.instanceId);
+                }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemSync] Failed to read cached items: " + e.Message); }
+            return ids;
+        }
+
         public void OnSpawnObject(SpawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item || _tombstones.Contains(msg.InstanceId)) return;
@@ -2046,6 +2114,7 @@ namespace SailwindCoop.Sync
                 if (_pendingStates.TryGetValue(msg.InstanceId, out waiting))
                     if (TryApplyItemState(waiting) == ItemApplyStatus.Applied) _pendingStates.Remove(msg.InstanceId);
                 _pendingSpawns.Remove(msg.InstanceId);
+                _spawnWait.Remove(msg.InstanceId);
             }
             // Lifecycle notices are emitted by the originating domain, never by manifests/echoes.
         }
@@ -2067,6 +2136,7 @@ namespace SailwindCoop.Sync
             _tombstones.Add(msg.InstanceId);
             _pendingStates.Remove(msg.InstanceId);
             _pendingSpawns.Remove(msg.InstanceId);
+            _spawnWait.Remove(msg.InstanceId);
             _pendingMissionGoods.Remove(msg.InstanceId);
             // Our own copy may already sit in a BoatLocalItems cache (we left the boat's or house's range
             // before the host did). The host brings the item back under a NEW id, so a cached entry with
@@ -2782,6 +2852,7 @@ namespace SailwindCoop.Sync
         {
             // Previously-known entries (carry live ShipItem refs; a destroyed item reads Unity-null).
             var prev = new Dictionary<int, ItemEntry>(_byInstanceId);
+            _pendingClientItems.Prune(item => item != null);
 
             // Alive set = previously-known still-alive (covers items that went temporarily inactive,
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
@@ -3468,6 +3539,7 @@ namespace SailwindCoop.Sync
             _crateMembership.Clear();
             _cargoMembership.Clear();
             _pendingSpawns.Clear();
+            _spawnWait.Clear();
             _pendingMissionGoods.Clear();
             _nextRequest = 0;
             ClearOperations();
