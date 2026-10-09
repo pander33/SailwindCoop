@@ -60,7 +60,6 @@ The development build uses protocol 92; it cannot connect to builds with an earl
   guests' machines.
 - Persistent player identity and a dice history that belongs to the world: it follows the save,
   its backups and its copies, and a new game starts an empty one.
-- Deck dice has not been verified in a running game yet.
 
 ## [0.4.3] - 2026-10-07
 
