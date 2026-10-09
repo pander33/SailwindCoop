@@ -43,6 +43,13 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 - A Steam session is open to anyone by default, over Steam and on the LAN port
   (`Steam/FriendsOnly` is now off). Existing configs retain their saved value: press **Anyone** in
   the F8 menu, or set `FriendsOnly = false` under `[Steam]`.
+- Sleep. Whoever lies down, sleeps: the time skip starts when every player lies down, rested or
+  not (a rested crew skips time only at a mooring or ashore). A player who sleeps while someone
+  stays up recovers at a quarter of the speed of the shared sleep, until rested instead of for a
+  fixed time; hunger and thirst stand still. A rested player who stays in bed does not get tired,
+  hungry or thirsty. A player who collapsed outside a bed is woken by any key, and a hit that
+  damages the boat or water coming over its side wakes a player asleep by himself. A player
+  woken by his own hunger or thirst during the shared sleep gets up alone; the others sleep on.
 
 ### Fixed
 

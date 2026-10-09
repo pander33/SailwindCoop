@@ -22,6 +22,10 @@ namespace SailwindCoop.Sync
                 prefix: Callback(nameof(PreTavern)), postfix: Callback(nameof(PostInput)), finalizer: Callback(nameof(FinishInput))));
             Install(harmony, hooks, typeof(GPButtonOnsenEntrance), "OnActivate", Type.EmptyTypes, nameof(PreEntrance), nameof(PostEntrance));
             Install(harmony, hooks, typeof(PlayerNeeds), "LateUpdate", Type.EmptyTypes, nameof(PreNeeds), nameof(PostNeeds));
+            hooks.Install(typeof(PlayerNeedsUI), "PlayWarning", new[] { typeof(Transform), typeof(bool) }, target => harmony.Patch(target,
+                prefix: Callback(nameof(PreNeedsWarning)), finalizer: Callback(nameof(EndNeedsWarning))));
+            Install(harmony, hooks, typeof(BoatDamage), "Impact", new[] { typeof(Collider), typeof(float) }, nameof(PreBoatHarm), nameof(PostImpact));
+            Install(harmony, hooks, typeof(BoatDamage), "Overflow", new[] { typeof(float) }, nameof(PreBoatHarm), nameof(PostOverflow));
             hooks.Inspect(typeof(GPButtonBed), "GPButtonBed", "OnActivate", Type.EmptyTypes, null);
             hooks.Inspect(typeof(GPButtonTavernSleep), "GPButtonTavernSleep", "OnActivate", Type.EmptyTypes, null);
             hooks.Inspect(typeof(ShipItemBed), "ShipItemBed", "OnAltActivate", Type.EmptyTypes, null);
@@ -45,7 +49,7 @@ namespace SailwindCoop.Sync
             __state = default(SleepSync.NeedsSnapshot);
             try
             {
-                if (Active && SleepSync.Instance.ClientAsleep && !__instance.godMode && GameState.playing &&
+                if (Active && SleepSync.Instance.AdjustsNeeds && !__instance.godMode && GameState.playing &&
                     !GameState.recovering && GameState.currentShipyard == null &&
                     !(EconomyUI.instance.uiActive && !Debugger.buildDebugModeOn) && !__instance.applyOverride)
                     __state = new SleepSync.NeedsSnapshot
@@ -80,7 +84,7 @@ namespace SailwindCoop.Sync
             try
             {
                 if (!Active) return true;
-                if (GameState.eyesFullyClosed) SleepSync.Instance.Wake(_inSleepLoop);
+                if (GameState.eyesFullyClosed) SleepSync.Instance.Wake(_inSleepLoop, _inNeedsWarning);
             }
             catch (Exception error) { Warn(nameof(PreWakeUp), error); }
             return false;
@@ -106,6 +110,54 @@ namespace SailwindCoop.Sync
         private static bool _inSleepLoop;
         private static void PreSleepLoop() { _inSleepLoop = true; }
         private static void PostSleepLoop() { _inSleepLoop = false; }
+
+        // PlayerNeedsUI.PlayWarning wakes the player whose own hunger or thirst is low. That is his
+        // wake-up alone, not the crew's.
+        private static bool _inNeedsWarning;
+        private static void PreNeedsWarning() { _inNeedsWarning = true; }
+        private static Exception EndNeedsWarning(Exception __exception) { _inNeedsWarning = false; return __exception; }
+
+        // The game wakes its own sleeper from a hit that did damage and from water coming over the
+        // side. A player asleep alone is not asleep for the game, so the host passes these on.
+        private static void PreBoatHarm(BoatDamage __instance, out Vector2 __state)
+        {
+            __state = Vector2.zero;
+            try { if (Active) __state = new Vector2(__instance.hullDamage, __instance.waterLevel); }
+            catch (Exception error) { Warn(nameof(PreBoatHarm), error); }
+        }
+
+        private static void PostImpact(BoatDamage __instance, Collider __0, float __1, Vector2 __state)
+        {
+            try
+            {
+                if (!Active) return;
+                if (__instance.hullDamage > __state.x) SleepSync.Instance.BoatAlarm(__instance.transform);
+                // The game calls this only for a hard hit of the local player's boat, and wakes the
+                // sleeper right after. What threw the boat is the question this line answers.
+                if (SleepSync.Instance.HoldsBed)
+                {
+                    var body = __instance.GetComponent<Rigidbody>();
+                    Plugin.Logger.LogWarning("[SleepPatches] hit in shared sleep: boat=" + __instance.name +
+                        " against=" + (__0 == null ? "?" : __0.name + "/" + __0.transform.root.name) +
+                        " relative=" + __1.ToString("F1") + " speed=" + (body == null ? "?" : body.velocity.magnitude.ToString("F1")) +
+                        " spin=" + (body == null ? "?" : body.angularVelocity.magnitude.ToString("F2")) +
+                        " timeScale=" + Time.timeScale + " fixedStep=" + Time.fixedDeltaTime.ToString("F4") +
+                        " phaseAge=" + SleepSync.Instance.PhaseAge.ToString("F1") + " eyesClosed=" + GameState.eyesFullyClosed +
+                        " role=" + CoopBehaviour.Instance?.Net?.Role);
+                }
+            }
+            catch (Exception error) { Warn(nameof(PostImpact), error); }
+        }
+
+        private static void PostOverflow(BoatDamage __instance, Vector2 __state)
+        {
+            try
+            {
+                if (Active && __instance.waterLevel > __state.y && __instance.waterLevel > 0.1f)
+                    SleepSync.Instance.BoatAlarm(__instance.transform);
+            }
+            catch (Exception error) { Warn(nameof(PostOverflow), error); }
+        }
 
         private static void PreTavern(Tavern __instance)
         {

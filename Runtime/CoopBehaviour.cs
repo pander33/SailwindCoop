@@ -314,6 +314,7 @@ namespace SailwindCoop.Runtime
             Net.OnGameMessage += OnGameMessage;
             _notifications = new CoopNotifications();
             Net.OnGameplayNotice += msg => _notifications.Add(msg, Net);
+            Net.OnGameplayNotice += msg => Sleep.OnNotice(msg);
             Net.OnMemberGone += netId => Players.ForgetRemote(netId);
             Net.OnPlayerLeft += netId =>
             {

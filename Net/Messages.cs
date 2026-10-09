@@ -171,6 +171,7 @@ namespace SailwindCoop.Net
         SleepEnded = 9,
         ItemBought = 10,
         ItemSold = 11,
+        BoatAlarm = 12,     // not shown: a boat (Detail = its index) was hit or takes in water; wakes a player asleep alone on it
     }
 
     /// <summary>
@@ -1912,13 +1913,13 @@ namespace SailwindCoop.Net
     }
 
     /// <summary>Client -> host, ReliableOrdered, on change and every 2 s. What the host needs to
-    /// decide on the shared sleep: it starts when every loaded player is InBed or Wants and at least
-    /// one Wants; at sea it ends early when everyone is Rested.</summary>
+    /// decide on the shared sleep: it starts when every loaded player is InBed or Wants, unless all
+    /// are Rested where time cannot be skipped; at sea it ends early when everyone is Rested.</summary>
     public sealed class SleepPresenceMsg : INetMessage
     {
         public const byte InBed = 1;      // lies in a bed
         public const byte Wants = 2;      // asleep by himself, or lying in a house bed
-        public const byte Rested = 4;     // sleep need is full
+        public const byte Rested = 4;     // the game would not put this player to sleep (99 and above)
         public const byte Tavern = 8;     // paid for a tavern night
         public const byte Timeskip = 16;  // ashore, in a tavern, or the boat is moored
 
