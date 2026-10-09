@@ -54,6 +54,10 @@ namespace SailwindCoop.Runtime
         private DebugPanel _debugPanel;
         private AvatarSelectUI _avatarUI;
         private CoopMenuUI _menuUI;
+        /// <summary>Games found on the local network, for the join screen of the F8 menu.</summary>
+        public readonly LanSearch LanSearch = new LanSearch(text => Plugin.Logger.LogInfo(text));
+        private const int DefaultPort = 7777;
+        private CoopLog.Repeat _lanSearchFailures;
         private Harmony _harmony;
         private bool _clientProfileSavedOnShutdown;
         private bool _clientCoopWorldLoaded;
@@ -155,6 +159,7 @@ namespace SailwindCoop.Runtime
                 // Stage 1 will replace this with the host's loaded save identity.
                 WorldIdProvider = () => "",
                 MaxClients = Plugin.Cfg.MaxClients.Value,
+                AnnounceOnLan = Plugin.Cfg.AnnounceOnLan.Value,
                 DisconnectTimeoutMs = Plugin.Cfg.DisconnectTimeoutMs.Value,
                 UpdateTimeMs = Plugin.Cfg.UpdateTimeMs.Value,
                 PingIntervalMs = Plugin.Cfg.PingIntervalMs.Value,
@@ -488,6 +493,17 @@ namespace SailwindCoop.Runtime
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Net.PollEvents failed", e, ref _pollFailures);
+            }
+
+            // The search of the local network runs only while the join screen that shows it is open.
+            try
+            {
+                bool wanted = _menuUI != null && _menuUI.WantsLanSearch;
+                LanSearch.Tick(wanted, Time.realtimeSinceStartup, wanted ? _menuUI.SearchPort : 0, Plugin.Cfg.Port.Value, DefaultPort);
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Logger.ReportError("[Coop] LAN search failed", e, ref _lanSearchFailures);
             }
 
             // Connection lost in the host's world: save the guest profile while that world is loaded.
@@ -1166,6 +1182,7 @@ namespace SailwindCoop.Runtime
             Players?.Clear();
             Pause?.Clear();
             HostPause?.Clear();
+            LanSearch.Stop();
             Net?.Stop();
             SteamLink.Shutdown();
             _notifications?.Clear();
@@ -1176,6 +1193,7 @@ namespace SailwindCoop.Runtime
         {
             SaveClientProfileBeforeStop("quit");
             SaveProfileAfterSession("quit");
+            LanSearch.Stop();
             Net?.Stop();
             SteamLink.Shutdown();
         }

@@ -69,6 +69,7 @@ namespace SailwindCoop
 
         // Server (host) tuning.
         public readonly ConfigEntry<int> MaxClients;
+        public readonly ConfigEntry<bool> AnnounceOnLan;
         public readonly ConfigEntry<int> DisconnectTimeoutMs;
         public readonly ConfigEntry<int> UpdateTimeMs;
         public readonly ConfigEntry<int> PingIntervalMs;
@@ -137,6 +138,7 @@ namespace SailwindCoop
             HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.6f, "Vertical offset of the host visual bundle model. Separate because the host root pose in Sailwind is usually higher than the client pose.");
 
             MaxClients = c.Bind("Server", "MaxClients", 4, "Maximum number of clients connected to the host at once (1 = single guest only). Applied on incoming connections.");
+            AnnounceOnLan = c.Bind("Server", "AnnounceOnLan", true, "The host answers players of the local network who look for a game, so it appears in their co-op menu. Off = the game is joined by address only. Applied when starting the host.");
             DisconnectTimeoutMs = c.Bind("Server", "DisconnectTimeoutMs", 5000, "Timeout (ms) without packets from a peer before it is considered disconnected.");
             UpdateTimeMs = c.Bind("Server", "UpdateTimeMs", 15, "Internal network manager update interval (ms). Lower = more frequent polling/sending, higher CPU load.");
             PingIntervalMs = c.Bind("Server", "PingIntervalMs", 1000, "Ping interval (ms) for latency estimation and connection keepalive.");

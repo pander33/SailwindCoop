@@ -124,6 +124,7 @@ internal static class Program
             DiceTests.Run(Test);
             ModSharingTests.Run(Test);
             TunnelTests.Run(Test);
+            LanSearchTests.Run(Test);
             Test("a later mod version in the crew is found, an unreadable one is ignored", () => {
                 Assert(ModVersions.IsNewer("0.4.4", "0.4.3") && ModVersions.IsNewer("0.10.0", "0.9.9") && ModVersions.IsNewer("1.0.0", "0.99.99"), "newer");
                 Assert(!ModVersions.IsNewer("0.4.3", "0.4.3") && !ModVersions.IsNewer("0.4.2", "0.4.3"), "same or older");

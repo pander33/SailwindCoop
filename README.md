@@ -90,7 +90,7 @@ For gameplay details such as economy, missions, cargo, items, damage, mooring, a
 1. Launch Sailwind
 2. Stay at the main menu, or join from a loaded world: the game then saves it, returns to the title screen by itself and joins
 3. Press **F8** to open the **Sailwind Co-op** menu
-4. Enter the host address in the **Join** field (an IP address or a host name, optionally `address:port`) and click **Join** or press Enter. From a loaded world, confirm **Save and join** (**Leave and join** when the world is a host's copy); **Cancel** leaves it open. A failed save stops the transition. A world of your own kept in the co-op save slot is replaced by the host's world: the confirmation says so.
+4. Games hosted on the same local network appear by themselves under **Games on this network**: press **Join** next to one. Otherwise enter the host address in the **Join** field (an IP address or a host name, optionally `address:port`) and click **Join** or press Enter. From a loaded world, confirm **Save and join** (**Leave and join** when the world is a host's copy); **Cancel** leaves it open. A failed save stops the transition. A world of your own kept in the co-op save slot is replaced by the host's world: the confirmation says so.
    - Default IP is `127.0.0.1` (localhost)
    - The menu writes the value to `BepInEx/config/com.sailwind.coop.cfg`
 5. The host's world is sent to you automatically and loaded into the co-op save slot — wait for it to finish
@@ -140,6 +140,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `JoinIp` | 127.0.0.1 | IP address of the host to connect to |
 | `PlayerName` | Player | Your display name in-game |
 | `MaxClients` | 4 | Maximum number of guests (1-4), in addition to the host |
+| `AnnounceOnLan` | true | The host appears in the co-op menu of players on the same local network |
 | `SnapshotHz` | 20 | State snapshot send rate |
 | `InterpDelayMs` | 100 | Interpolation buffer delay, in ms |
 | **Avatar** |
@@ -298,7 +299,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 1. Запустите Sailwind
 2. Останьтесь в главном меню или подключайтесь из загруженного мира: игра сама сохранит его, вернётся на титульный экран и подключится
 3. Нажмите **F8**, чтобы открыть меню **Sailwind Co-op**
-4. Введите адрес хоста в поле **Join** (IP-адрес или имя, можно `адрес:порт`) и нажмите **Join** или Enter. Из загруженного мира подтвердите **Save and join** (**Leave and join**, если это копия мира хоста); **Cancel** оставляет мир открытым. Ошибка сохранения останавливает переход. Собственный мир в слоте кооператива будет заменён миром хоста — окно подтверждения об этом предупреждает. **Join again** запоминает только готовое успешное подключение и работает после перезапуска.
+4. Игры в той же локальной сети появляются сами в списке **Games on this network**: нажмите **Join** рядом с нужной. Иначе введите адрес хоста в поле **Join** (IP-адрес или имя, можно `адрес:порт`) и нажмите **Join** или Enter. Из загруженного мира подтвердите **Save and join** (**Leave and join**, если это копия мира хоста); **Cancel** оставляет мир открытым. Ошибка сохранения останавливает переход. Собственный мир в слоте кооператива будет заменён миром хоста — окно подтверждения об этом предупреждает. **Join again** запоминает только готовое успешное подключение и работает после перезапуска.
    - IP по умолчанию: `127.0.0.1` (локальный)
    - Меню сохраняет значение в `BepInEx/config/com.sailwind.coop.cfg`
 5. Мир хоста передаётся автоматически и загружается в co-op слот сохранения — дождитесь окончания
@@ -339,6 +340,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `JoinIp` | 127.0.0.1 | IP адрес хоста для подключения |
 | `PlayerName` | Player | Ваше отображаемое имя в игре |
 | `MaxClients` | 4 | Максимум гостей (1-4), дополнительно к хосту |
+| `AnnounceOnLan` | true | Хост виден в меню кооператива у игроков той же локальной сети |
 | `SnapshotHz` | 20 | Частота отправки снапшотов состояния |
 | `InterpDelayMs` | 100 | Задержка буфера интерполяции, мс |
 | **Аватар** |

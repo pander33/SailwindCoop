@@ -79,6 +79,14 @@ namespace SailwindCoop.Runtime
         private bool _viewReplacesOwnSave;
         private string _viewJoinFailure = "";
         private string _viewSavedTarget = "";
+        // Games heard on the local network, snapshotted for the layout: each one is a row with a button.
+        private LanHost[] _viewLanHosts = new LanHost[0];
+
+        /// <summary>The join screen of the LAN tab is on screen: only then is the network asked.</summary>
+        public bool WantsLanSearch => _visible && _mode == Mode.Offline && !_steamModeWanted && _net.Role == Role.None &&
+                                      !_coop.LeavingWorld && !ConfirmWorldJoin;
+        /// <summary>The port of the Port field, where a host of this crew most likely listens.</summary>
+        public int SearchPort => int.TryParse(_port, out int port) ? port : 0;
         // Snapshotted: finding it is a system call, far too heavy for every IMGUI event.
         private string _viewHostAddress = "";
         private float _hostAddressAt;
@@ -319,6 +327,7 @@ namespace SailwindCoop.Runtime
             _viewReplacesOwnSave = _coop.PendingJoinReplacesOwnSave;
             _viewJoinFailure = _coop.JoinFailure ?? "";
             _viewSavedTarget = SavedTargetLabel();
+            _viewLanHosts = _coop.LanSearch.Running ? _coop.LanSearch.Hosts : new LanHost[0];
             RefreshHostAddresses();
             _viewInWorld = GameState.playing && !GameState.currentlyLoading;
             _viewAdvanced = _technicalSettingsOpen;
@@ -456,6 +465,7 @@ namespace SailwindCoop.Runtime
             }
             else
             {
+                DrawLanHosts(canJoin);
                 GUILayout.BeginHorizontal();
                 GUILayout.Label("Join", _muted, GUILayout.Width(CaptionWidth));
                 _joinIp = GUILayout.TextField(_joinIp, _textField, GUILayout.Height(FieldHeight));
@@ -463,7 +473,7 @@ namespace SailwindCoop.Runtime
                 if (GUILayout.Button("Join", _primaryButton, GUILayout.Width(70f), GUILayout.Height(FieldHeight))) Join();
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
-                GUILayout.Label("The host's address, as shown in the host's menu. Blank means this PC.", _muted);
+                GUILayout.Label("Or type the host's address, as shown in the host's menu. Blank means this PC.", _muted);
             }
             // Enter is the Join button: it joins only when the button would.
             if (canJoin && steamUsable && Event.current.type == EventType.KeyDown &&
@@ -478,6 +488,52 @@ namespace SailwindCoop.Runtime
             else if (PatchHealth.FaultedSets != null) GUILayout.Label("Will not sync (patch failed): " + PatchHealth.FaultedSets, _muted);
 
             DrawTechnicalSettings();
+        }
+
+        private const float LanCrewColumn = 54f, LanAddressColumn = 118f, LanJoinColumn = 62f;
+
+        /// <summary>
+        /// The games that answered on the local network, each with its own Join. The list fills and
+        /// empties by itself while this screen is open; the address field below stays for a host that
+        /// does not answer (another network, a firewall, a build without the search).
+        /// </summary>
+        private void DrawLanHosts(bool canJoin)
+        {
+            GUILayout.Label("GAMES ON THIS NETWORK", _caption);
+            if (_viewLanHosts.Length == 0)
+            {
+                GUILayout.Label("Looking for games... none found yet.", _muted);
+                GUILayout.Space(4f);
+                return;
+            }
+            for (int i = 0; i < _viewLanHosts.Length; i++)
+            {
+                LanHost host = _viewLanHosts[i];
+                bool sameProtocol = host.ProtocolVersion == Protocol.Version;
+                bool full = host.Players >= host.MaxPlayers;
+                GUILayout.BeginHorizontal(i % 2 == 0 ? _rowAlt : _row);
+                GUILayout.Label(string.IsNullOrEmpty(host.HostName) ? "Host" : host.HostName, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
+                GUILayout.Label(host.Players + "/" + host.MaxPlayers, full ? _cellWarn : _cell, GUILayout.Width(LanCrewColumn));
+                GUILayout.Label(host.Address, _cell, GUILayout.Width(LanAddressColumn));
+                GUI.enabled = canJoin && sameProtocol && host.Accepting && !full;
+                if (GUILayout.Button(!host.Accepting ? "Locked" : full ? "Full" : "Join", _smallButton,
+                                     GUILayout.Width(LanJoinColumn), GUILayout.Height(20f)))
+                    JoinLanHost(host);
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+                if (!sameProtocol)
+                    GUILayout.Label("Cannot join " + (string.IsNullOrEmpty(host.HostName) ? "this host" : host.HostName) + ": " +
+                                    ModVersions.ProtocolMismatch(host.ProtocolVersion, Protocol.Version, host.ModVersion) + ".", _notice);
+            }
+            GUILayout.Space(4f);
+        }
+
+        private void JoinLanHost(LanHost host)
+        {
+            // Through the address field, so the join is remembered and retried like a typed one.
+            bool ownPort = int.TryParse(_port, out int fieldPort) && fieldPort == host.Port;
+            _joinIp = ownPort ? host.Address : host.Address + ":" + host.Port;
+            Join();
         }
 
         private void DrawTechnicalSettings()

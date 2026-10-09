@@ -14,6 +14,7 @@
     <Compile Include="..\..\Sync\DiceJournal.cs" Link="DiceJournal.cs" />
     <Compile Include="..\..\Net\ModManifest.cs" Link="Net\ModManifest.cs" />
     <Compile Include="..\..\Net\ModVersions.cs" Link="Net\ModVersions.cs" />
+    <Compile Include="..\..\Net\LanDiscovery.cs" Link="Net\LanDiscovery.cs" />
     <Compile Include="..\..\Sync\ModCatalog.cs" Link="ModCatalog.cs" />
     <Compile Include="..\..\Sync\ModTransfer.cs" Link="ModTransfer.cs" />
     <Compile Include="..\..\Sync\SaveCompression.cs" Link="SaveCompression.cs" />

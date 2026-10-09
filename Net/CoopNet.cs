@@ -140,6 +140,48 @@ namespace SailwindCoop.Net
             _listener.PeerDisconnectedEvent += OnPeerDisconnected;
             _listener.NetworkReceiveEvent += OnNetworkReceive;
             _listener.NetworkErrorEvent += OnNetworkError;
+            _listener.NetworkReceiveUnconnectedEvent += OnLanQuery;
+        }
+
+        /// <summary>Host: answer machines of the local network that look for a game (config Server/AnnounceOnLan).</summary>
+        public bool AnnounceOnLan = true;
+        private ulong _lanSessionId;
+        private long _lanWindowTick;
+        private int _lanReplies;
+        private const int LanRepliesPerSecond = 20;
+
+        /// <summary>
+        /// Host: a machine on the local network asks who hosts a game. The answer is what the join
+        /// screen shows: name, crew size, whether the session is open, and the protocol and mod
+        /// version, so a player with another build sees the host and why it cannot join. A host that
+        /// admits Steam friends only keeps its LAN port closed and does not answer.
+        /// </summary>
+        private void OnLanQuery(IPEndPoint remote, NetPacketReader reader, UnconnectedMessageType type)
+        {
+            try
+            {
+                if (Role != Role.Host || _net == null || !AnnounceOnLan || SteamFriendsOnly) return;
+                if (!LanBeacon.IsQuery(reader)) return;
+                // The port may be reachable from outside the LAN: never more than a few small answers.
+                long now = Clock.LocalTick;
+                if (now - _lanWindowTick >= 1000) { _lanWindowTick = now; _lanReplies = 0; }
+                if (++_lanReplies > LanRepliesPerSecond) return;
+                int players = 1;
+                foreach (PeerSession session in _sessions.Values) if (session.HandshakeDone) players++;
+                var w = new NetDataWriter();
+                LanBeacon.WriteReply(w, new LanHost
+                {
+                    SessionId = _lanSessionId,
+                    ProtocolVersion = Protocol.Version,
+                    ModVersion = ModVersion,
+                    HostName = PlayerName,
+                    Players = players,
+                    MaxPlayers = Math.Max(1, MaxClients) + 1,
+                    Accepting = AcceptingClients,
+                });
+                _net.SendUnconnectedMessage(w, remote);
+            }
+            catch (Exception e) { _log("[CoopNet] LAN query: " + e.Message); }
         }
 
         public int PeerCount => _sessions.Count;
@@ -249,6 +291,10 @@ namespace SailwindCoop.Net
         {
             Stop();
             _net = NewManager();
+            // Only a host hears datagrams from outside a connection: the search of the local network.
+            _net.UnconnectedMessagesEnabled = _net.BroadcastReceiveEnabled = AnnounceOnLan;
+            byte[] session = Guid.NewGuid().ToByteArray();
+            _lanSessionId = BitConverter.ToUInt64(session, 0) | 1UL;
             // Honor ListenIp: a concrete address binds to that interface only; "0.0.0.0"/empty = all.
             bool bindAll = string.IsNullOrEmpty(ListenIp) || ListenIp == "0.0.0.0";
             bool started = bindAll ? _net.Start(port) : _net.Start(ListenIp, "::", port);
