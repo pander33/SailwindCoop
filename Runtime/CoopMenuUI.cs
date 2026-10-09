@@ -125,6 +125,10 @@ namespace SailwindCoop.Runtime
         private GUIStyle _cellBad;
         private GUIStyle _row;
         private GUIStyle _rowAlt;
+        private GUIStyle _lanRow;
+        private GUIStyle _lanName;
+        private GUIStyle _lanCell;
+        private GUIStyle _lanCellWarn;
         private GUIStyle _alertBox;
         private GUIStyle _alertTitle;
         private GUIStyle _alertText;
@@ -490,7 +494,7 @@ namespace SailwindCoop.Runtime
             DrawTechnicalSettings();
         }
 
-        private const float LanCrewColumn = 54f, LanAddressColumn = 118f, LanJoinColumn = 62f;
+        private const float LanCrewColumn = 54f, LanAddressColumn = 124f, LanJoinColumn = 86f, LanRowHeight = 30f;
 
         /// <summary>
         /// The games that answered on the local network, each with its own Join. The list fills and
@@ -511,13 +515,14 @@ namespace SailwindCoop.Runtime
                 LanHost host = _viewLanHosts[i];
                 bool sameProtocol = host.ProtocolVersion == Protocol.Version;
                 bool full = host.Players >= host.MaxPlayers;
-                GUILayout.BeginHorizontal(i % 2 == 0 ? _rowAlt : _row);
-                GUILayout.Label(string.IsNullOrEmpty(host.HostName) ? "Host" : host.HostName, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
-                GUILayout.Label(host.Players + "/" + host.MaxPlayers, full ? _cellWarn : _cell, GUILayout.Width(LanCrewColumn));
-                GUILayout.Label(host.Address, _cell, GUILayout.Width(LanAddressColumn));
-                GUI.enabled = canJoin && sameProtocol && host.Accepting && !full;
-                if (GUILayout.Button(!host.Accepting ? "Locked" : full ? "Full" : "Join", _smallButton,
-                                     GUILayout.Width(LanJoinColumn), GUILayout.Height(20f)))
+                GUILayout.BeginHorizontal(_lanRow);
+                GUILayout.Label(string.IsNullOrEmpty(host.HostName) ? "Host" : host.HostName, _lanName, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true), GUILayout.Height(LanRowHeight));
+                GUILayout.Label(host.Players + "/" + host.MaxPlayers, full ? _lanCellWarn : _lanCell, GUILayout.Width(LanCrewColumn), GUILayout.Height(LanRowHeight));
+                GUILayout.Label(host.Address, _lanCell, GUILayout.Width(LanAddressColumn), GUILayout.Height(LanRowHeight));
+                bool open = sameProtocol && host.Accepting && !full;
+                GUI.enabled = canJoin && open;
+                if (GUILayout.Button(!host.Accepting ? "Locked" : full ? "Full" : "Join", open ? _primaryButton : _button,
+                                     GUILayout.Width(LanJoinColumn), GUILayout.Height(LanRowHeight)))
                     JoinLanHost(host);
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
@@ -1389,6 +1394,16 @@ namespace SailwindCoop.Runtime
             _cellBad = new GUIStyle(_cell) { normal = { textColor = new Color(1f, 0.58f, 0.50f) } };
             _row = new GUIStyle { padding = new RectOffset(2, 2, 1, 1) };
             _rowAlt = new GUIStyle(_row) { normal = { background = rowAlt } };
+            // A found game is the thing to click on this screen: its own panel, bold text.
+            _lanRow = new GUIStyle
+            {
+                normal = { background = MakeBg(new Color(0.20f, 0.16f, 0.11f, 0.98f)) },
+                padding = new RectOffset(8, 6, 5, 5),
+                margin = new RectOffset(0, 0, 0, 4)
+            };
+            _lanCell = new GUIStyle(_cell) { fontSize = 13, fontStyle = FontStyle.Bold };
+            _lanName = new GUIStyle(_lanCell) { fontSize = 15, normal = { textColor = Color.white } };
+            _lanCellWarn = new GUIStyle(_lanCell) { normal = { textColor = new Color(1f, 0.84f, 0.42f) } };
 
             _alertBox = new GUIStyle(GUI.skin.box)
             {
