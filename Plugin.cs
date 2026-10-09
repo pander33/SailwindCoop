@@ -66,8 +66,6 @@ namespace SailwindCoop
         public readonly ConfigEntry<string> PlayerName;
         public readonly ConfigEntry<int> SnapshotHz;
         public readonly ConfigEntry<float> InterpDelayMs;
-        public readonly ConfigEntry<float> AvatarVerticalOffset;
-        public readonly ConfigEntry<float> HostAvatarVerticalOffset;
 
         // Server (host) tuning.
         public readonly ConfigEntry<int> MaxClients;
@@ -136,8 +134,6 @@ namespace SailwindCoop
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Displayed player name.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "State snapshot send rate (Hz), Stage 1+.");
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Interpolation buffer delay (ms), Stage 1+.");
-            AvatarVerticalOffset = c.Bind("Avatar", "VerticalOffset", -0.6f, "Vertical offset of the visual bundle model relative to the networked player position. Negative values move the model down.");
-            HostAvatarVerticalOffset = c.Bind("Avatar", "HostVerticalOffset", -0.6f, "Vertical offset of the host visual bundle model. Separate because the host root pose in Sailwind is usually higher than the client pose.");
 
             MaxClients = c.Bind("Server", "MaxClients", 4, "Maximum number of clients connected to the host at once (1 = single guest only). Applied on incoming connections.");
             AnnounceOnLan = c.Bind("Server", "AnnounceOnLan", true, "The host answers players of the local network who look for a game, so it appears in their co-op menu. Off = the game is joined by address only. Applied when starting the host.");

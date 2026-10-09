@@ -37,6 +37,7 @@
     <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
     <Compile Include="..\..\Runtime\StartupText.cs" Link="StartupText.cs" />
+    <Compile Include="..\..\Sync\StepSignal.cs" Link="StepSignal.cs" />
     <Compile Include="..\..\Net\DatagramTunnel.cs" Link="Net\DatagramTunnel.cs" />
     <Compile Include="..\..\Net\LagRelay.cs" Link="Net\LagRelay.cs" />
     <Compile Include="..\..\Net\SteamJoinLink.cs" Link="Net\SteamJoinLink.cs" />

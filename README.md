@@ -143,9 +143,6 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `AnnounceOnLan` | true | The host appears in the co-op menu of players on the same local network |
 | `SnapshotHz` | 20 | State snapshot send rate |
 | `InterpDelayMs` | 100 | Interpolation buffer delay, in ms |
-| **Avatar** |
-| `VerticalOffset` | -0.6 | Vertical offset for client avatar model |
-| `HostVerticalOffset` | -0.6 | Vertical offset for host avatar model |
 | **Save** |
 | `CoopSaveSlot` | 5 | Slot the client writes the received host world into. **The local save in this slot is overwritten.** |
 | `ForceHostSaveOnJoin` | true | Host makes a fresh save on join so the client gets the current world |
@@ -186,7 +183,6 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 - Look at `BepInEx/LogOutput.log` for error details
 
 **Issue: Avatars appear incorrectly**
-- Adjust `VerticalOffset` and `HostVerticalOffset` in the config file
 - Ensure `avatar.bundle` exists in `Sailwind/BepInEx/plugins/SailwindCoop/`
 
 **Issue: Reporting a bug**
@@ -343,9 +339,6 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `AnnounceOnLan` | true | Хост виден в меню кооператива у игроков той же локальной сети |
 | `SnapshotHz` | 20 | Частота отправки снапшотов состояния |
 | `InterpDelayMs` | 100 | Задержка буфера интерполяции, мс |
-| **Аватар** |
-| `VerticalOffset` | -0.6 | Вертикальное смещение модели клиента |
-| `HostVerticalOffset` | -0.6 | Вертикальное смещение модели хоста |
 | **Сохранения** |
 | `CoopSaveSlot` | 5 | Слот, куда клиент пишет полученный мир хоста. **Локальное сохранение в этом слоте перезаписывается.** |
 | `ForceHostSaveOnJoin` | true | Хост делает свежее сохранение при подключении, чтобы клиент получил актуальный мир |
@@ -386,7 +379,6 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - Посмотрите `BepInEx/LogOutput.log` для деталей ошибки
 
 **Проблема: Аватары отображаются неправильно**
-- Настройте `VerticalOffset` и `HostVerticalOffset` в конфиге
 - Убедитесь, что `avatar.bundle` лежит в `Sailwind/BepInEx/plugins/SailwindCoop/`
 
 **Как сообщить о баге**

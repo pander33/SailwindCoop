@@ -32,6 +32,9 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 - The crew card of the `F8` menu notes when a crewmate plays with a later version of the mod that
   can still play with yours. Nothing is checked on the internet and nothing is installed.
 - A full session now refuses a join with "the session is full".
+- The other players are heard: their footsteps on wood, sand, stone and in shallow water, a
+  step when they land from a jump, and their swimming, all from where they are and fading with
+  distance. The sounds are the game's own.
 - Games on the local network are found by themselves: the LAN tab of the `F8` menu lists them
   above the address field, each with the host's name, crew size, address and a **Join** button.
   A host with another version of the mod is listed with the reason it cannot be joined. Typing an

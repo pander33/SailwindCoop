@@ -844,6 +844,28 @@ internal static class Program
                 Assert(same.Contains("(0.39.2)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
                 Assert(SailwindCoop.Runtime.StartupText.Describe(null, null).Contains("this game is unknown"), "no version");
             });
+            Test("the step signal fits beside the hand bits, and steps follow the distance walked", () => {
+                for (int ground = 0; ground <= 5; ground++)
+                    foreach (bool water in new[] { false, true })
+                    {
+                        byte bits = StepSignal.Pack((StepGround)ground, water);
+                        Assert((bits & 0x07) == 0 && (bits & 0x80) == 0, "outside its bits: " + bits);
+                        Assert(StepSignal.Ground((byte)(bits | 0x07)) == (StepGround)ground && StepSignal.Swims(bits) == water, "round trip " + ground);
+                    }
+                Assert(StepSignal.Ground(0x38) == StepGround.None, "an unknown ground is no ground");
+
+                var walk = new StepCadence(); int steps = 0;
+                for (int i = 0; i < 100; i++) if (walk.Advance(StepGround.Wood, 2f, 0.05f, 1.6f, 6f)) steps++;
+                Assert(steps == 6, "10 m at 1.6 m a step: " + steps);
+                for (int i = 0; i < 100; i++) Assert(!walk.Advance(StepGround.Wood, 0f, 0.05f, 1.6f, 6f), "standing still");
+                Assert(!walk.Advance(StepGround.None, 3f, 0.05f, 1.6f, 6f), "in the air");
+                Assert(walk.Advance(StepGround.Sand, 0f, 0.05f, 1.6f, 6f), "landing is a step");
+                Assert(!walk.Advance(StepGround.Sand, 0f, 0.05f, 1.6f, 6f), "one step for one landing");
+                Assert(!new StepCadence().Advance(StepGround.Wood, 0f, 0.05f, 1.6f, 6f), "an avatar that appears standing has not landed");
+                var fast = new StepCadence(); steps = 0;
+                for (int i = 0; i < 20; i++) if (fast.Advance(StepGround.Stone, 60f, 0.05f, 1.6f, 6f)) steps++;
+                Assert(steps == 3, "speed is capped: " + steps);
+            });
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Runtime smoke: " + _passed + " passed, " + _failed + " failed (.NET Framework; Unity Mono still needs in-game verification)");

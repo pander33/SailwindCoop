@@ -54,7 +54,9 @@ namespace SailwindCoop.Sync
             public NpcLocomotionDriver NpcLoco;   // procedural gait for NPC-skin avatars (no Animator)
             public bool NpcFitPending;            // one-time feet-on-deck fit awaiting valid bounds
             public AvatarRigDriver Rig;           // owns the arm IK; null on the primitive fallback
-            public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft / Lying
+            public byte Hands;                    // PlayerStateMsg.HandRight / HandLeft / Lying, StepSignal bits
+            public readonly AvatarStepAudio Steps = new AvatarStepAudio();
+            public float StateAt;                 // Time.unscaledTime of the last PlayerState
             public Vector3 LieHead, LieDir;       // last bed pose, in the frame of the player pose (boat or real)
             public Vector3 HandR, HandL;          // grip points in the avatar root's frame
             public GameObject Coin;               // shown in the hand while the player offers money
@@ -375,6 +377,7 @@ namespace SailwindCoop.Sync
         /// <summary>How long the deck latch survives once the game stops reporting a boat and no
         /// positive standing probe lands (see <see cref="CurrentBoat"/>).</summary>
         private const float LatchStaleSec = 5f;
+        private const float StepStateMaxAge = 0.5f;
         private Transform _lastLocalBoat;
         private ushort _lastLocalBoatIndex = BoatLocator.NoBoat;
 
@@ -673,6 +676,7 @@ namespace SailwindCoop.Sync
                 hands |= PlayerStateMsg.HandLeft;
             Vector3 lieHead, lieDir;
             if (LocalLying(boat, out lieHead, out lieDir)) hands |= PlayerStateMsg.Lying;
+            hands |= StepSounds.SampleLocal();
 
             if (_emote != EmoteId.None)
             {
@@ -993,6 +997,7 @@ namespace SailwindCoop.Sync
             a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
             UpdateAnimatorTargets(a, msg);
             a.Hands = msg.Hands;
+            a.StateAt = Time.unscaledTime;
             a.HandR = msg.HandR;
             a.HandL = msg.HandL;
             // Последняя поза лёжа остаётся: по ней аватар плавно встаёт после сброса бита.
@@ -1396,6 +1401,9 @@ namespace SailwindCoop.Sync
             ApplyLookPitch(a);
             if (lying && a.PoseDriver != null) a.PoseDriver.TargetPitch = 0f;
             ApplyVisualOffset(a);
+            // A player whose packets stopped keeps its last speed; it must not keep on stepping.
+            bool silent = lying || Time.unscaledTime - a.StateAt > StepStateMaxAge;
+            a.Steps.Tick(a.Go.transform, a.Hands, silent ? 0f : a.NpcTargetSpeedMps, Time.deltaTime);
 
             if (a.NpcFitPending) FitNpcBody(a);
             if (a.NpcLoco != null)
@@ -1681,7 +1689,7 @@ namespace SailwindCoop.Sync
             var model = Object.Instantiate(prefab);
             model.name = prefab.name;
             model.transform.SetParent(go.transform, false);
-            float verticalOffset = ResolveAvatarVerticalOffset(netId);
+            float verticalOffset = AvatarVerticalOffset;
             model.transform.localPosition = new Vector3(0f, verticalOffset, 0f);
             model.transform.localRotation = Quaternion.identity;
             model.transform.localScale = Vector3.one;
@@ -1788,7 +1796,7 @@ namespace SailwindCoop.Sync
             // worldPositionStays:false сохраняет локальный TRS модели — масштаб шаблона
             // (lossyScale исходного NPC) НЕ сбрасываем в 1, иначе получится великан.
             model.transform.SetParent(go.transform, false);
-            float verticalOffset = ResolveAvatarVerticalOffset(netId);
+            float verticalOffset = AvatarVerticalOffset;
             model.transform.localPosition = new Vector3(0f, verticalOffset, 0f);
             model.transform.localRotation = Quaternion.identity;
             var offsetDriver = model.AddComponent<AvatarVisualOffsetDriver>();
@@ -1940,28 +1948,9 @@ namespace SailwindCoop.Sync
             return prefab;
         }
 
-        private float ResolveAvatarVerticalOffset(uint netId)
-        {
-            const float defaultOffset = -0.6f;
-            if (Plugin.Cfg == null) return defaultOffset;
-
-            if (netId == NetRegistry.HostPlayerNetId)
-            {
-                float hostOffset = Plugin.Cfg.HostAvatarVerticalOffset.Value;
-                if (Mathf.Abs(hostOffset - (-0.25f)) < 0.001f)
-                    return -1.15f;
-                return hostOffset;
-            }
-
-            float offset = Plugin.Cfg.AvatarVerticalOffset.Value;
-            if (Mathf.Abs(offset - (-0.25f)) < 0.001f)
-            {
-                Plugin.Logger.LogInfo("[PlayerSync] Avatar.VerticalOffset=-0.25 is obsolete, applying " + defaultOffset.ToString("F2"));
-                return defaultOffset;
-            }
-
-            return offset;
-        }
+        /// <summary>How far the model stands below the networked player position, the same for
+        /// every player. It was a config entry (two, host and client) until 2026-10-10.</summary>
+        private const float AvatarVerticalOffset = -0.6f;
 
         private GameObject PickAvatarPrefab(AssetBundle bundle, string[] names, string contains)
         {
