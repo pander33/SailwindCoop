@@ -56,6 +56,9 @@ The development build uses protocol 92; it cannot connect to builds with an earl
 
 ### Fixed
 
+- On a game version the mod does not support, the co-op menu key did nothing and the log was
+  empty. The mod now says on screen that it did not start and which game version it needs, and
+  writes the reason to `BepInEx/LogOutput.log`.
 - With three or more players, the avatar of a player who left stayed in the world on the other
   guests' machines.
 - Persistent player identity and a dice history that belongs to the world: it follows the save,

@@ -837,6 +837,13 @@ internal static class Program
                 Assert(trail[399].Contains(" WARN www") && trail[399].Length < 330, "a long line is cut");
                 Assert(log.RecentSnapshot().Length == 1, "information does not push warnings out of the short list");
             });
+            Test("a mod that did not start names the game version, or the reason on a supported one", () => {
+                string old = SailwindCoop.Runtime.StartupText.Describe("0.38.1", "TypeLoadException: Could not load type\nstack");
+                Assert(old.Contains("needs Sailwind 0.39") && old.Contains("this game is 0.38.1") && !old.Contains("TypeLoad"), old);
+                string same = SailwindCoop.Runtime.StartupText.Describe("0.39.2", "TypeLoadException: Could not load type\nstack");
+                Assert(same.Contains("(0.39.2)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
+                Assert(SailwindCoop.Runtime.StartupText.Describe(null, null).Contains("this game is unknown"), "no version");
+            });
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Runtime smoke: " + _passed + " passed, " + _failed + " failed (.NET Framework; Unity Mono still needs in-game verification)");

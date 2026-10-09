@@ -49,7 +49,9 @@ namespace SailwindCoop
             var go = new GameObject("SailwindCoop");
             DontDestroyOnLoad(go);
             go.hideFlags = HideFlags.HideAndDontSave;
-            go.AddComponent<Runtime.CoopBehaviour>();
+            // On a game version the mod was not built for the component cannot be created, and
+            // nothing but Player.log would say so.
+            if (!Runtime.StartupNotice.Start(go, base.Logger)) return;
 
             Logger.LogInfo("Sailwind LAN Co-op ready. Use the in-game Co-op menu.");
         }
