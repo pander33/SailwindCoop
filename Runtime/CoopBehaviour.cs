@@ -286,6 +286,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("NpcBoat", () => NpcBoatPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("BoatActivity", () => BoatActivityPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Wind sound", () => WindSoundPatches.Apply(_harmony), patchFault);
 
             PatchGuard.Run(() => {
                 var signatures = InteractionActionCatalog.Inspect(typeof(GoPointerButton).Assembly);
