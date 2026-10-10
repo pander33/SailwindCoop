@@ -228,7 +228,9 @@ namespace SailwindCoop.Runtime
             try
             {
                 var emb = Embarker();
-                Transform boat = emb != null ? emb.debugOutCurrentBoat : null;
+                // debugOutCurrentBoat is the hull; the rigidbody and the saved position belong to its
+                // parent, and moving the hull alone leaves them behind.
+                Transform boat = BoatRoot(emb != null ? emb.debugOutCurrentBoat : null);
                 Vector3 player = Camera.main != null ? Camera.main.transform.position
                                 : (emb != null && emb.playerObserver != null ? emb.playerObserver.position : Vector3.zero);
 
@@ -247,11 +249,36 @@ namespace SailwindCoop.Runtime
                 // Move the whole boat so the player (its child) ends up next to the port. Far islands
                 // aren't streamed in under the floating origin, so this only reaches a loaded port.
                 Vector3 target = nearest.transform.position + Vector3.up * 2f;
+                ReleaseBoat(boat);
                 boat.position += (target - player);
                 _status = "boat -> port " + SafePortName(nearest) + " (" + best.ToString("0") + " m)";
                 Plugin.Logger.LogInfo("[DebugPanel] boat teleported to port " + SafePortName(nearest));
             }
             catch (Exception e) { _status = "teleport: " + e.Message; Plugin.Logger.LogWarning("[DebugPanel] teleport: " + e); }
+        }
+
+        /// <summary>The object that carries the boat's rigidbody: the hull's parent when
+        /// <paramref name="boat"/> is the hull (<c>GameState.currentBoat</c>,
+        /// <c>debugOutCurrentBoat</c>).</summary>
+        private static Transform BoatRoot(Transform boat)
+        {
+            Rigidbody body = boat != null ? boat.GetComponentInParent<Rigidbody>() : null;
+            return body != null ? body.transform : boat;
+        }
+
+        /// <summary>The game's recovery recipe before a boat is moved: cast off, raise the anchor,
+        /// stop. <paramref name="boat"/> is the boat root, the object with the rigidbody.</summary>
+        private static void ReleaseBoat(Transform boat)
+        {
+            var ropes = boat.GetComponent<BoatMooringRopes>();
+            if (ropes != null)
+            {
+                ropes.UnmoorAllRopes();
+                var anchor = ropes.GetAnchorController();
+                if (anchor != null) anchor.ResetAnchor();
+            }
+            var rb = boat.GetComponent<Rigidbody>();
+            if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
         }
 
         private static string SafePortName(IslandMarket m)
@@ -340,20 +367,13 @@ namespace SailwindCoop.Runtime
 
                 if (hostAuthority)
                 {
-                    Transform boat = GameState.lastOwnedBoat != null ? GameState.lastOwnedBoat : GameState.currentBoat;
+                    // lastOwnedBoat is the boat root already, currentBoat is the hull under it.
+                    Transform boat = BoatRoot(GameState.lastOwnedBoat != null ? GameState.lastOwnedBoat : GameState.currentBoat);
                     if (boat != null)
                     {
                         try
                         {
-                            var ropes = boat.GetComponent<BoatMooringRopes>();
-                            if (ropes != null)
-                            {
-                                ropes.UnmoorAllRopes();
-                                var anchor = ropes.GetAnchorController();
-                                if (anchor != null) anchor.ResetAnchor();
-                            }
-                            var rb = boat.GetComponent<Rigidbody>();
-                            if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+                            ReleaseBoat(boat);
                             boat.position = rp.GetBoatPos();
                             if (rp.boatPos != null) boat.rotation = rp.boatPos.rotation;
                         }

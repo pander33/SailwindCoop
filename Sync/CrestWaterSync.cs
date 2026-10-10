@@ -403,6 +403,22 @@ namespace SailwindCoop.Sync
             }
         }
 
+        /// <summary>Через сколько после своего большого сдвига хост отправляет фазы.</summary>
+        private const float JumpResendSec = 1.0f;
+
+        /// <summary>
+        /// Начало координат хоста только что сдвинулось разом на большое расстояние
+        /// (<see cref="OriginCatchUp"/>), и Crest сложил весь сдвиг в _phases. Клиент на той же
+        /// лодке сделает такой же сдвиг чуть позже — когда лодка доедет у него по интерполяции —
+        /// и сложит его сам. Поэтому фазы уходят не сразу (клиент прибавил бы свой сдвиг поверх
+        /// уже сдвинутого массива), а когда он успел встать на место. Мир хоста в это время стоит
+        /// (<see cref="JoinPause.HoldToSettle"/>), и фазы уходят до снятия этой паузы.
+        /// </summary>
+        public void OnHostOriginJump()
+        {
+            _phaseSendStamp = Time.unscaledTime - PhaseResendSec + JumpResendSec;
+        }
+
         /// <summary>Диагностика: перенимал ли клиент фазы хоста хоть раз.</summary>
         public bool PhasesApplied { get; private set; }
 

@@ -48,6 +48,26 @@ namespace SailwindCoop.Sync
         /// Disarming late costs nothing, so wait it out.</summary>
         private const float RepairSettleSec = 0.25f;
 
+        /// <summary>The key of the hold taken after a teleport; no NetId ever has this value.</summary>
+        private const uint SettleKey = uint.MaxValue;
+
+        /// <summary>When the hold after a teleport ends (realtime), or -1 when there is none.</summary>
+        private float _settleUntil = -1f;
+
+        /// <summary>The world is stopped for a moment after the host's teleport.</summary>
+        public bool Settling => _settleUntil >= 0f;
+
+        /// <summary>
+        /// Host: stop the world for <paramref name="seconds"/> after a teleport. The boat's new
+        /// place and the wave phases reach the clients while nothing moves, so every machine
+        /// resumes from the same state.
+        /// </summary>
+        public void HoldToSettle(float seconds)
+        {
+            _settleUntil = Time.realtimeSinceStartup + seconds;
+            Hold(SettleKey);
+        }
+
         public bool Active => _paused;
         public int PendingCount => _pending.Count;
         internal void SetResumeTimeScale(float value)
@@ -75,6 +95,12 @@ namespace SailwindCoop.Sync
             // the ownership check above (we simply did not take what it holds).
             _menuSeenDuringFreeze = false;
 
+            if (netId == SettleKey)
+            {
+                // A world something else has stopped already stands still, which is all this hold needs.
+                Plugin.Logger.LogInfo("[JoinPause] Host world paused: settling after a teleport");
+                return;
+            }
             if (_ownsTimeScale)
             {
                 Plugin.Logger.LogInfo("[JoinPause] Host world paused: waiting for client load NetId=" + netId);
@@ -96,13 +122,14 @@ namespace SailwindCoop.Sync
         public void Release(uint netId)
         {
             if (!_pending.Remove(netId)) return;
-            if (_pending.Count == 0) Unpause("client NetId=" + netId + " loaded");
+            if (_pending.Count == 0) Unpause(netId == SettleKey ? "teleport settled" : "client NetId=" + netId + " loaded");
         }
 
         /// <summary>Lift the pause unconditionally (disconnect/teardown).</summary>
         public void Clear()
         {
             _pending.Clear();
+            _settleUntil = -1f;
             if (_paused) Unpause("session reset");
         }
 
@@ -110,6 +137,12 @@ namespace SailwindCoop.Sync
         /// frozen by the ownership clash described on <see cref="TryRepairFrozenWorld"/>.</summary>
         public void Tick()
         {
+            if (_settleUntil >= 0f && Time.realtimeSinceStartup >= _settleUntil)
+            {
+                _settleUntil = -1f;
+                Release(SettleKey);
+            }
+
             if (!_paused)
             {
                 TryRepairFrozenWorld();
@@ -131,6 +164,7 @@ namespace SailwindCoop.Sync
                                              "host was un-paused after " + TimeoutSec + " s. They may be " +
                                              "out of sync; have them rejoin.");
                 _pending.Clear();
+                _settleUntil = -1f;
                 Unpause("timeout");
             }
         }

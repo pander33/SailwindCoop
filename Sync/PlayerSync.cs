@@ -374,8 +374,8 @@ namespace SailwindCoop.Sync
         /// falls back to <see cref="EmbRetrySec"/> polling.</summary>
         private const float EmbEagerSec = 5f;
 
-        /// <summary>How long the deck latch survives once the game stops reporting a boat and no
-        /// positive standing probe lands (see <see cref="CurrentBoat"/>).</summary>
+        /// <summary>How long the deck latch survives once the player is neither embarked nor seen
+        /// standing on the boat (see <see cref="CurrentBoat"/>).</summary>
         private const float LatchStaleSec = 5f;
         private const float StepStateMaxAge = 0.5f;
         private Transform _lastLocalBoat;
@@ -392,6 +392,7 @@ namespace SailwindCoop.Sync
         private long _lastRealTick;
         private bool _haveLast;
         private CoordFrame _lastFrame;
+        private Transform _lastFrameBoat;
         private PlayerCrouching _localCrouching;
         private bool _lastLocalCrouch;
         private float _lastLocalCrouchHeight;
@@ -454,10 +455,11 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>
-        /// The deck the local player is believed to be on, or null when ashore/unknown. Set on a
-        /// positive standing-surface probe and cleared only on a positive NON-boat one, so it survives
-        /// inconclusive frames (rigging, mid-jump, an open map) while still going null the moment the
-        /// player is seen standing on something that isn't the ship.
+        /// The deck the local player is believed to be on, or null when ashore/unknown. While the game
+        /// has the player embarked it is that hull, whatever is under the feet. For a player who is
+        /// not embarked it is set on a positive standing-surface probe and cleared only on a positive
+        /// NON-boat one, so it survives inconclusive frames (mid-jump) while still going null the
+        /// moment the player is seen standing on something that isn't the ship.
         /// </summary>
         public Transform LocalBoat => _lastLocalBoat;
 
@@ -650,9 +652,9 @@ namespace SailwindCoop.Sync
                 headRot = head.rotation;
             }
 
-            // Velocity in the same frame (reset when the frame changes).
+            // Velocity in the same frame (reset when the frame or the hull changes).
             Vector3 vel = Vector3.zero;
-            if (_haveLast && _lastFrame == frame)
+            if (_haveLast && _lastFrame == frame && _lastFrameBoat == boat)
             {
                 float secs = (tick - _lastRealTick) / 1000f;
                 if (secs > 0.0001f) vel = (pos - _lastRealPos) / secs;
@@ -660,6 +662,7 @@ namespace SailwindCoop.Sync
             _lastRealPos = pos;
             _lastRealTick = tick;
             _lastFrame = frame;
+            _lastFrameBoat = boat;
             _haveLast = true;
 
             // Походка/поворот меряются отдельно от позы — см. комментарий у PlayerStateMsg.
@@ -1218,60 +1221,64 @@ namespace SailwindCoop.Sync
         /// <summary>The boat the local player is currently standing on, or null.</summary>
         private Transform CurrentBoat()
         {
+            // Embarked: the observer is a child of that hull and moves rigidly with it, so the pose is
+            // boat-local whatever a ray finds under the feet (rigging and a jump included) and
+            // whatever debugOutCurrentBoat names. A world-frame pose from a moving deck lags the
+            // swell by the interpolation delay on every viewer.
+            Transform embarked = EmbarkedHull();
+            if (embarked != null)
+            {
+                LatchBoat(embarked);
+                _lastLocalBoatSeenAt = Time.unscaledTime;
+                // The grace below masks a flickering ray; a disembark is not a flicker.
+                _boatSurfaceValidUntil = 0f;
+                ReportGroundUnderEmbarked(embarked);
+                return embarked;
+            }
+
+            // Not embarked. debugOutCurrentBoat is the hull of the embark zone entered last (the game
+            // never clears it), and the ray says whether the player stands on that boat — the frames
+            // before PlayerEmbark — or on the pier next to it.
             Transform boat = _emb != null ? _emb.debugOutCurrentBoat : null;
             int surface = 0;
             bool probed = false;
             if (boat != null)
             {
-                surface = ProbeStandingSurface(boat);
+                surface = ProbeStandingSurface(boat, out _, out Transform deck);
                 probed = true;
-                // Being parented to the boat is stronger evidence than any raycast: aboard, the player
-                // is a child of the boat transform. This confirms the deck in the cases the 3 m downward
-                // ray cannot (up in the rigging, mid-jump, on a mast platform), which is what lets the
-                // latch re-arm there instead of being stuck inconclusive.
-                if (surface == 0 && _localPlayer != null && _localPlayer.IsChildOf(boat))
-                    surface = 1;
                 if (surface > 0)
                 {
-                    _lastLocalBoat = boat;
-                    _lastLocalBoatSeenAt = Time.time;
-                    _boatSurfaceValidUntil = Time.time + 1.0f;
+                    // The deck under the feet can belong to another boat than the embark zone
+                    // entered last: two boats side by side.
+                    boat = deck;
+                    LatchBoat(boat);
+                    _lastLocalBoatSeenAt = Time.unscaledTime;
+                    _boatSurfaceValidUntil = Time.unscaledTime + 1.0f;
                     return boat;
                 }
 
-                // If the game still reports the same boat and the probe is inconclusive, keep the
-                // confirmed boat frame. Drop it only when the probe clearly sees non-boat ground.
-                if (_lastLocalBoat == boat && surface == 0)
-                    return boat;
+                // From here on the question is about the deck confirmed last, which is not always
+                // the hull the game reports (see above).
+                Transform latched = _lastLocalBoat;
+                if (latched != null && Time.unscaledTime < _boatSurfaceValidUntil)
+                    return latched;
 
-                if (_lastLocalBoat == boat && Time.time < _boatSurfaceValidUntil)
-                    return boat;
+                // Nothing within reach under the feet, on the boat confirmed last: the shrouds or
+                // a mast platform of a boat the game has disembarked the player from (it does so
+                // on a touch of the pier). A longer ray finds that boat's deck below. It finds
+                // none under a swimmer or under a player who jumped clear, and they must leave
+                // the frame of a boat that sails on.
+                if (latched != null && surface == 0 &&
+                    ProbeStandingSurface(latched, out _, out Transform below, AloftRayM) > 0 && below == latched)
+                {
+                    _lastLocalBoatSeenAt = Time.unscaledTime;
+                    return latched;
+                }
             }
 
-            // Inventory/map transitions can briefly clear debugOutCurrentBoat even though the render
-            // player is still on deck. Keep sending boat-local poses only for a tiny grace window after
-            // an actual boat was reported. Do not pick a nearby boat by distance: on a dock/pier that
-            // would make the remote avatar ride the boat's bobbing while the player is standing ashore.
-            if (_lastLocalBoat != null && _localPlayer != null &&
-                Time.time - _lastLocalBoatSeenAt < 0.2f && Time.time < _boatSurfaceValidUntil)
-            {
-                float distSq = (_localPlayer.position - _lastLocalBoat.position).sqrMagnitude;
-                if (distSq < 80f * 80f)
-                    return _lastLocalBoat;
-            }
-
-            // Forget the deck ONLY on positive evidence of standing on non-boat ground (surface < 0).
-            //
-            // The latch must survive an INCONCLUSIVE probe (surface == 0 — up in the rigging, on a mast
-            // platform, mid-jump, anywhere the 3 m downward ray hits nothing). Clearing it there was a
-            // one-way door: the "same boat, inconclusive probe" branch above requires _lastLocalBoat to
-            // still name that boat, so once cleared it could not re-arm until the player happened to
-            // stand somewhere the ray finds deck — and until then their pose went out in world frame
-            // while they rode a moving ship, which remote viewers see as drift and jitter.
-            //
-            // Leaving it set while genuinely aboard is also the correct answer for LocalBoat: during a
-            // map/inventory transition the game clears debugOutCurrentBoat, but the player really is
-            // still on that deck.
+            // The latch (LocalBoat) outlives the boat frame: it is BoatSync's licence to carry the
+            // player with a boat correction. Forget it on positive evidence of non-boat ground, or
+            // when no deck has been confirmed for a while.
             if (_lastLocalBoat != null)
             {
                 if (!probed) surface = ProbeStandingSurface(_lastLocalBoat);
@@ -1279,16 +1286,11 @@ namespace SailwindCoop.Sync
                 // Positive evidence of non-boat ground.
                 bool ashore = surface < 0;
 
-                // ...or the game itself stopped reporting a boat and we have not confirmed a deck for a
-                // while. Needed because "no hit at all" also reads as inconclusive: Sailwind's ocean has
-                // no walkable collider, so a player who fell overboard and is swimming probes 0 forever
-                // and would otherwise keep the latch — and with it BoatSync's licence to teleport them
-                // onto the deck. Bounded by debugOutCurrentBoat being null, so it never fires while the
-                // game still says we are aboard (rigging, mast platform).
-                bool staleWhileNoBoatReported =
-                    boat == null && Time.time - _lastLocalBoatSeenAt > LatchStaleSec;
+                // "No hit at all" reads as inconclusive: Sailwind's ocean has no walkable collider,
+                // so a player who fell overboard and is swimming probes 0 forever.
+                bool unconfirmedTooLong = Time.unscaledTime - _lastLocalBoatSeenAt > LatchStaleSec;
 
-                if (ashore || staleWhileNoBoatReported)
+                if (ashore || unconfirmedTooLong)
                 {
                     _lastLocalBoat = null;
                     _lastLocalBoatIndex = BoatLocator.NoBoat;
@@ -1298,6 +1300,66 @@ namespace SailwindCoop.Sync
             _boatSurfaceValidUntil = 0f;
 
             return null;
+        }
+
+        /// <summary>
+        /// The hull the game has embarked the local player on, or null. <c>PlayerEmbark</c> parents
+        /// <c>playerObserver</c> to the hull and <c>PlayerDisembark</c> to the shifting world, so the
+        /// observer's parent chain is the game's own answer.
+        /// </summary>
+        private Transform EmbarkedHull()
+        {
+            Transform body = _emb != null ? _emb.playerObserver : null;
+            if (body == null) return null;
+            // CurrentBoat runs several times a frame, and each locator lookup checks every boat.
+            Transform parent = body.parent;
+            if (_embarkedFrame == Time.frameCount && _embarkedParent == parent) return _embarkedHull;
+            _embarkedFrame = Time.frameCount;
+            _embarkedParent = parent;
+            _embarkedHull = null;
+            Transform reported = _emb.debugOutCurrentBoat;
+            for (Transform cur = parent; cur != null; cur = cur.parent)
+                if (cur == reported || BoatLocator.IndexOf(cur) != BoatLocator.NoBoat) { _embarkedHull = cur; break; }
+            return _embarkedHull;
+        }
+
+        private int _embarkedFrame = -1;
+        private Transform _embarkedParent, _embarkedHull;
+
+        /// <summary>Taller than any mast in the game.</summary>
+        private const float AloftRayM = 40f;
+
+        private float _groundReportAt;
+        private readonly HashSet<string> _groundReported = new HashSet<string>();
+
+        /// <summary>
+        /// Diagnostics only. The ray under an embarked player used to answer "not a boat" on a
+        /// client's machine, and which collider it hit there was never found out. The frame no
+        /// longer depends on it; this names the collider in the log, once for each.
+        /// </summary>
+        private void ReportGroundUnderEmbarked(Transform hull)
+        {
+            if (Time.unscaledTime < _groundReportAt) return;
+            _groundReportAt = Time.unscaledTime + 5f;
+            if (_groundReported.Count >= 16) return;
+            if (ProbeStandingSurface(hull, out Collider ground, out _) >= 0 || ground == null) return;
+            string path = BoatLocator.PathOf(ground.transform);
+            if (!_groundReported.Add(path)) return;
+            Plugin.Logger.LogInfo("[PlayerSync] embarked on '" + hull.name + "', but the ray under the feet says it is not a boat: '" +
+                                  path + "' layer=" + ground.gameObject.layer + " tag=" + ground.tag);
+        }
+
+        /// <summary>
+        /// Latch a confirmed deck. The cached index belongs to the boat it was read for: carried
+        /// over to another hull, <see cref="ResolveBoatIndex"/> would send that hull's pose under
+        /// the previous boat's index whenever the locator does not know the new one.
+        /// </summary>
+        private void LatchBoat(Transform boat)
+        {
+            if (_lastLocalBoat == boat) return;
+            _lastLocalBoat = boat;
+            _lastLocalBoatIndex = BoatLocator.NoBoat;
+            _lastLocalBoatEpoch = -1;
         }
 
         private ushort ResolveBoatIndex(Transform boat)
@@ -1324,13 +1386,21 @@ namespace SailwindCoop.Sync
             return BoatLocator.NoBoat;
         }
 
-        private int ProbeStandingSurface(Transform boat)
+        private int ProbeStandingSurface(Transform boat) => ProbeStandingSurface(boat, out _, out _);
+
+        /// <summary>
+        /// What is under the feet: 1 a boat (<paramref name="deck"/> is its hull), -1 other
+        /// ground, 0 nothing within <paramref name="range"/>.
+        /// </summary>
+        private int ProbeStandingSurface(Transform boat, out Collider ground, out Transform deck, float range = 3.0f)
         {
+            ground = null;
+            deck = null;
             if (boat == null || _localPlayer == null) return 0;
             try
             {
                 Vector3 origin = _localPlayer.position + Vector3.up * 0.25f;
-                var hits = Physics.RaycastAll(origin, Vector3.down, 3.0f, ~0, QueryTriggerInteraction.Ignore);
+                var hits = Physics.RaycastAll(origin, Vector3.down, range, ~0, QueryTriggerInteraction.Ignore);
                 if (hits == null || hits.Length == 0) return 0;
 
                 for (int i = 0; i < hits.Length - 1; i++)
@@ -1352,7 +1422,9 @@ namespace SailwindCoop.Sync
                     if (col == null || col.isTrigger) continue;
                     if (col.transform == _localPlayer || col.transform.IsChildOf(_localPlayer)) continue;
                     if (col.GetComponentInParent<PickupableItem>() != null) continue;
-                    return IsBoatSurface(col.transform, boat) ? 1 : -1;
+                    ground = col;
+                    deck = SurfaceHull(col.transform, boat);
+                    return deck != null ? 1 : -1;
                 }
             }
             catch (System.Exception e)
@@ -1362,16 +1434,20 @@ namespace SailwindCoop.Sync
             return 0;
         }
 
-        private static bool IsBoatSurface(Transform t, Transform boat)
+        /// <summary>
+        /// The hull a surface belongs to, or null for ground that is not a boat. A boat tag with no
+        /// known hull above it (the static walk copy is not under the hull) counts as
+        /// <paramref name="boat"/>, the one the caller asked about.
+        /// </summary>
+        private static Transform SurfaceHull(Transform t, Transform boat)
         {
+            bool tagged = false;
             for (Transform cur = t; cur != null; cur = cur.parent)
             {
-                if (cur == boat) return true;
-                if (cur.CompareTag("Boat")) return true;
-                if (cur.CompareTag("WalkColBoat")) return true;
-                if (cur.gameObject.layer == 8 && cur.CompareTag("WalkColBoat")) return true;
+                if (cur == boat || BoatLocator.IndexOf(cur) != BoatLocator.NoBoat) return cur;
+                if (cur.CompareTag("Boat") || cur.CompareTag("WalkColBoat")) tagged = true;
             }
-            return false;
+            return tagged ? boat : null;
         }
 
         private void ApplyAvatarPolish(RemoteAvatar a)

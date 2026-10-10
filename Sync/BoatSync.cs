@@ -89,6 +89,9 @@ namespace SailwindCoop.Sync
         // Host: author all embarkable boats
         // -----------------------------------------------------------------
 
+        /// <summary>No boat moves this fast (m/s); a sample-to-sample speed above it is a teleport.</summary>
+        private const float TeleportSpeed = 200f;
+
         public void Tick(float dt)
         {
             if (_net.Role != Role.Host) return;
@@ -114,6 +117,9 @@ namespace SailwindCoop.Sync
                 {
                     float secs = (tick - hb.LastRealTick) / 1000f;
                     if (secs > 0.0001f) vel = (real - hb.LastRealPos) / secs;
+                    // A teleport, not motion: a client that runs past this sample would
+                    // extrapolate the boat by the whole jump.
+                    if (vel.sqrMagnitude > TeleportSpeed * TeleportSpeed) vel = Vector3.zero;
                 }
                 hb.LastRealPos = real;
                 hb.LastRealTick = tick;

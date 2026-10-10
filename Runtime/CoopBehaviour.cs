@@ -287,6 +287,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("NpcBoat", () => NpcBoatPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("BoatActivity", () => BoatActivityPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Wind sound", () => WindSoundPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Origin catch-up", () => OriginCatchUp.Apply(_harmony), patchFault);
 
             PatchGuard.Run(() => {
                 var signatures = InteractionActionCatalog.Inspect(typeof(GoPointerButton).Assembly);
@@ -387,7 +388,8 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Mods.Tick", () => Mods.Tick()),
                 new SyncStep("Pause.Tick", () => Pause.Tick()),
                 new SyncStep("Shipyard.Tick", () => Shipyard.Tick(_dt)),
-                new SyncStep("Boats.Tick", () => Boats.Tick(_dt)),
+                // After a teleport the host's world stands still, yet the boat's new place must go out.
+                new SyncStep("Boats.Tick", () => Boats.Tick(Pause.Settling ? Time.unscaledDeltaTime : _dt)),
                 new SyncStep("Boats.ApplyRemote", () => Boats.ApplyRemote()),
                 // Сразу за лодкой игрока: AI-корабли ни к кому не приаттачены, но должны встать до
                 // применения поз игроков — иначе столкновение с ними читается по вчерашней позе.
@@ -901,6 +903,10 @@ namespace SailwindCoop.Runtime
         /// <summary>True while one join owns the host: from taking the queue slot until the transfer
         /// coroutine finishes. See <see cref="JoinInFlight"/> for the other half of the window.</summary>
         private bool _streamingSave;
+
+        /// <summary>The host is writing its world for a joining client; the game cannot save with
+        /// its clock stopped, so nothing else may stop it now.</summary>
+        public bool SavingForJoin => _streamingSave;
         private float _streamingSaveDeadline;
 
         /// <summary>
