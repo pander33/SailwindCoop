@@ -2,6 +2,25 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.5.1] - 2026-10-10
+
+The protocol is still 92, so 0.5.1 connects to 0.5.0. Update every machine anyway: the two
+versions handle a teleport differently, and in a mixed crew the sea can look different to each
+player after one.
+
+### Fixed
+
+- A crew member standing on a sailing boat no longer rises above the deck and sinks into it in
+  the eyes of the others.
+- After **Teleport to boat**, or a teleport from the Debug panel, the picture shook and the
+  shadows jumped for minutes. The world now settles at once.
+- The Debug panel's teleports moved the hull without the rest of the boat and left it moored.
+
+### Changed
+
+- When the host teleports, the game pauses for everyone for about a second and a half while the
+  boat's new place and the sea reach the crew.
+
 ## [0.5.0] - 2026-10-10
 
 **Everyone must update.** The protocol is now 92: 0.5.0 cannot connect to 0.4.3 or earlier.
