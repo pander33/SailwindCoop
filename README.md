@@ -10,7 +10,7 @@
 
 Sailwind LAN Co-op is a mod that adds multiplayer functionality to the game Sailwind. It allows you to play with friends over LAN (Local Area Network) or through VPN/tunneling services.
 
-**Current Version:** 0.5.1
+**Current Version:** 0.5.2
 **Wire Protocol:** 92. Every machine needs a build with protocol 92; 0.4.3 and earlier (protocol 89) cannot connect to it. Some new features still await end-to-end in-game validation; see the release notes.
 **Requirements:** BepInEx 5.x, Sailwind 0.39
 
@@ -52,7 +52,7 @@ The mod comes in two editions. They use the same network protocol and can play t
 | Missing mods downloaded from the host | no | yes |
 | Files | `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll`, `avatar.bundle`, `sounds/` | the same |
 
-The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.5.1 (Thunderstore)`.
+The title of the status overlay (F8 -> Settings -> Show Status) shows which edition is running, for example `Sailwind Co-op 0.5.2 (Thunderstore)`.
 
 <!--/full-->
 #### Mod Installation
@@ -196,7 +196,7 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 
 ### 📝 Notes
 
-- This mod is in early development (v0.5.1). Expect bugs!
+- This mod is in early development (v0.5.2). Expect bugs!
 - Only works with players who have the mod installed, and **every machine must use the same wire protocol** — builds with different protocol numbers refuse to connect. Since 0.4.3 the mod version itself may differ; a host on 0.4.2 or earlier still requires the exact same version
 - The client loads the host's streamed world save into a dedicated co-op slot, while guest character progress is kept in a local co-op profile
 - The host's game state is authoritative
@@ -216,7 +216,7 @@ Visit: https://github.com/pander33/SailwindCoop
 
 Sailwind LAN Co-op — это мод, добавляющий мультиплеер в игру Sailwind. Позволяет играть с друзьями по локальной сети (LAN) или через VPN/туннелирование.
 
-**Текущая версия:** 0.5.1
+**Текущая версия:** 0.5.2
 **Сетевой протокол:** 92. На всех компьютерах нужна сборка с протоколом 92; 0.4.3 и более ранние (протокол 89) к ней не подключатся. Часть новых функций ещё ожидает проверки в игре; см. описание релиза.
 **Требования:** BepInEx 5.x, Sailwind 0.39 (Steam версия)
 
@@ -257,7 +257,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | Скачивание недостающих модов с хоста | нет | да |
 | Файлы | `SailwindCoop.dll`, `LiteNetLib.dll`, `Facepunch.Steamworks.Win64.dll`, `steam_api64.dll`, `avatar.bundle`, `sounds/` | те же |
 
-Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.5.1 (Thunderstore)`.
+Редакция показана в заголовке оверлея статуса (F8 -> Settings -> Show Status), например `Sailwind Co-op 0.5.2 (Thunderstore)`.
 
 <!--/full-->
 #### Установка мода
@@ -392,7 +392,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 ### 📝 Примечания
 
-- Мод в ранней разработке (v0.5.1). Возможны баги!
+- Мод в ранней разработке (v0.5.2). Возможны баги!
 - Работает только с игроками, у которых установлен мод, и **у всех должна быть одна и та же версия** — сетевой протокол меняется между релизами, разные сборки не соединятся
 - Клиент загружает полученный от хоста сейв мира в отдельный co-op слот, а прогресс персонажа гостя хранится в локальном co-op профиле
 - Состояние игры хоста является авторитетным

@@ -473,6 +473,26 @@ namespace SailwindCoop.Sync
             _net.Broadcast(new WalletDeltaMsg { Seq = _seq, Delta = delta }, DeliveryMethod.ReliableOrdered);
         }
 
+        /// <summary>
+        /// Client, shared wallet: the game has just taken a recovery fee from the balance it sees,
+        /// which is the crew's. Whoever is recovered pays: the amount goes back before it is sent
+        /// to the host, and the same share is taken from the money set aside.
+        /// </summary>
+        /// <returns>What the player paid.</returns>
+        internal int MoveFeeToOwn(int currency, int taken, float share)
+        {
+            int[] wallet = PlayerGold.currency;
+            if (_net.Role != Role.Client || _personal == null || wallet == null || currency < 0 ||
+                currency >= wallet.Length || currency >= _personal.Length) return taken;
+            wallet[currency] += taken;
+            int own = Mathf.RoundToInt(_personal[currency] * share);
+            _personal[currency] -= own;
+            if (taken != 0 || own != 0)
+                Remember("recovery fee " + PlayerGold.GetCurrencySymbol(currency) + own + " from own money, " +
+                         taken + " back to the shared wallet");
+            return own;
+        }
+
         /// <summary>Client: put the own money back. False when it was not set aside.</summary>
         private bool RestorePersonal()
         {

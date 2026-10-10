@@ -282,6 +282,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Dice save lifecycle", () => DiceSavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Recovery", () => RecoveryPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Missions", () => MissionPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("NpcBoat", () => NpcBoatPatches.Apply(_harmony), patchFault);
@@ -317,6 +318,7 @@ namespace SailwindCoop.Runtime
             _notifications = new CoopNotifications();
             Net.OnGameplayNotice += msg => _notifications.Add(msg, Net);
             Net.OnGameplayNotice += msg => Sleep.OnNotice(msg);
+            Net.OnGameplayNotice += msg => OriginCatchUp.OnNotice(msg, Net);
             Net.OnMemberGone += netId => Players.ForgetRemote(netId);
             Net.OnPlayerLeft += netId =>
             {
@@ -364,6 +366,10 @@ namespace SailwindCoop.Runtime
 
         private SyncStep[] _steps;
         private float _dt;
+        // While the host's world stands still after a teleport or a recovery, the streams whose
+        // host tick only counts time to the next send keep counting, so their state goes out
+        // inside the hold. Damage is not one of them: its tick also runs the pumps.
+        private float SendDt => Pause.Settling ? Time.unscaledDeltaTime : _dt;
         private float _rosterTimer;
         private CoopNotifications _notifications;
         private CoopLog.Repeat _menuFailures;
@@ -389,7 +395,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Pause.Tick", () => Pause.Tick()),
                 new SyncStep("Shipyard.Tick", () => Shipyard.Tick(_dt)),
                 // After a teleport the host's world stands still, yet the boat's new place must go out.
-                new SyncStep("Boats.Tick", () => Boats.Tick(Pause.Settling ? Time.unscaledDeltaTime : _dt)),
+                new SyncStep("Boats.Tick", () => Boats.Tick(SendDt)),
                 new SyncStep("Boats.ApplyRemote", () => Boats.ApplyRemote()),
                 // Сразу за лодкой игрока: AI-корабли ни к кому не приаттачены, но должны встать до
                 // применения поз игроков — иначе столкновение с ними читается по вчерашней позе.
@@ -411,11 +417,11 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Sleep.Tick", () => Sleep.Tick(Time.unscaledDeltaTime)),
                 new SyncStep("Missions.Tick", () => Missions.Tick(_dt)),
                 new SyncStep("Wallet.Tick", () => Wallet.Tick()),
-                new SyncStep("Controls.Tick", () => Controls.Tick(_dt)),
+                new SyncStep("Controls.Tick", () => Controls.Tick(SendDt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
-                new SyncStep("Anchor.Tick", () => Anchor.Tick(_dt)),
+                new SyncStep("Anchor.Tick", () => Anchor.Tick(SendDt)),
                 new SyncStep("Anchor.ApplyRemote", () => Anchor.ApplyRemote()),
-                new SyncStep("Mooring.Tick", () => Mooring.Tick(_dt)),
+                new SyncStep("Mooring.Tick", () => Mooring.Tick(SendDt)),
                 new SyncStep("Damage.Tick", () => Damage.Tick(_dt)),
                 new SyncStep("Lights.Tick", () => Lights.Tick(_dt)),
                 new SyncStep("Items.Tick", () => Items.Tick(_dt)),
@@ -1693,6 +1699,11 @@ namespace SailwindCoop.Runtime
             _inHostWorldCopy = false;
             _menuUI?.WorldLeft();
             Dice.WorldChanging();
+            // With playing cleared, the old scene's island loaders would start loading their islands
+            // in this frame's LateUpdate and be destroyed before counting those loads off, leaving
+            // GameState.loadingScenes above zero for good. The game's recovery (passed out, the
+            // Recover button) waits for it to reach zero and would wait for ever.
+            foreach (var island in UnityEngine.Object.FindObjectsOfType<IslandHorizon>()) island.enabled = false;
             // Scene 0 is the game's own first scene; it loads the sea, the title screen comes with it.
             UnityEngine.SceneManagement.SceneManager.LoadScene(0);
         }
@@ -1711,6 +1722,27 @@ namespace SailwindCoop.Runtime
                 field.SetValue(null, kept);
             }
             catch (System.Exception e) { Plugin.Logger.LogWarning("[Coop] Day handlers not cleared: " + e.Message); }
+        }
+
+        /// <summary>
+        /// Host: send the current value of every change-only stream again, reliably, on the next
+        /// tick — the controls, anchor, mooring and damage of each boat, the storms and the
+        /// instruments. What a client asks for with <c>ResyncRequest</c>, for all of them at once.
+        /// </summary>
+        internal void ResendBoatState()
+        {
+            if (Net == null || Net.Role != Role.Host) return;
+            foreach (var boat in BoatLocator.FindBoats())
+            {
+                if (boat == null) continue;
+                ushort index = BoatLocator.IndexOf(boat);
+                Controls.Resync(index);
+                Anchor.Resync(index);
+                Mooring.Resync(index);
+                Damage.Resync(index);
+            }
+            Storms.Resync();
+            Items.ResyncInstruments();
         }
 
         public void DisconnectSession(string reason)
@@ -1740,6 +1772,7 @@ namespace SailwindCoop.Runtime
             Missions.Clear();
             Wallet.Clear();
             Sleep.Clear();
+            OriginCatchUp.ForgetHostOffset();
             Shop.Clear();
             WindTotem.Clear();
             HouseDoors.Clear();

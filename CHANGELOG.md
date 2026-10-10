@@ -2,6 +2,29 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.5.2] - 2026-10-10
+
+The protocol is still 92, so 0.5.2 connects to 0.5.0 and 0.5.1. Update every machine anyway:
+each fix works only on the machine that has it.
+
+### Fixed
+
+- A player who joined from a loaded world and was then recovered (passed out from thirst or
+  hunger, or **Recover** in the Escape menu) stayed on the dark "recovering..." screen for ever.
+- A recovery that cannot finish is now ended after two minutes instead of keeping the screen
+  dark.
+- A guest's recovery no longer casts off the ropes and resets the anchor on its own copy of the
+  boat. With a shared wallet its fee comes out of the guest's own money, not the crew's.
+- After the host's teleport the sea could look different to the host and to a player right
+  next to it. Players who came along now take the host's world origin.
+- A player being recovered no longer counts as lying down for the crew's shared sleep.
+
+### Changed
+
+- When the host is recovered, the boat goes to the port with whoever is aboard, and the game
+  pauses for everyone for about a second and a half, as it does after a teleport. A guest
+  recovered aboard stays on the boat.
+
 ## [0.5.1] - 2026-10-10
 
 The protocol is still 92, so 0.5.1 connects to 0.5.0. Update every machine anyway: the two

@@ -31,6 +31,8 @@ namespace SailwindCoop.Sync
 		/// <summary>The game puts a player in a bed to sleep below this.</summary>
 		private const float NeedsSleepBelow = 99f;
 		private const float AlarmPeriod = 10f;
+		/// <summary>The game's recovery takes a few seconds plus the loading of the port.</summary>
+		private const float MaxRecoverySeconds = 120f;
 
 		/// <summary>The local player's needs before the game's own PlayerNeeds.LateUpdate.</summary>
 		internal struct NeedsSnapshot
@@ -49,7 +51,7 @@ namespace SailwindCoop.Sync
 		private SleepRequestMsg _pendingEntrance;
 		private uint _nextRequest;
 		private float _entranceRetryAt, _entrancePendingAge, _phaseAge, _duration;
-		private float _presenceAt, _presenceResendAt, _personalAge;
+		private float _presenceAt, _presenceResendAt, _personalAge, _recoveryAge;
 		private int _sentPresence = -1;
 		// _blackout: the shared sleep is shown here, and only then are the game's own sleep flags
 		// set. _personal: the local player sleeps alone. GameState.sleeping stays false for him: on
@@ -165,6 +167,8 @@ namespace SailwindCoop.Sync
 		public void OnNotice(GameplayNoticeMsg msg)
 		{
 			if (msg == null || msg.Kind != GameplayNoticeKind.BoatAlarm || !_personal || !Connected) return;
+			// A passed-out player is brought round by the game's recovery, not by an alarm.
+			if (GameState.recovering) return;
 			if (int.TryParse(msg.Detail, out int index) && index == CoopBehaviour.Instance.Players.LocalBoatIndex)
 			{
 				Log("personal sleep ends: boat alarm");
@@ -405,6 +409,9 @@ namespace SailwindCoop.Sync
 				foreach (var path in applied) _deferredEntrances.Remove(path);
 			}
 
+			// Not behind the pause check below: a client's recovery runs on its own clock while the
+			// host's world is stopped. With the own clock stopped the game's recovery waits too.
+			if (PresentationReady() && Time.timeScale > 0f) TickRecovery(dt);
 			if (Paused() || !PresentationReady()) return;
 
 			if (_pendingEntrance != null)
@@ -475,6 +482,46 @@ namespace SailwindCoop.Sync
 			// Like the game: at sea nobody sleeps longer than needed.
 			if (!done && !_address.Timeskip && CrewRested()) done = true;
 			if (done) HostEnd(SleepPhase.Wake, tavern ? "morning" : _duration > 4.5f ? "slept long enough" : "crew rested");
+		}
+
+		/// <summary>
+		/// The game's recovery has no way out of its own waits. A stuck one leaves the flag set for
+		/// good: a dark screen in a personal sleep, and in any case needs that stand still, no
+		/// boarding and no autosave.
+		/// </summary>
+		private void TickRecovery(float dt)
+		{
+			if (!GameState.recovering)
+			{
+				_recoveryAge = 0f;
+				return;
+			}
+
+			_recoveryAge += dt;
+			if (_recoveryAge < MaxRecoverySeconds) return;
+			Plugin.Logger.LogWarning("[SleepSync] role=" + _net.Role + " the game's recovery did not finish in " +
+			                         MaxRecoverySeconds + " s, ending it here");
+			_recoveryAge = 0f;
+			// What is left of the game's coroutines must not run later: it would take the fee and
+			// give control back over whatever the player is doing then.
+			RecoveryPatches.Cancel();
+			GameState.recovering = false;
+			if (global::Sleep.instance != null && global::Sleep.instance.recoveryText != null)
+				global::Sleep.instance.recoveryText.text = "";
+			// The game would have given the screen and control back; a shared sleep keeps its own.
+			if (_blackout) return;
+			if (_personal)
+			{
+				Log("personal sleep ends: recovery ended here");
+				EndEffects(false);
+				return;
+			}
+
+			// A bed and an open game menu hold the look and the control for their own reasons.
+			if (GameState.inBed != null) return;
+			if (GameState.inCursorMenu && CoopBehaviour.Instance?.CoopMenuOpen != true) return;
+			MouseLook.ToggleMouseLook(true);
+			if (!HostPauseHolds() && !PauseHolds()) Refs.SetPlayerControl(true);
 		}
 
 		private void TickPersonal(float dt)
@@ -554,8 +601,13 @@ namespace SailwindCoop.Sync
 		{
 			byte flags = 0;
 			bool inBed = GameState.inBed != null;
-			if (inBed) flags |= SleepPresenceMsg.InBed;
-			if (_personal || _blackout || (inBed && GameState.currentHouse != null)) flags |= SleepPresenceMsg.Wants;
+			// Being recovered is neither lying down nor asleep, wherever it happens: the crew's
+			// shared sleep must not start over a recovery, and one going on stops for it.
+			if (!GameState.recovering)
+			{
+				if (inBed) flags |= SleepPresenceMsg.InBed;
+				if (_personal || _blackout || (inBed && GameState.currentHouse != null)) flags |= SleepPresenceMsg.Wants;
+			}
 			if (PlayerNeeds.sleep >= NeedsSleepBelow) flags |= SleepPresenceMsg.Rested;
 			if (GameState.sleepingInTavern) flags |= SleepPresenceMsg.Tavern;
 			if (GameState.sleepingInTavern || GameState.currentBoat == null || CurrentBoatMoored())

@@ -1,6 +1,6 @@
 {
     "name": "SailwindCoop",
-    "version_number": "0.5.1",
+    "version_number": "0.5.2",
     "website_url": "https://github.com/pander33/SailwindCoop",
     "description": "Play Sailwind with friends over Steam, LAN or VPN. Shared sailing, shared wallet, mod list check, gestures, crew sleep and deck dice.",
     "dependencies": [

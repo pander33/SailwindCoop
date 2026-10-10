@@ -172,6 +172,7 @@ namespace SailwindCoop.Net
         ItemBought = 10,
         ItemSold = 11,
         BoatAlarm = 12,     // not shown: a boat (Detail = its index) was hit or takes in water; wakes a player asleep alone on it
+        OriginOffset = 13,  // not shown: the host's floating-origin offset after its teleport or recovery (Detail = "x,z" in shift steps); a player where the host is takes the same one
     }
 
     /// <summary>
