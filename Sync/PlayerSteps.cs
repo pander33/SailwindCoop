@@ -70,13 +70,62 @@ namespace SailwindCoop.Sync
                                       " wood=" + Count(StepGround.Wood) + " sand=" + Count(StepGround.Sand) +
                                       " stone=" + Count(StepGround.Stone) + " grass=" + Count(StepGround.Grass) +
                                       " wet=" + Count(StepGround.Wet) + " stepSource=" + (StepTemplate != null) +
-                                      " swim=" + (SwimTemplate != null && SwimTemplate.clip != null));
+                                      " swim=" + (SwimTemplate != null && SwimTemplate.clip != null) +
+                                      " | steps " + Describe(StepTemplate) + " | swim " + Describe(SwimTemplate));
                 return true;
             }
             catch (Exception error)
             {
                 Plugin.Logger.LogWarning("[PlayerSteps] game sounds not read: " + error.Message);
                 return false;
+            }
+        }
+
+        // How the player hears the game's own sound: the remote copies are matched against it.
+        private static string Describe(AudioSource source)
+        {
+            if (source == null) return "none";
+            Camera camera = Camera.main;
+            return "volume=" + source.volume.ToString("0.00") + " spatial=" + source.spatialBlend.ToString("0.00") +
+                   " rolloff=" + source.rolloffMode + " min=" + source.minDistance.ToString("0.0") +
+                   " max=" + source.maxDistance.ToString("0.0") +
+                   " toCamera=" + (camera != null ? Vector3.Distance(camera.transform.position, source.transform.position).ToString("0.00") : "?");
+        }
+
+        /// <summary>
+        /// How much of its volume the game's own step source keeps on the way to the player's
+        /// ears: that source is a 3D one some two metres from the camera, with its own rolloff.
+        /// A crewmate's step played at full volume next to you is several times louder than that.
+        /// </summary>
+        public static float OwnStepGain()
+        {
+            try
+            {
+                AudioSource source = StepTemplate;
+                AudioListener ears = UnityEngine.Object.FindObjectOfType<AudioListener>();
+                if (source == null || ears == null || source.spatialBlend < 0.5f) return 1f;
+
+                float distance = Vector3.Distance(ears.transform.position, source.transform.position);
+                float min = Mathf.Max(0.01f, source.minDistance), max = Mathf.Max(min + 0.01f, source.maxDistance);
+                float gain;
+                switch (source.rolloffMode)
+                {
+                    case AudioRolloffMode.Custom:
+                        gain = source.GetCustomCurve(AudioSourceCurveType.CustomRolloff).Evaluate(distance / max);
+                        break;
+                    case AudioRolloffMode.Linear:
+                        gain = 1f - Mathf.InverseLerp(min, max, distance);
+                        break;
+                    default:
+                        gain = min / Mathf.Max(min, distance);
+                        break;
+                }
+
+                return Mathf.Clamp(gain, 0.05f, 1f);
+            }
+            catch (Exception)
+            {
+                return 1f;
             }
         }
 
@@ -126,6 +175,11 @@ namespace SailwindCoop.Sync
     internal sealed class AvatarStepAudio
     {
         private const float MinDistance = 1.5f, MaxDistance = 22f;
+        // Against the level the player hears its own steps at (StepSounds.OwnStepGain): a
+        // crewmate standing next to you stays below your own steps.
+        private const float CrewVolume = 0.7f;
+        // Whatever the game's rolloff says, a crewmate is never played above half the game's volume.
+        private const float MaxOwnGain = 0.5f;
 
         private readonly StepCadence _cadence = new StepCadence();
         private AudioSource _steps, _swim;
@@ -171,7 +225,7 @@ namespace SailwindCoop.Sync
                 _swim.volume = 0f;
             }
 
-            _swim.volume = Mathf.Lerp(_swim.volume, Mathf.Clamp01(speed * StepSounds.SwimVolume), dt * 2.5f);
+            _swim.volume = Mathf.Lerp(_swim.volume, Mathf.Clamp01(speed * StepSounds.SwimVolume) * MaxOwnGain * CrewVolume, dt * 2.5f);
             if (_swim.volume <= 0.01f) { if (_swim.isPlaying) _swim.Stop(); }
             else if (!_swim.isPlaying && _swim.isActiveAndEnabled) _swim.Play();
         }
@@ -193,7 +247,14 @@ namespace SailwindCoop.Sync
                 // The game's mixer group, so being indoors or under water changes these too.
                 source.outputAudioMixerGroup = template.outputAudioMixerGroup;
                 source.pitch = template.pitch;
-                if (!loop) source.volume = template.volume;
+                if (!loop)
+                {
+                    float own = Mathf.Min(StepSounds.OwnStepGain(), MaxOwnGain);
+                    source.volume = template.volume * own * CrewVolume;
+                    Plugin.Logger.LogInfo("[PlayerSteps] crew step volume=" + source.volume.ToString("0.000") +
+                                          " (game " + template.volume.ToString("0.00") + ", own steps reach the ears at " +
+                                          own.ToString("0.00") + ")");
+                }
             }
 
             return source;
