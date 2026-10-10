@@ -7,8 +7,9 @@
   Full          dist\SailwindCoop-<version>.zip               everything; the install bundle with BepInEx
 
   "Full" and "Thunderstore" name the two editions of the code (with and without mod download), not
-  kinds of archive. The full edition has exactly one archive, the install bundle, and the same file
-  goes to GitHub and to Nexus. There is no archive of the plugin alone any more.
+  kinds of archive. The full edition has exactly one archive, the install bundle, and it goes to
+  GitHub only. The Thunderstore archive goes everywhere else (Thunderstore, Nexus Mods). There is
+  no archive of the plugin alone.
 
   Each edition is built into its own staging folder under dist\stage\, so the game's plugin folder
   is not touched and a running game does not lock the build. The version comes from Plugin.cs and

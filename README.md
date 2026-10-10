@@ -57,7 +57,7 @@ The title of the status overlay (F8 -> Settings -> Show Status) shows which edit
 <!--/full-->
 #### Mod Installation
 <!--full-->
-1. Close the game. Download `SailwindCoop-<version>.zip` from [GitHub Releases](https://github.com/pander33/SailwindCoop/releases) or Nexus Mods. Choose the ZIP asset, not **Source code**. This is the complete manual-install bundle, including BepInEx 5.4.23.5 for Windows x64.
+1. Close the game. Download `SailwindCoop-<version>.zip` from [GitHub Releases](https://github.com/pander33/SailwindCoop/releases). Choose the ZIP asset, not **Source code**. This is the complete manual-install bundle, including BepInEx 5.4.23.5 for Windows x64.
 2. In Steam, right-click **Sailwind** -> **Manage** -> **Browse local files**. This opens the folder containing `Sailwind.exe`.
 3. Extract the **contents** of the ZIP directly into that folder. Merge folders and replace included files when asked. Do not extract into `BepInEx/plugins/` or an extra folder named after the ZIP.
 4. Check that `winhttp.dll` and `doorstop_config.ini` are next to `Sailwind.exe`, and the mod is at `BepInEx/plugins/SailwindCoop/SailwindCoop.dll`. The archive includes the loader, mod dependencies, avatar and sounds; it does not include saves or personal configs.
@@ -262,7 +262,7 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 <!--/full-->
 #### Установка мода
 <!--full-->
-1. Закройте игру. Скачайте `SailwindCoop-<version>.zip` со страницы [GitHub Releases](https://github.com/pander33/SailwindCoop/releases) или Nexus Mods. Нужен ZIP из **Assets**, не **Source code**. Это полный комплект для ручной установки, включая BepInEx 5.4.23.5 для Windows x64.
+1. Закройте игру. Скачайте `SailwindCoop-<version>.zip` со страницы [GitHub Releases](https://github.com/pander33/SailwindCoop/releases). Нужен ZIP из **Assets**, не **Source code**. Это полный комплект для ручной установки, включая BepInEx 5.4.23.5 для Windows x64.
 2. В Steam нажмите правой кнопкой на **Sailwind** -> **Управление** -> **Просмотреть локальные файлы**. Откроется папка с `Sailwind.exe`.
 3. Распакуйте **содержимое** ZIP прямо в эту папку. При запросе объедините папки и замените включённые файлы. Не распаковывайте в `BepInEx/plugins/` или дополнительную папку с названием архива.
 4. Проверьте: `winhttp.dll` и `doorstop_config.ini` лежат рядом с `Sailwind.exe`, а мод находится по пути `BepInEx/plugins/SailwindCoop/SailwindCoop.dll`. В архиве есть загрузчик, зависимости мода, аватар и звуки; сохранений и личных конфигов нет.
