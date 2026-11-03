@@ -36,6 +36,13 @@ Sailwind LAN/Steam Co-op is a mod that adds multiplayer functionality to the gam
 - **Crew Status and Host Controls:** See who is loading or ready, their ping and boat; hosts can lock the session or remove a guest
 - **Gesture Wheel:** Hold G to wave, point, salute or shout "Land ho!" to your crew
 - **Hands on the Ship:** Other players' avatars reach for the item they carry and the winch, wheel or rope they hold
+- **Smooth Winches & Rigging:** Winch cranks turn smoothly in real time following rope length; booms, yards, sails, and rudder interpolate smoothly without jitter
+- **Shared Foraging (Sailwind 0.40):** Foraging spots, coconuts, and mushrooms are synchronized across all crew members with shared respawn timers
+- **Visible Belt Items & Lanterns:** Other players' belt items appear at their avatars' hips; burning lanterns on the belt cast dynamic light for everyone
+- **Deck Dice:** Place a folding table from the gesture wheel (G) on deck or shore to play dice with 2–5 players and optional coin stakes
+- **Co-op Economy:** Split delivery rewards, personal or shared wallet modes, and hand-to-hand money passing (hold H)
+- **Crew Sleep & Rest:** Resting in bed restores fatigue individually; when all resting players fall asleep, time skips ahead together
+- **Knockdown Mechanics:** Thrown items knock crewmates down onto the deck (press Space to get up; toggleable in config)
 
 ### 📥 Installation
 
@@ -155,6 +162,13 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | `CoopSaveSlot` | 5 | Slot the client writes the received host world into. **The local save in this slot is overwritten.** |
 | `ForceHostSaveOnJoin` | true | Host makes a fresh save on join so the client gets the current world |
 | `PauseHostOnJoin` | true | Host world is paused while a client loads it, so nothing drifts during the join |
+| **Economy** |
+| `SharedWallet` | false | Host: crew shares the host's wallet. Off = personal wallets with split delivery rewards |
+| **Gameplay** |
+| `KnockdownByItems` | true | Items thrown by other players knock you down onto the deck (Space to stand up) |
+| **Steam** |
+| `UseSteam` | false | Co-op menu opens in Steam mode by default (host/join via Steam friends without an IP) |
+| `FriendsOnly` | false | Steam host: allow only Steam friends (and ignore LAN port connections) |
 | **Dice** |
 | `AllowStakes` | true | Host: allow optional dice stakes with personal wallets. Existing configs retain their saved value; set `AllowStakes = true` under `[Dice]` if previously disabled |
 | `CloseUp` | true | Sitting down at a dice table opens the close view of it (free cursor, mouse buttons). The key `UI.DiceViewKey` (`T`) opens and closes it by hand |
@@ -164,6 +178,8 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 | **UI** |
 | `MenuKey` | F8 | Open/close the Sailwind Co-op menu |
 | `EmoteKey` | G | Hold to open the gesture wheel. Change it if G is bound to something else in the game |
+| `GiveKey` | H | Look at a crewmate and hold to offer money (mouse wheel changes amount, middle-click changes currency) |
+| `DiceViewKey` | T | Look at a dice table and press to toggle close-up view |
 | `EmoteHintShown` | false | Becomes true after the one-time gesture hint was shown. Set to false to see it again |
 
 ### 🔍 Finding Your IP Address
@@ -247,6 +263,13 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - **Тишина по умолчанию:** Обычная диагностика выключена; серьёзные ошибки пишутся с ограничением частоты
 - **Колесо жестов:** Удерживайте G, чтобы помахать, указать, отдать честь или крикнуть команде «Land ho!»
 - **Руки на снастях:** Аватары других игроков тянутся к предмету в руке и к лебёдке, штурвалу или верёвке, которую держит игрок
+- **Плавные лебёдки и паруса:** Рукоятки лебёдок крутятся плавно в реальном времени от длины верёвки; реи, гики, паруса и штурвал интерполируются без рывков
+- **Собирательство в кооперативе (Sailwind 0.40):** Грибы, кокосы и другие точки сбора синхронизированы у всех игроков, таймеры восстановления общие
+- **Видимые предметы на поясе и фонари:** Предметы в слотах пояса отображаются на поясе аватара; зажжённый фонарь на поясе освещает палубу для всей команды
+- **Игра в кости на палубе:** Раскладной столик из колеса жестов (G) на 2–5 игроков с возможностью ставок золотом
+- **Экономика и передача денег:** Общий кошелёк команды или личные кошельки с разделом наград за рейсы; удерживайте H, глядя на напарника, чтобы передать монеты из рук в руки
+- **Сон команды:** Отдых в кровати работает индивидуально, а когда все отдыхающие спят — время перематывается для всей команды
+- **Сбивание с ног:** Брошенный предмет может сбить матроса с ног на палубу (пробел, чтобы подняться; отключается в конфиге)
 
 ### 📥 Установка
 
@@ -357,6 +380,13 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | `CoopSaveSlot` | 5 | Слот, куда клиент пишет полученный мир хоста. **Локальное сохранение в этом слоте перезаписывается.** |
 | `ForceHostSaveOnJoin` | true | Хост делает свежее сохранение при подключении, чтобы клиент получил актуальный мир |
 | `PauseHostOnJoin` | true | Мир хоста стоит на паузе, пока клиент его грузит — иначе состояние успевает разойтись |
+| **Экономика** |
+| `SharedWallet` | false | Хост: общий кошелёк команды (деньги хоста). Выкл = личные кошельки и раздел наград за рейсы |
+| **Геймплей** |
+| `KnockdownByItems` | true | Брошенные другими игроками предметы могут сбить вас с ног (Space, чтобы встать) |
+| **Steam** |
+| `UseSteam` | false | Запуск меню в режиме Steam по умолчанию (подключение к друзьям без IP-адреса) |
+| `FriendsOnly` | false | Хост Steam: подключаться могут только друзья из Steam (порт LAN отключен) |
 | **Кости** |
 | `AllowStakes` | true | Хост: разрешить добровольные ставки при личных кошельках. Старый конфиг сохраняет записанное значение; если ставки были выключены, задайте `AllowStakes = true` в секции `[Dice]` |
 | `CloseUp` | true | Сев за столик для костей, игрок видит его крупным планом (свободный курсор, кнопки мыши). Клавиша `UI.DiceViewKey` (`T`) открывает и закрывает крупный план вручную |
@@ -366,6 +396,8 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 | **UI** |
 | `MenuKey` | F8 | Открыть/закрыть меню Sailwind Co-op |
 | `EmoteKey` | G | Удерживать, чтобы открыть колесо жестов. Смените, если G занята в игре |
+| `GiveKey` | H | Удерживать, глядя на напарника, чтобы предложить деньги (колесо мыши — сумма, средняя кнопка — валюта) |
+| `DiceViewKey` | T | Нажать, глядя на столик для игры в кости, чтобы переключить вид крупным планом |
 | `EmoteHintShown` | false | Становится true после разовой подсказки о жестах. Верните false, чтобы увидеть её снова |
 
 ### 🔍 Как узнать свой IP адрес
