@@ -202,6 +202,11 @@ namespace SailwindCoop.Sync
         private readonly OperationLedger<List<ItemEntry>> _authoredResults = new OperationLedger<List<ItemEntry>>();
         private ShipItem _authoringItem;
         private readonly Dictionary<ShipItem, KeyValuePair<uint, uint>> _authoredIdentity = new Dictionary<ShipItem, KeyValuePair<uint, uint>>();
+        // Host: items just taken from the host's belt into its hand. The game empties the belt slot inside
+        // GoPointer.PickUpItem (ShipItem.OnPickup -> GPButtonInventorySlot.WithdrawItem), before the
+        // pointer holds the item, so the spawn the belt hook sends says nobody holds it. One reliable state
+        // the next frame, when LocalHand already reads true, tells the clients whose hand it is in.
+        private readonly HashSet<ShipItem> _hostHeldFromBelt = new HashSet<ShipItem>();
 
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
@@ -284,6 +289,7 @@ namespace SailwindCoop.Sync
 
             if (_net.Role != Role.Host) return;
             ProcessPendingDynamic();
+            SendHeldFromBelt();
             SendExtraState(dt);
 
             // Host is the sole simulator; clients are kinematic puppets (see ApplyRemote). Stream an item
@@ -714,9 +720,17 @@ namespace SailwindCoop.Sync
                 var ie = HostLookup(msg.InstanceId, msg.PrefabIndex);
                 if (ie != null && ie.Item != null)
                 {
-                    ApplyCrateMembership(ie.Item, msg.CrateId);
+                    var crateStatus = TryApplyCrateMembership(ie.Item, msg.CrateId);
                     _net.Broadcast(BuildState(ie, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    Remember("in crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
+                    // Not applied (a crate this host does not know, or no physics proxy yet): nothing
+                    // changed and nothing retries a request; the state above carries the acknowledgement
+                    // and the item's real crate. Say so instead of reporting an insert.
+                    if (crateStatus != ItemApplyStatus.Applied)
+                        Remember("crate #" + ie.Index + "->" + msg.CrateId + " not applied (" + crateStatus +
+                                 (msg.CrateId != 0 && CrateInventoryFor(msg.CrateId) == null ? ", unknown crate" : "") +
+                                 ") actor=" + actor);
+                    else
+                        Remember("in crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
                 }
                 else Remember("reject crate id=" + msg.InstanceId);
                 return;
@@ -2842,7 +2856,10 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Host)
             {
                 // Host belt items are player-local too; the RefreshItems diff broadcasts despawn (in) / spawn (out).
+                // Into the belt nothing more is sent: the item has left the shared set, and a state for an
+                // id the clients just despawned would only wait in their pending states.
                 RefreshItems(force: true);
+                if (slot < 0) _hostHeldFromBelt.Add(item);
                 Remember("local host belt slot=" + slot);
                 return;
             }
@@ -3201,6 +3218,24 @@ namespace SailwindCoop.Sync
         // -----------------------------------------------------------------
 
         private static readonly Dictionary<string, FieldInfo> _fieldCache = new Dictionary<string, FieldInfo>();
+
+        /// <summary>Host: the reliable state of an item taken from the host's belt (see
+        /// <see cref="_hostHeldFromBelt"/>). Sent only once the hand holds it, from the entry as it is:
+        /// BuildState reads the holder from the hand, so nothing is overridden and the holder is not kept
+        /// past the drop.</summary>
+        private void SendHeldFromBelt()
+        {
+            if (_hostHeldFromBelt.Count == 0) return;
+            // One look per item: the belt hook runs inside PickUpItem, so by this tick the hand holds it.
+            // An item that is not in the hand by then was not taken to it, and nothing is sent.
+            foreach (var item in new List<ShipItem>(_hostHeldFromBelt))
+            {
+                _hostHeldFromBelt.Remove(item);
+                if (item == null || !LocalHand(item) || !_byItem.TryGetValue(item, out var e)) continue;
+                _net.Broadcast(BuildState(e, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Remember("out held from belt #" + e.Index + " '" + item.name + "'");
+            }
+        }
 
         private void SendExtraState(float dt)
         {
@@ -4033,6 +4068,7 @@ namespace SailwindCoop.Sync
             _saveIdentity.Clear();
             _authoredResults.Clear();
             _authoredIdentity.Clear();
+            _hostHeldFromBelt.Clear();
             _authoringItem = null;
             _pendingHeldItem = null;
             _gp = null;

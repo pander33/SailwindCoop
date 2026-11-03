@@ -37,6 +37,8 @@ The protocol is now 96: every player must update. Earlier builds cannot join a 9
   receives the host's items.
 - The anchor winch handle no longer spins on the other machines while a player carries the
   anchor.
+- An item the host takes from its belt is reliably shown in the host's hand on every client
+  (after the jankykev fork, `b3c0e84`).
 - Sails and yards no longer shake on a client: the game's sail physics no longer fights the
   pose the host sends.
 - The sea a client sees follows the host's even when the host is asleep alone or far from the
