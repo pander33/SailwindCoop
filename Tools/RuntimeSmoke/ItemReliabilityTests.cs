@@ -80,6 +80,14 @@ internal static class ItemReliabilityTests
             Assert(ReferenceEquals(authoring.Resolve(10, 10, 2, 12, 902), waiting) && authoring.Contains(waiting), "request awaiting its id was dropped");
             Assert(ReferenceEquals(authoring.Resolve(10, 10, 3, 12, 903), alive), "live bound item lost");
         });
+        test("a spawn waits for its own authored item only while the request and the item exist", () => {
+            var authoring = new ItemAuthoring<object>(); var item = new object();
+            authoring.Add(14, item, 110);
+            Assert(authoring.Awaits(14, x => x != null), "held request with a live item did not wait");
+            Assert(!authoring.Awaits(14, x => false), "request whose item is gone still waits");
+            Assert(!authoring.Awaits(13, x => true), "an author mark this client no longer holds still waits");
+            authoring.Clear(); Assert(!authoring.Awaits(14, x => true), "request of an earlier session still waits");
+        });
         test("a host item without a local counterpart is reported once and then retried slowly", () => {
             var wait = new SpawnWait(); bool report; int reports = 0, tries = 0;
             for (float now = 0f; now < SpawnWait.ReportAfter; now += 0.25f)

@@ -24,6 +24,8 @@ namespace SailwindCoop.Sync
             Capture(harmony, hooks, typeof(ShipItemLight), "ExtraLateUpdate");
             Capture(harmony, hooks, typeof(StoveFuel), "Update");
             Capture(harmony, hooks, typeof(ShipItemPipe), "ExtraLateUpdate");
+            hooks.Install(typeof(ShipItem), "ExtraFixedUpdate", Type.EmptyTypes,
+                m => harmony.Patch(m, prefix: Callback(nameof(PreBoatMembership))));
             PatchHealth.Report("Item simulation", hooks);
             Plugin.Logger.LogInfo("[ItemSimulationPatches] " + hooks.Detail);
         }
@@ -44,6 +46,30 @@ namespace SailwindCoop.Sync
         {
             if (!ClientSession) return true;
             try { return !SharedClient(Item(__instance)); }
+            catch (Exception error) { Report(error); return true; }
+        }
+        // ShipItem.ExtraFixedUpdate only enters and leaves boats by the embark trigger. On the host an
+        // item in a client's hand has its root collider off, so the game sees no trigger and calls
+        // ExitBoat two steps after each boat-frame pose had put it back: one "ExitBoat" log line,
+        // a BoatMass remove/add and a broken hanging joint per pose. The holder's pose frame decides
+        // membership while it is held; the counter is kept at zero so the drop starts with full grace.
+        private static AccessTools.FieldRef<ShipItem, int> _frameCounter;
+        private static bool _frameCounterMissing;
+        private static bool PreBoatMembership(ShipItem __instance)
+        {
+            var sync = ItemSync.Instance;
+            if (sync == null || !sync.IsHostSession) return true;
+            try
+            {
+                if (!sync.HeldByRemotePlayer(__instance)) return true;
+                if (_frameCounter == null && !_frameCounterMissing)
+                {
+                    try { _frameCounter = AccessTools.FieldRefAccess<ShipItem, int>("frameCounter"); }
+                    catch (Exception e) { _frameCounterMissing = true; Report(e); }
+                }
+                if (_frameCounter != null) _frameCounter(__instance) = 0;
+                return false;
+            }
             catch (Exception error) { Report(error); return true; }
         }
         private struct Before

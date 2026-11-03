@@ -838,10 +838,10 @@ internal static class Program
                 Assert(log.RecentSnapshot().Length == 1, "information does not push warnings out of the short list");
             });
             Test("a mod that did not start names the game version, or the reason on a supported one", () => {
-                string old = SailwindCoop.Runtime.StartupText.Describe("0.38.1", "TypeLoadException: Could not load type\nstack");
-                Assert(old.Contains("needs Sailwind 0.39") && old.Contains("this game is 0.38.1") && !old.Contains("TypeLoad"), old);
-                string same = SailwindCoop.Runtime.StartupText.Describe("0.39.2", "TypeLoadException: Could not load type\nstack");
-                Assert(same.Contains("(0.39.2)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
+                string old = SailwindCoop.Runtime.StartupText.Describe("0.39", "TypeLoadException: Could not load type\nstack");
+                Assert(old.Contains("needs Sailwind 0.40") && old.Contains("this game is 0.39") && !old.Contains("TypeLoad"), old);
+                string same = SailwindCoop.Runtime.StartupText.Describe("0.40.2", "TypeLoadException: Could not load type\nstack");
+                Assert(same.Contains("(0.40.2)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
                 Assert(SailwindCoop.Runtime.StartupText.Describe(null, null).Contains("this game is unknown"), "no version");
             });
             Test("the step signal fits beside the hand bits, and steps follow the distance walked", () => {

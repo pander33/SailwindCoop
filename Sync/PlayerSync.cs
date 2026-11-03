@@ -404,6 +404,10 @@ namespace SailwindCoop.Sync
         public int SnapshotHz = 20;
 
         public int RemoteCount => _remotes.Count;
+
+        /// <summary>The model of a remote player, or null while it has none (not created yet, gone).</summary>
+        internal GameObject RemoteAvatarObject(uint netId)
+            => _remotes.TryGetValue(netId, out RemoteAvatar a) && a.Go != null ? a.Go : null;
         public bool LocalPlayerFound => _localPlayer != null;
         public int LocalBoatIndex
         {

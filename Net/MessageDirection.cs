@@ -110,6 +110,8 @@ namespace SailwindCoop.Net
                 case MsgType.MoneyTransfer:
                 case MsgType.MoneyOffer:
                 case MsgType.ShopTaken:
+                case MsgType.ForageTaken:
+                case MsgType.BeltState:
                     return MsgFlow.Both;
 
                 default:

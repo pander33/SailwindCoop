@@ -6,7 +6,7 @@ namespace SailwindCoop.Runtime
     public static class StartupText
     {
         /// <summary>The game version this build was made for, as <c>Application.version</c> starts.</summary>
-        public const string SupportedGame = "0.39";
+        public const string SupportedGame = "0.40";
 
         public static string Describe(string gameVersion, string fault)
         {

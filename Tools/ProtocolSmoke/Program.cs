@@ -136,6 +136,8 @@ namespace ProtocolSmoke
                 new WalletStateMsg { Shared = true, AckSeq = 0x01020304, Currency = new[] { 120, 0, -5, 99999 } },
                 new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
                 new ShopTakenMsg { PrefabIndex = 137, Pos = new UnityEngine.Vector3(218.3f, 5.7f, -356f) },
+                new ForageTakenMsg { Spawner = 41, Cooldown = 1834.5f },
+                new BeltStateMsg { NetId = 0x12345678, Prefabs = new[] { 110, 0, 57, 0, 233 }, Lit = 0x01 },
                 new MoneyOfferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Kind = MoneyOfferKind.Take, Currency = 2, Amount = 75 },
                 new ModManifestMsg { FilesOffered = true, Mods = new[] {
                     new ModEntry { Folder = "SeaLifeMod", Complete = true,

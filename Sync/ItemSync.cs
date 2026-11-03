@@ -16,6 +16,14 @@ namespace SailwindCoop.Sync
     {
         public static ItemSync Instance { get; private set; }
         internal bool IsClientSession => _net.Role == Role.Client && _net.State == LinkState.Connected;
+        internal bool IsHostSession => _net.Role == Role.Host && _net.State == LinkState.Connected;
+
+        /// <summary>Host: the item is in another player's hand. Its boat membership then follows the
+        /// frame of that player's poses (<see cref="ApplyWirePose"/>), not the game's embark trigger:
+        /// the copy's root collider is off, so the game never sees it inside the boat and would take
+        /// it out of the boat two physics steps after every boat-frame pose.</summary>
+        internal bool HeldByRemotePlayer(ShipItem item)
+            => item != null && _localHeld.TryGetValue(item, out uint actor) && actor != 0 && actor != _net.MyNetId;
 
         private sealed class ItemEntry
         {
@@ -477,6 +485,10 @@ namespace SailwindCoop.Sync
             }
 
             PrepareLocalPickupPose(pointer, item);
+            // Taken off a hook that holds it only on the host: this copy has the host's attached flag
+            // but no joint, and the game's OnPickup clears the flags only through a joint. Left set,
+            // the drop below reads it as a wall attach and the item hangs in the air for everyone.
+            ClearStaleHangFlags(item);
             SetPuppet(item, true);    // client-held items are visual only; no collision/boat push
             e.HolderNetId = _net.MyNetId;
             e.Net.Clear();
@@ -573,6 +585,10 @@ namespace SailwindCoop.Sync
                 // Host dropped: send exactly one reliable free-state so clients stop following the hand,
                 // place the item at the release point and resume local physics with the throw impulse.
                 e.HolderNetId = 0;
+                // The host's own copy may still be a puppet from when a client carried it (a lantern
+                // a client hung on a hook keeps that state while hanging): its ItemRigidbody is off,
+                // so the game would never make it fall. The host's drop gives it back to the game.
+                SetPuppet(item, false);
                 // F-place: only the proxy is at the attach pose yet — adopt it so the broadcast carries
                 // the wall pose instead of the hand pose (vanilla would sync the visual next FixedUpdate).
                 bool placedAttach = IsProxyAttached(item);
@@ -3181,6 +3197,10 @@ namespace SailwindCoop.Sync
                     do { id = UnityEngine.Random.Range(1, int.MaxValue); }
                     while (_tombstones.Contains(id) || alive.ContainsKey(id) || prev.ContainsKey(id));
                     saveable.instanceId = id;
+                    // A new id is a new shared item (it came back from the host's belt): the client
+                    // that once authored this object no longer waits for it, and a spawn still naming
+                    // that client's request would never be created there.
+                    _authoredIdentity.Remove(item);
                 }
                 alive[id] = item;
             }
@@ -3378,7 +3398,10 @@ namespace SailwindCoop.Sync
                 return fr;
             }
 
-            if (authorRequestId != 0) return null;
+            // Our own request: wait for the item it created, but only while that request and its item
+            // still exist here. A request we no longer hold (an older author mark) or whose item is
+            // gone leaves an ordinary host item, created below like any other.
+            if (authorRequestId != 0 && _pendingClientItems.Awaits(authorRequestId, item => item != null)) return null;
 
             // A local item already carries this host id and prefab: we joined from a loaded world (a
             // rejoin without going through the main menu), where our copies kept the ids the host gave

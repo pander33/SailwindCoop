@@ -36,6 +36,8 @@ namespace SailwindCoop.Runtime
         public HouseDoorSync HouseDoors { get; private set; }
         public BoatTeleport Teleport { get; private set; }
         public ShopSync Shop { get; private set; }
+        public ForageSync Forage { get; private set; }
+        public PlayerBelt Belts { get; private set; }
         public WeatherStormSync Storms { get; private set; }
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
@@ -224,6 +226,8 @@ namespace SailwindCoop.Runtime
                 },
             };
             Shop = new ShopSync(Net);
+            Forage = new ForageSync(Net);
+            Belts = new PlayerBelt(Net, Players);
             Storms = new WeatherStormSync(Net);
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
@@ -283,6 +287,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Item results", () => ItemOperationPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Item simulation", () => ItemSimulationPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shop", () => ShopPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Forage", () => ForagePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Dice save lifecycle", () => DiceSavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
@@ -329,6 +334,7 @@ namespace SailwindCoop.Runtime
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
+                Belts.PlayerLeft(netId);
                 Dice.PlayerLeft(netId);
                 Items.ClearRemoteActor(netId);
                 Anchor.ClearRemoteActor(netId);
@@ -466,6 +472,8 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Knockdown.Tick", () => Knockdown.Tick()),
                 new SyncStep("Players.Tick", () => Players.Tick(_dt)),
                 new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
+                // After the avatars are placed: the belt copies hang at their hips.
+                new SyncStep("Belts.Tick", () => Belts.Tick(_dt)),
                 new SyncStep("Dice.Tick", () => Dice.Tick()),
             };
         }
@@ -871,6 +879,12 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.ShopTaken:
                     Shop.OnShopTaken((ShopTakenMsg)msg, fromPeer);
+                    break;
+                case MsgType.ForageTaken:
+                    Forage.OnForageTaken((ForageTakenMsg)msg, fromPeer);
+                    break;
+                case MsgType.BeltState:
+                    Belts.OnBeltState((BeltStateMsg)msg, fromPeer);
                     break;
                 case MsgType.MissionAccept:
                     Missions.OnMissionAccept((MissionAcceptMsg)msg, fromPeer);
@@ -1813,6 +1827,8 @@ namespace SailwindCoop.Runtime
             Sleep.Clear();
             OriginCatchUp.ForgetHostOffset();
             Shop.Clear();
+            Forage.Clear();
+            Belts.Clear();
             WindTotem.Clear();
             HouseDoors.Clear();
             Interactions.Clear();

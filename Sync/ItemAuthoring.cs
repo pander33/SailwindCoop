@@ -26,6 +26,10 @@ namespace SailwindCoop.Sync
             return pending.Item;
         }
         internal void Bind(uint request, int hostId) => requests[request].HostId = hostId;
+        /// <summary>True while this request is held and its item still exists: a spawn naming it is
+        /// that item's host copy and must wait for it rather than create a second one.</summary>
+        internal bool Awaits(uint request, System.Func<T, bool> exists)
+            => requests.TryGetValue(request, out var pending) && exists(pending.Item);
         internal void Clear() => requests.Clear();
         internal int Count => requests.Count;
         /// <summary>Drops the requests that already have a host id and whose item no longer exists:

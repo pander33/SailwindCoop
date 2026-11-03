@@ -4,13 +4,24 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-The protocol is now 95: every player must update. Earlier builds cannot join a 95 host.
+The protocol is now 96: every player must update. Earlier builds cannot join a 96 host.
 
-Many of these fixes come from the reports and fixes in jankykev's fork
-([jankykev/SailwindCoop](https://github.com/jankykev/SailwindCoop)). Thank you!
+**Sailwind 0.40 is now required.**
+
+### Added
+
+- Foraging (new in Sailwind 0.40) works in co-op: a mushroom or coconut picked up by one player
+  disappears for everyone else and becomes a shared item, and the spot comes back at the same
+  time for the whole crew.
+- The items in another player's belt hang at the belt of their avatar, and a burning lantern
+  on the belt lights the deck for everyone.
 
 ### Fixed
 
+- An item the host put into its belt and took out again no longer stays invisible for a client
+  that had once taken the same item out of its own belt.
+- While a client carries an item on deck, the host no longer takes it out of the boat a few
+  times a second, which flooded the host's log with `ExitBoat` lines.
 - Sails and yards no longer shake on a client: the game's sail physics no longer fights the
   pose the host sends.
 - The sea a client sees follows the host's even when the host is asleep alone or far from the
@@ -25,6 +36,9 @@ Many of these fixes come from the reports and fixes in jankykev's fork
   the host's id, and the crate window no longer drags extra items to hidden slots.
 - Dirt sync skips objects that have no dirt texture instead of failing every half second.
 - Goods whose mission slot names another product are treated as ordinary stock.
+
+Many of these fixes come from the reports and fixes in jankykev's fork
+([jankykev/SailwindCoop](https://github.com/jankykev/SailwindCoop)). Thank you!
 
 ## [0.6.0] - 2026-10-18
 

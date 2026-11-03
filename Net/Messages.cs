@@ -116,6 +116,8 @@ namespace SailwindCoop.Net
         DiceResult = 120,       // host -> client : answer to a DiceRequest by RequestId
         DiceBaseline = 121,     // host -> client : ids of all existing dice tables, sent after their states
         DiceJournal = 122,      // host -> client : summary of completed dice matches for reading
+        ForageTaken = 123,      // taker -> host -> others : the item of this forage spot was picked up
+        BeltState = 124,        // player -> host -> others : what hangs in a player's five belt slots (visual only)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -2212,6 +2214,67 @@ namespace SailwindCoop.Net
         {
             PrefabIndex = r.GetInt();
             Pos = r.GetVector3();
+        }
+    }
+
+    /// <summary>
+    /// A forage item (game 0.40 <c>WorldItemSpawner</c>: mushrooms, coconuts) was picked up. Every
+    /// machine spawns its own item at each spot, so the others remove theirs and take the spot's
+    /// respawn time; the picked item itself reaches them as an ordinary shared item.
+    /// <see cref="Spawner"/> is the spot's <c>itemSpawnerIndex</c>, <see cref="Cooldown"/> the value
+    /// the taker's game wrote to <c>ItemSpawners.cooldowns</c>.
+    /// </summary>
+    public sealed class ForageTakenMsg : INetMessage
+    {
+        public int Spawner;
+        public float Cooldown;
+
+        public MsgType Type => MsgType.ForageTaken;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Spawner);
+            w.Put(Cooldown);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Spawner = r.GetInt();
+            Cooldown = r.GetFloat();
+        }
+    }
+
+    /// <summary>
+    /// What hangs in one player's belt (the game's five <c>GPButtonInventorySlot</c>s). Belt items
+    /// are player-local and are not in the shared item set, so the others show a visual copy on
+    /// that player's avatar from this. <see cref="Prefabs"/> holds the prefab index per slot (0 =
+    /// empty), <see cref="Lit"/> one bit per slot for a burning lamp. Sent on change and repeated
+    /// now and then for players who joined later. The host takes <see cref="NetId"/> from the
+    /// sending connection, as for <c>PlayerState</c>.
+    /// </summary>
+    public sealed class BeltStateMsg : INetMessage
+    {
+        public const int Slots = 5;
+
+        public uint NetId;
+        public int[] Prefabs = new int[Slots];
+        public byte Lit;
+
+        public MsgType Type => MsgType.BeltState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(NetId);
+            for (int i = 0; i < Slots; i++) w.Put(Prefabs != null && i < Prefabs.Length ? Prefabs[i] : 0);
+            w.Put(Lit);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            NetId = r.GetUInt();
+            Prefabs = new int[Slots];
+            for (int i = 0; i < Slots; i++) Prefabs[i] = r.GetInt();
+            Lit = r.GetByte();
         }
     }
 
