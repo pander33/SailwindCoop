@@ -64,7 +64,14 @@ namespace SailwindCoop.Sync
         private RudderNew _rudderNew;
         private Rudder _rudderOld;
 
-        // Client: latest rotation targets + which rigidbodies we forced kinematic.
+        // Client: the host's node rotations by host tick + which rigidbodies we forced kinematic.
+        // Played back InterpDelayMs behind the host clock, like NetTransform plays the boat, instead
+        // of chasing the last packet: an exponential chase at 12 Hz showed every packet as a step.
+        private struct RotSnapshot { public long Tick; public Quaternion[] Rots; }
+        private readonly List<RotSnapshot> _rotBuf = new List<RotSnapshot>();
+        private const int MaxRotSnapshots = 16;
+        /// <summary>How far behind the host clock the client plays node rotations (ms).</summary>
+        public float InterpDelayMs = 100f;
         private Quaternion[] _targetRots = System.Array.Empty<Quaternion>();
         private bool _haveTargets;
         private readonly List<KeyValuePair<Rigidbody, bool>> _kinematicSaved = new List<KeyValuePair<Rigidbody, bool>>();
@@ -89,10 +96,11 @@ namespace SailwindCoop.Sync
         private FieldInfo _fSticky;
         private FieldInfo _fClicked;
 
-        /// <summary>Control snapshot rate (Hz). The wheel/booms can move quickly, so keep it brisk.</summary>
+        /// <summary>Client request rate (Hz): rope and steering input forwarded to the host.</summary>
         public float ControlHz = 12f;
-        /// <summary>How fast the client slerps a node toward its latest target rotation.</summary>
-        public float RotSmoothing = 14f;
+        /// <summary>Host state rate (Hz). Sent only while something moves; the client interpolates
+        /// between snapshots, so the rate sets how closely it follows a quick boom swing.</summary>
+        public float StateHz = 20f;
 
         public int RopeCount { get { if (_fleet == null) return _ropes.Length; int n = 0; foreach (var c in _fleet.Values) n += c.RopeCount; return n; } }
         public int NodeCount { get { if (_fleet == null) return _nodes.Length; int n = 0; foreach (var c in _fleet.Values) n += c.NodeCount; return n; } }
@@ -186,7 +194,7 @@ namespace SailwindCoop.Sync
                 return;
             }
 
-            float interval = 1f / Mathf.Max(1f, ControlHz);
+            float interval = 1f / Mathf.Max(1f, StateHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
             _sendTimer = 0f;
@@ -290,6 +298,7 @@ namespace SailwindCoop.Sync
                 else
                 {
                     EnsureKinematic();
+                    PushRotations(msg.Tick, msg.Rotations);
                     _targetRots = msg.Rotations;
                     _haveTargets = true;
                 }
@@ -318,15 +327,58 @@ namespace SailwindCoop.Sync
             if (!_haveTargets || _nodes.Length == 0) return;
             if (_targetRots.Length != _nodes.Length) return;
 
-            // Slerp every moving hinge (booms + rudder) toward the host's value — including the
-            // rudder of a wheel the local player is holding, so they see the real steering result.
-            float t = 1f - Mathf.Exp(-RotSmoothing * dt);
+            // Every moving hinge (booms + rudder) follows the host's value — including the rudder
+            // of a wheel the local player is holding, so they see the real steering result.
+            if (!PickRotations(_net.Clock.ServerTick - (long)InterpDelayMs, out Quaternion[] from, out Quaternion[] to, out float alpha))
+                return;
             for (int i = 0; i < _nodes.Length; i++)
             {
                 var tr = _nodes[i].T;
-                if (tr == null) continue;
-                tr.localRotation = Quaternion.Slerp(tr.localRotation, _targetRots[i], t);
+                if (tr == null || i >= from.Length || i >= to.Length) continue;
+                tr.localRotation = Quaternion.Slerp(from[i], to[i], alpha);
             }
+        }
+
+        private void PushRotations(long tick, Quaternion[] rots)
+        {
+            if (_rotBuf.Count > 0)
+            {
+                var last = _rotBuf[_rotBuf.Count - 1];
+                if (tick < last.Tick) return;
+                if (tick == last.Tick) { _rotBuf[_rotBuf.Count - 1] = new RotSnapshot { Tick = tick, Rots = rots }; return; }
+                // The host is silent while nothing moves. The first packet after a pause would
+                // otherwise be interpolated from the last one before it, seconds back, and the
+                // motion would start with a jump: it starts from where the node stood, one step back.
+                long step = (long)(1000f / Mathf.Max(1f, StateHz));
+                if (tick - last.Tick > 3 * step)
+                    _rotBuf.Add(new RotSnapshot { Tick = tick - step, Rots = last.Rots });
+            }
+            _rotBuf.Add(new RotSnapshot { Tick = tick, Rots = rots });
+            while (_rotBuf.Count > MaxRotSnapshots) _rotBuf.RemoveAt(0);
+        }
+
+        /// <summary>The two snapshots around <paramref name="renderTick"/>; before the first or after
+        /// the last it holds that one (no extrapolation: a hinge does not overshoot the host).</summary>
+        private bool PickRotations(long renderTick, out Quaternion[] from, out Quaternion[] to, out float alpha)
+        {
+            from = to = null; alpha = 0f;
+            int n = _rotBuf.Count;
+            if (n == 0) return false;
+            if (renderTick <= _rotBuf[0].Tick) { from = to = _rotBuf[0].Rots; return true; }
+            if (renderTick >= _rotBuf[n - 1].Tick) { from = to = _rotBuf[n - 1].Rots; return true; }
+            for (int i = 0; i < n - 1; i++)
+            {
+                var a = _rotBuf[i]; var b = _rotBuf[i + 1];
+                if (renderTick > b.Tick) continue;
+                // Older snapshots are no longer needed; keep the pair being played.
+                if (i > 0) _rotBuf.RemoveRange(0, i);
+                long span = b.Tick - a.Tick;
+                alpha = span > 0 ? Mathf.Clamp01((renderTick - a.Tick) / (float)span) : 1f;
+                from = a.Rots; to = b.Rots;
+                return true;
+            }
+            from = to = _rotBuf[n - 1].Rots;
+            return true;
         }
 
         /// <summary>
@@ -519,6 +571,7 @@ namespace SailwindCoop.Sync
             RestoreKinematic();   // release the previous boat's bodies before rebinding
             _cachedBoat = boat;
             _haveTargets = false;
+            _rotBuf.Clear();
             _warnedMismatch.Clear();
             _gp = null;
             _fSticky = null;
@@ -666,6 +719,7 @@ namespace SailwindCoop.Sync
             _lastSentLen = System.Array.Empty<float>();
             ResetControlTracks();
             _haveTargets = false;
+            _rotBuf.Clear();
             _sendTimer = 0f;
             _reqTimer = 0f;
             _lastReqIndex = -1;

@@ -42,13 +42,29 @@ namespace SailwindCoop.Sync
 
         public EnvironmentSync(CoopNet net) { _net = net; }
 
+        // Client: wind moved from the value at the last snapshot to the new one over one interval.
+        private const float WindSnapDegrees = 90f;
+        private bool _haveWindTarget;
+        private float _windT = 1f;
+        private Vector3 _windFrom, _windTo, _baseFrom, _baseTo;
+        private Quaternion _rotFrom = Quaternion.identity, _rotTo = Quaternion.identity;
+
+        private void SmoothWind(float dt)
+        {
+            if (!_haveWindTarget) return;
+            _windT = Mathf.Min(1f, _windT + dt * Mathf.Max(1f, EnvHz));
+            global::Wind.currentWind = Vector3.Lerp(_windFrom, _windTo, _windT);
+            global::Wind.currentBaseWind = Vector3.Lerp(_baseFrom, _baseTo, _windT);
+            global::Wind.windRotation = Quaternion.Slerp(_rotFrom, _rotTo, _windT);
+        }
+
         // -----------------------------------------------------------------
         // Host: capture and broadcast
         // -----------------------------------------------------------------
 
         public void Tick(float dt)
         {
-            if (_net.Role == Role.Client) { if (Crest != null) Crest.Tick(); return; }
+            if (_net.Role == Role.Client) { SmoothWind(dt); if (Crest != null) Crest.Tick(); return; }
             if (_net.Role != Role.Host) return;
             if (_net.State != LinkState.Connected) return;
 
@@ -119,9 +135,17 @@ namespace SailwindCoop.Sync
                 wind.enabled = false;
                 _windDisabled = true;
             }
-            global::Wind.currentWind = msg.Wind;
-            global::Wind.currentBaseWind = msg.BaseWind;
-            global::Wind.windRotation = msg.WindRot;
+            // The snapshot is a target reached over one snapshot interval (SmoothWind): set at once,
+            // the wind stepped four times a second, seen in the cloth, the flags and the sound.
+            // The first snapshot and a large turn (a load, a storm front) are taken at once.
+            bool snap = !_haveWindTarget ||
+                        Vector3.Angle(global::Wind.currentWind, msg.Wind) > WindSnapDegrees;
+            _windFrom = global::Wind.currentWind; _windTo = msg.Wind;
+            _baseFrom = global::Wind.currentBaseWind; _baseTo = msg.BaseWind;
+            _rotFrom = global::Wind.windRotation; _rotTo = msg.WindRot;
+            _windT = snap ? 1f : 0f;
+            _haveWindTarget = true;
+            if (snap) SmoothWind(0f);
 
             // Time / sun: re-anchor; the client sun keeps advancing between snapshots.
             var sun = Sun.sun;
@@ -176,6 +200,8 @@ namespace SailwindCoop.Sync
             }
             _waves = null;
             _sendStamp = float.NegativeInfinity;
+            _haveWindTarget = false;
+            _windT = 1f;
 
             // Снимок хоста больше не действителен. Без сброса сессия, оборвавшаяся на паузе хоста,
             // оставила бы HostTimeScale = 0 навсегда: следующий клиент был бы заморожен

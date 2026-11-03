@@ -447,7 +447,7 @@ namespace SailwindCoop.Sync
                 {
                     if (body.isKinematic != puppet)
                     {
-                        body.isKinematic = puppet;
+                        SetKinematic(body, puppet);
                         if (puppet) { body.velocity = Vector3.zero; body.angularVelocity = Vector3.zero; }
                     }
                     // A kinematic puppet still shoves dynamic items; keep it purely visual so it can't
@@ -740,7 +740,9 @@ namespace SailwindCoop.Sync
                         _remoteUnsealedLast = Time.frameCount + RemoteUnsealFrames;
                         _remoteUnsealed[unsealed] = _remoteUnsealedLast;
                     }
-                    try { crate.UnsealCrate(); }   // amount decrements synchronously; items insert next frame (coroutine)
+                    // The seal break is the unsealing player's interface sound; on the host it played
+                    // in front of the host's camera.
+                    try { WithoutUiSound(UISounds.crateSealBreak, crate.UnsealCrate); }   // amount decrements synchronously; items insert next frame (coroutine)
                     catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] UnsealCrate: " + ex.Message); }
                     // Broadcast the crate's new amount now. The contained items are authored across the next
                     // frames (InsertItem coroutine sets currentCrateId); the periodic RefreshItems then
@@ -2101,6 +2103,82 @@ namespace SailwindCoop.Sync
         private const float MaxDropSpeed = 15f;        // clamp so a bad/teleport-derived velocity can't launch an item off the ship
         private const float SettleDepenetration = 1f;  // cap overlap-resolution speed so dropping into a pile can't fling the item away
 
+        private static AccessTools.FieldRef<UISoundPlayer, AudioSource[]> _uiSources;
+        private static AccessTools.FieldRef<UISoundPlayer, AudioClip[]> _uiClips;
+
+        /// <summary>
+        /// Runs a game method that plays one interface sound the local player must not hear (it is
+        /// another player's action replayed here). UISoundPlayer.PlayUISound is too small to patch
+        /// safely (Mono may inline it), so the interface sources are muted for the call and the one
+        /// that started the clip is stopped before they are unmuted. Never throws on the sound side.
+        /// </summary>
+        private static void WithoutUiSound(UISounds sound, Action action)
+        {
+            AudioSource[] sources = null;
+            bool[] muted = null;
+            AudioClip clip = null;
+            try
+            {
+                var player = UISoundPlayer.instance;
+                if (player != null)
+                {
+                    if (_uiSources == null) _uiSources = AccessTools.FieldRefAccess<UISoundPlayer, AudioSource[]>("audioSources");
+                    if (_uiClips == null) _uiClips = AccessTools.FieldRefAccess<UISoundPlayer, AudioClip[]>("uiSounds");
+                    sources = _uiSources(player);
+                    AudioClip[] clips = _uiClips(player);
+                    clip = clips != null && (int)sound < clips.Length ? clips[(int)sound] : null;
+                    if (sources != null && clip != null)
+                    {
+                        muted = new bool[sources.Length];
+                        for (int i = 0; i < sources.Length; i++)
+                            if (sources[i] != null) { muted[i] = sources[i].mute; sources[i].mute = true; }
+                    }
+                }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemSync] UI sound mute: " + e.Message); muted = null; }
+
+            try { action(); }
+            finally
+            {
+                if (muted != null)
+                {
+                    try
+                    {
+                        for (int i = 0; i < sources.Length; i++)
+                        {
+                            var s = sources[i];
+                            if (s == null) continue;
+                            if (s.isPlaying && s.clip == clip && s.time < 0.1f) s.Stop();
+                            s.mute = muted[i];
+                        }
+                    }
+                    catch (Exception e) { Plugin.Logger.LogWarning("[ItemSync] UI sound unmute: " + e.Message); }
+                }
+            }
+        }
+
+        /// <summary>
+        /// PhysX supports only speculative continuous detection on a kinematic body, and Unity logs
+        /// a warning for every switch made with another mode. The game gives an item with a mesh
+        /// collider ContinuousDynamic (ItemRigidbody.Start), so each puppet switch logged one; the
+        /// mode goes back when the item returns to physics, or a fast throw could pass through a wall.
+        /// </summary>
+        private static void SetKinematic(Rigidbody body, bool kinematic)
+        {
+            if (kinematic)
+            {
+                if (body.collisionDetectionMode == CollisionDetectionMode.Continuous ||
+                    body.collisionDetectionMode == CollisionDetectionMode.ContinuousDynamic)
+                    body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+                body.isKinematic = true;
+                return;
+            }
+            body.isKinematic = false;
+            if (body.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative &&
+                body.GetComponent<MeshCollider>() != null)
+                body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        }
+
         private static void MoveProxyToItem(ShipItem item, bool kinematic, Vector3 vel)
         {
             try
@@ -2120,7 +2198,7 @@ namespace SailwindCoop.Sync
                     proxy.transform.position = item.transform.position;
                     proxy.transform.rotation = item.transform.rotation;
                 }
-                body.isKinematic = kinematic;
+                SetKinematic(body, kinematic);
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
                 // detection off entirely; restore it when the item is freed to local physics.

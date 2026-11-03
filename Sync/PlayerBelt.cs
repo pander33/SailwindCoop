@@ -150,7 +150,8 @@ namespace SailwindCoop.Sync
                     view.Avatar = avatar;
                     view.Dirty = true;
                     if (avatar == null) return;
-                    view.Hips = FindDeep(avatar.transform, "Hips") ?? FindDeep(avatar.transform, "Spine_01");
+                    view.Hips = FindHips(avatar.transform, out string anchor);
+                    Plugin.Logger.LogInfo("[PlayerBelt] NetId=" + netId + " '" + avatar.name + "': belt at " + anchor);
                     view.Root = new GameObject("CoopBelt");
                     view.Root.layer = avatar.layer;
                     view.Root.transform.SetParent(avatar.transform, false);
@@ -166,7 +167,7 @@ namespace SailwindCoop.Sync
                 Transform root = view.Root.transform;
                 Vector3 lossy = avatar.transform.lossyScale;
                 root.localScale = new Vector3(1f / Mathf.Max(0.01f, lossy.x), 1f / Mathf.Max(0.01f, lossy.y), 1f / Mathf.Max(0.01f, lossy.z));
-                root.position = view.Hips != null ? view.Hips.position : avatar.transform.position + avatar.transform.up * 0.95f;
+                root.position = view.Hips != null ? view.Hips.position : avatar.transform.position + avatar.transform.up * FallbackHeight;
                 root.rotation = avatar.transform.rotation;
             }
             catch (Exception e)
@@ -320,6 +321,30 @@ namespace SailwindCoop.Sync
             Vector3 o = origin.lossyScale, s = source.lossyScale;
             part.localScale = new Vector3(s.x / Mathf.Max(1e-4f, o.x), s.y / Mathf.Max(1e-4f, o.y), s.z / Mathf.Max(1e-4f, o.z));
         }
+
+        // The game's NPC rig (Synty) names the pelvis "Hips"; a custom avatar.bundle model may be a
+        // humanoid with another naming, a Mixamo rig, or have no skeleton at all. Without a bone the
+        // copies go a fixed height above the model root, which stands at the player's feet.
+        private static readonly string[] HipNames = { "Hips", "mixamorig:Hips", "Pelvis", "pelvis", "Spine_01", "Spine" };
+
+        private static Transform FindHips(Transform avatar, out string anchor)
+        {
+            var animator = avatar.GetComponentInChildren<Animator>(true);
+            if (animator != null && animator.isHuman)
+            {
+                Transform bone = animator.GetBoneTransform(HumanBodyBones.Hips);
+                if (bone != null) { anchor = "humanoid bone '" + bone.name + "'"; return bone; }
+            }
+            foreach (string name in HipNames)
+            {
+                Transform bone = FindDeep(avatar, name);
+                if (bone != null) { anchor = "bone '" + name + "'"; return bone; }
+            }
+            anchor = FallbackHeight + " m above the model root (no hip bone)";
+            return null;
+        }
+
+        private const float FallbackHeight = 0.95f;
 
         private static Transform FindDeep(Transform root, string name)
         {

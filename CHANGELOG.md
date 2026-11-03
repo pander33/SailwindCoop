@@ -22,6 +22,15 @@ The protocol is now 96: every player must update. Earlier builds cannot join a 9
   that had once taken the same item out of its own belt.
 - While a client carries an item on deck, the host no longer takes it out of the boat a few
   times a second, which flooded the host's log with `ExitBoat` lines.
+- Yards, booms and the rudder move smoothly on a client: their angles are played back from
+  the host's timeline instead of jumping to each packet, and the host sends them more often.
+- The wind on a client changes smoothly between the host's updates instead of in steps, which
+  showed in sails, flags and the wind sound.
+- When a guest unseals a crate, the host no longer hears the seal break.
+- Belt items of another player hang at the hips on avatar models whose skeleton has no
+  `Hips` bone, instead of at the feet.
+- A client's log is no longer flooded with PhysX warnings about kinematic bodies when it
+  receives the host's items.
 - Sails and yards no longer shake on a client: the game's sail physics no longer fights the
   pose the host sends.
 - The sea a client sees follows the host's even when the host is asleep alone or far from the
