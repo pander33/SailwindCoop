@@ -2,7 +2,7 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-03
 
 The protocol is now 96: every player must update. Earlier builds cannot join a 96 host.
 
@@ -18,6 +18,10 @@ The protocol is now 96: every player must update. Earlier builds cannot join a 9
 
 ### Fixed
 
+- The cranks of the winches turn for everyone: a winch the host cranks is now seen turning on a
+  client instead of standing still, and one a guest cranks no longer jumps on the host's screen.
+  The handle angle follows the rope length on each machine, so neither side waits for a pose packet.
+  A host grabbing a winch a guest had just cranked no longer makes the rope length jump.
 - An item the host put into its belt and took out again no longer stays invisible for a client
   that had once taken the same item out of its own belt.
 - While a client carries an item on deck, the host no longer takes it out of the boat a few
