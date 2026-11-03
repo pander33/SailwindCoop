@@ -36,7 +36,6 @@ Sailwind LAN/Steam Co-op is a mod that adds multiplayer functionality to the gam
 - **Crew Status and Host Controls:** See who is loading or ready, their ping and boat; hosts can lock the session or remove a guest
 - **Gesture Wheel:** Hold G to wave, point, salute or shout "Land ho!" to your crew
 - **Hands on the Ship:** Other players' avatars reach for the item they carry and the winch, wheel or rope they hold
-- **Smooth Winches & Rigging:** Winch cranks turn smoothly in real time following rope length; booms, yards, sails, and rudder interpolate smoothly without jitter
 - **Shared Foraging (Sailwind 0.40):** Foraging spots, coconuts, and mushrooms are synchronized across all crew members with shared respawn timers
 - **Visible Belt Items & Lanterns:** Other players' belt items appear at their avatars' hips; burning lanterns on the belt cast dynamic light for everyone
 - **Deck Dice:** Place a folding table from the gesture wheel (G) on deck or shore to play dice with 2–5 players and optional coin stakes
@@ -263,7 +262,6 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 - **Тишина по умолчанию:** Обычная диагностика выключена; серьёзные ошибки пишутся с ограничением частоты
 - **Колесо жестов:** Удерживайте G, чтобы помахать, указать, отдать честь или крикнуть команде «Land ho!»
 - **Руки на снастях:** Аватары других игроков тянутся к предмету в руке и к лебёдке, штурвалу или верёвке, которую держит игрок
-- **Плавные лебёдки и паруса:** Рукоятки лебёдок крутятся плавно в реальном времени от длины верёвки; реи, гики, паруса и штурвал интерполируются без рывков
 - **Собирательство в кооперативе (Sailwind 0.40):** Грибы, кокосы и другие точки сбора синхронизированы у всех игроков, таймеры восстановления общие
 - **Видимые предметы на поясе и фонари:** Предметы в слотах пояса отображаются на поясе аватара; зажжённый фонарь на поясе освещает палубу для всей команды
 - **Игра в кости на палубе:** Раскладной столик из колеса жестов (G) на 2–5 игроков с возможностью ставок золотом
