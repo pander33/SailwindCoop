@@ -866,6 +866,116 @@ internal static class Program
                 for (int i = 0; i < 20; i++) if (fast.Advance(StepGround.Stone, 60f, 0.05f, 1.6f, 6f)) steps++;
                 Assert(steps == 3, "speed is capped: " + steps);
             });
+
+            Test("a winch crank follows the rope length, the hand, and refuses a jump", () => {
+                // The game (GPButtonRopeWinch.DeltaToLength) turns a crank turn into a length:
+                // currentLength -= deltaRotation / 360 / gearRatio. The mod must invert exactly that.
+                float gear = 5f, length = 0.6f;
+                foreach (float turn in new[] { -400f, -90f, -7.5f, -0.5f, 0f, 0.5f, 7.5f, 90f, 359f, 400f })
+                {
+                    float after = length - turn / 360f / gear;
+                    Assert(Math.Abs(WinchCrank.Turn(after - length, gear) - turn) < 0.001f, "turn " + turn + " is not inverted");
+                }
+                Assert(WinchCrank.Turn(-0.01f, gear) > 0f, "pulling the rope in must turn the crank the way the game does");
+                Assert(WinchCrank.Turn(0f, gear) == 0f, "a rope that did not move must not turn the crank");
+
+                // A rope length that arrives as packets must become motion on every frame, not a step
+                // per packet: a 20 Hz stream is 25° at 500 °/s, and a max-speed chase would close that
+                // inside one frame and leave the handle standing still for the rest of the interval.
+                Assert(WinchCrank.Chase(0f, 25f, 0.016f) < 12f, "a packet-sized step is closed in one frame");
+                Assert(WinchCrank.Chase(0f, 25f, 0.016f) > 1f, "a packet-sized step does not start moving");
+                Assert(WinchCrank.Chase(0f, -25f, 0.016f) > -12f && WinchCrank.Chase(0f, -25f, 0.016f) < -1f, "the approach is symmetric");
+                Assert(WinchCrank.Chase(3f, 3f, 0.016f) == 3f && WinchCrank.Chase(7f, 7f, 0f) == 7f, "a still or paused crank stays put");
+                Assert(WinchCrank.Chase(0f, WinchCrank.SnapDegrees / 2f, 0.016f) == WinchCrank.SnapDegrees / 2f, "the last fraction of a degree is not closed");
+                {
+                    // A second of a 20 Hz stream at 500 °/s: every frame moves, and no packet shows up
+                    // as a step of its own.
+                    var stream = new CrankState();
+                    stream.Bind(0.5f, 0f);
+                    stream.Advance(0.5f, false, 0f, 0.016f, gear, out _);      // the first length is a reference
+                    float due = 0.05f, supplied = 0.5f, previous = 0f, biggest = 0f;
+                    int still = 0;
+                    for (int frame = 0; frame < 60; frame++)
+                    {
+                        due += 0.016f;
+                        if (due >= 0.05f) { due = 0f; supplied -= 500f / 20f / 360f / gear; }
+                        bool wrote = stream.Advance(supplied, false, 0f, 0.016f, gear, out float moved) == CrankStep.Moved;
+                        if (wrote) { biggest = Math.Max(biggest, Math.Abs(moved - previous)); previous = moved; }
+                        else if (frame > 2) still++;
+                    }
+                    Assert(still <= 1, "the handle stood still between packets: " + still + " frames");
+                    Assert(biggest < 12f, "a packet still showed up as a step of " + biggest + " degrees");
+                    Assert(stream.Angle > 100f, "the crank did not follow the stream at all: " + stream.Angle);
+                }
+                Assert(WinchCrank.Chase(0f, 1000f, 0.016f) < 400f && WinchCrank.Chase(0f, 1000f, 0.016f) > 200f, "a jump is approached, not jumped");
+                Assert(WinchCrank.Chase(0f, 1000f, 0.5f) > 999f, "a long frame does not converge");
+
+                // GetRotationDelta's own reading of localEulerAngles.z, and the jump a refit is not a turn.
+                Assert(WinchCrank.Fold(0f) == 0f && WinchCrank.Fold(180f) == -180f, "fold at the half turn");
+                Assert(Math.Abs(WinchCrank.Fold(359f) + 1f) < 0.001f && Math.Abs(WinchCrank.Fold(271f) + 89f) < 0.001f, "fold past the turn");
+                Assert(WinchCrank.JumpLength > 0.1f && WinchCrank.JumpLength < 0.5f, "the jump threshold is a length, not a turn");
+
+                // The angle is measured from the bound pose, never from localEulerAngles: a handle that
+                // stands at 90 degrees must not snap by 90 on its first turn after a jump.
+                var crank = new CrankState();
+                crank.Bind(0.5f, WinchCrank.Fold(90f));
+                Assert(crank.Advance(0.9f, false, 90f, 0.016f, gear, out _) == CrankStep.Idle, "a join is a turn");
+                Assert(crank.Angle == 0f && crank.Target == 0f, "the join moved the handle: " + crank.Angle);
+                Assert(crank.Advance(0.89f, false, 90f, 0.016f, gear, out float pose) == CrankStep.Moved, "a turn was not driven");
+                Assert(Math.Abs(crank.Target - 18f) < 0.001f, "the turn is not measured from the bound pose: " + crank.Target);
+                Assert(pose > 0f && pose < 18f, "the approach started at the wrong end: " + pose);
+                crank.Seen = 90f + pose;
+
+                // Frames without a new packet keep closing the gap (the 20 Hz stutter this replaces),
+                // and once there it converges and writes nothing.
+                int caughtUp = 0;
+                while (crank.Advance(0.89f, false, 90f + crank.Angle, 0.016f, gear, out float moved) == CrankStep.Moved && caughtUp < 200)
+                {
+                    caughtUp++;
+                    Assert(moved > 0f && moved < 18f, "the approach overshot: " + moved);
+                }
+                Assert(caughtUp > 1, "a packet-sized turn was closed in one frame");
+                Assert(caughtUp < 100, "the approach never converged");
+                Assert(Math.Abs(crank.Angle - 18f) < 0.06f, "the approach stopped short: " + crank.Angle);
+                Assert(crank.Advance(0.89f, false, 90f + crank.Angle, 0.016f, gear, out _) == CrankStep.Idle, "an idle crank wrote a pose");
+
+                // A jump (a sail rolling up, a linked rope, a refit) is not a turn, and it keeps the
+                // handle where it stands instead of snapping it to the new length.
+                var rolled = new CrankState();
+                rolled.Bind(1f, 0f);
+                Assert(rolled.Advance(1f, false, 0f, 0.016f, gear, out _) == CrankStep.Idle, "the first length turned the crank");
+                Assert(rolled.Advance(0f, false, 0f, 0.016f, gear, out _) == CrankStep.Idle, "a rolled-up sail turned the crank");
+                Assert(rolled.Angle == 0f && rolled.Target == 0f, "the jump left a pending turn: " + rolled.Target);
+
+                // The hand: turns are followed through the transform, whole turns kept, and letting go
+                // carries on from there instead of from a derived angle.
+                var hand = new CrankState();
+                hand.Bind(0.5f, 0f);
+                Assert(hand.Advance(0.5f, true, 0f, 0.016f, gear, out _) == CrankStep.Followed, "a held crank was driven");
+                hand.Seen = 0f;
+                Assert(hand.Advance(0.5f, true, 170f, 0.016f, gear, out _) == CrankStep.Followed, "a held crank was driven");
+                hand.Seen = 170f;
+                Assert(hand.Advance(0.5f, true, -170f, 0.016f, gear, out _) == CrankStep.Followed, "a held crank was driven");
+                hand.Seen = WinchCrank.Fold(-170f);
+                Assert(Math.Abs(hand.Angle - 190f) < 0.001f, "a whole turn across the fold was lost: " + hand.Angle);
+                Assert(Math.Abs(hand.Target - hand.Angle) < 0.001f, "a held crank kept a target of its own");
+                Assert(hand.Advance(0.49f, false, -170f, 0.016f, gear, out float release) == CrankStep.Moved, "letting go did not follow the length");
+                Assert(release > 190f && release < 208f, "letting go did not continue from the hand: " + release);
+
+                // A session of cranking folds whole turns out of the accumulator, and the rotation the
+                // angle means stays: a float keeps sub-degree precision only below a few million degrees.
+                var many = new CrankState();
+                many.Bind(0.5f, 0f);
+                float turned = 0f;
+                for (int i = 0; i < 500; i++)
+                {
+                    turned = WinchCrank.Fold(turned + 100f);
+                    many.Advance(0.5f, true, turned, 0.016f, gear, out _);
+                    many.Seen = turned;
+                }
+                Assert(Math.Abs(many.Angle) <= 10000f + 200f, "the crank accumulator grew unbounded: " + many.Angle);
+                Assert(Math.Abs(WinchCrank.Fold(many.Angle - 50000f)) < 0.01f, "folding whole turns lost the rotation: " + many.Angle);
+            });
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Runtime smoke: " + _passed + " passed, " + _failed + " failed (.NET Framework; Unity Mono still needs in-game verification)");
