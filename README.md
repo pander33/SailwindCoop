@@ -216,6 +216,11 @@ Configuration file location: `Sailwind/BepInEx/config/com.sailwind.coop.cfg`
 Found a bug? Have a suggestion?
 Visit: https://github.com/pander33/SailwindCoop
 
+### 🙏 Thanks
+
+- **jankykev** — the fork [jankykev/SailwindCoop](https://github.com/jankykev/SailwindCoop),
+  whose reports and fixes led to many of the crate, hook, sail, wave and mission fixes in this mod.
+
 ---
 
 ## Русский
@@ -412,6 +417,12 @@ Sailwind LAN Co-op — это мод, добавляющий мультипле�
 
 Нашли баг? Есть предложения?
 Посетите: https://github.com/pander33/SailwindCoop
+
+### 🙏 Благодарности
+
+- **jankykev** — форк [jankykev/SailwindCoop](https://github.com/jankykev/SailwindCoop):
+  по сообщениям и исправлениям из него сделана большая часть правок ящиков, крюков, парусов,
+  волн и миссий.
 
 ---
 

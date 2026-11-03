@@ -577,6 +577,12 @@ namespace SailwindCoop.Sync
                 // the wall pose instead of the hand pose (vanilla would sync the visual next FixedUpdate).
                 bool placedAttach = IsProxyAttached(item);
                 if (placedAttach) MoveItemToProxy(item);
+                // The same tilt the client's drop puts back (see above): the release happens right after
+                // the item was turned to the camera's pitch. The host's own game goes on from the proxy,
+                // whose rotation is upright, but this one state carried the tilt, and every client
+                // resumed its local physics from it — a mug the host set down fell over and spilled on
+                // the clients only. Send the rotation the host is about to show.
+                else UprightFromProxy(item);
                 var state = BuildState(e, _net.Clock.ServerTick);
                 state.HolderNetId = 0;
                 if (placedAttach)
@@ -841,8 +847,24 @@ namespace SailwindCoop.Sync
                     SetProxyAttached(e.Item, false);
                     ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
                                   FoldableState.Capture(e.Item), e.Item.health, e.Item.sold, e.Item.nailed, held: false);
-                    try { hook.OnItemClick(e.Item); }
+                    // A repeated request finds the item already hanging; that counts as hung.
+                    var hangableItem = e.Item.GetComponent<HangableItem>();
+                    bool hung = hangableItem.IsHanging();
+                    try { if (!hung) hung = hook.OnItemClick(e.Item) && hangableItem.IsHanging(); }
                     catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] LampHook replay: " + ex.Message); }
+                    if (!hung)
+                    {
+                        // The hook is occupied here (its joint is on this machine only, so the client
+                        // could not see it). The item stays where the client released it, free; the
+                        // state tells the client it does not hang.
+                        ClearStaleHangFlags(e.Item);
+                        var freeState = BuildState(e, _net.Clock.ServerTick);
+                        freeState.HolderNetId = 0;
+                        freeState.Attached = false;
+                        _net.Broadcast(freeState, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        Remember("reject lamp-hook #" + e.Index + " hook=" + msg.CrateId + " occupied, actor=" + actor);
+                        return;
+                    }
                     SnapHangableToHook(e.Item, hook);
                     MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
                     SetProxyAttached(e.Item, true);
@@ -963,6 +985,9 @@ namespace SailwindCoop.Sync
                 var cargo = TryApplyCargoMembership(e.Item, msg.CargoPort);
                 if (cargo != ItemApplyStatus.Applied) return cargo;
                 SetProxyAttached(e.Item, msg.Attached);
+                // The host refused a hook this client hung the item on (occupied there), or another
+                // player took it: a joint made by this machine's own hook click must not stay.
+                if (!msg.Attached && msg.HolderNetId != _net.MyNetId) DisconnectHangable(e.Item);
             }
             if (ItemComponents.HasPendingBinding(e.Item)) return ItemApplyStatus.Pending;
             // The call below switches the root collider back on, which a log in a stove must not have.
@@ -1226,6 +1251,7 @@ namespace SailwindCoop.Sync
             SetRemoteInventoryVisual(item, hidden: false);
             RestoreInteractableLayer(item);
             SetRootCollider(item, true);
+            ClearStaleHangFlags(item);
             SetPuppet(item, false);
             // Boat-frame wire velocity is in boat-local axes; the proxy body simulates in the boat's
             // static walk copy, so map the direction into that frame's axes.
@@ -1314,6 +1340,23 @@ namespace SailwindCoop.Sync
                     item.transform.position = proxy.transform.position;
                     item.transform.rotation = proxy.transform.rotation;
                 }
+            }
+            catch { }
+        }
+
+        /// <summary>Host drop: take only the rotation of the proxy (the pose of the last physics step),
+        /// keeping the release point. See <see cref="NotifyDrop"/>.</summary>
+        private static void UprightFromProxy(ShipItem item)
+        {
+            try
+            {
+                var proxy = item != null ? item.GetItemRigidbody() : null;
+                if (proxy == null || item.held != null) return;
+                if (item.currentActualBoat != null && item.currentWalkCol != null)
+                    item.transform.rotation = item.currentActualBoat.rotation *
+                        (Quaternion.Inverse(item.currentWalkCol.rotation) * proxy.transform.rotation);
+                else
+                    item.transform.rotation = proxy.transform.rotation;
             }
             catch { }
         }
@@ -2622,7 +2665,15 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client || _net.State != LinkState.Connected || crate == null) return false;
             var sv = crate.GetComponent<SaveablePrefab>();
             if (sv == null || sv.instanceId <= 0) return false;
-            if (!_hostIds.Contains(sv.instanceId)) return false;
+            if (!_hostIds.Contains(sv.instanceId))
+            {
+                // The host does not know this crate under its id yet (a crate this client just
+                // bought waits for its host id). A vanilla unseal here would author the contents
+                // with ids of this client only, and every later crate action would name items and a
+                // crate the host has never seen. Skip the unseal; it works once the id has arrived.
+                Remember("hold unseal crate id=" + sv.instanceId + " (no host id yet)");
+                return true;
+            }
             _net.Broadcast(new ItemRequestMsg
             {
                 Action = ItemAction.Unseal,
@@ -2904,11 +2955,32 @@ namespace SailwindCoop.Sync
                 if (hangable != null && hangable.IsHanging())
                     hangable.DisconnectJoint();
                 SetProxyAttached(item, false);
+                ClearStaleHangFlags(item);
             }
             catch (Exception ex)
             {
                 Plugin.Logger.LogWarning("[ItemSync] DisconnectHangable: " + ex.Message);
             }
+        }
+
+        /// <summary>HangableItem.ConnectJoint sets the proxy's attached, disableCol and inStove; only its
+        /// own DisconnectJoint clears them, and that does nothing on a copy that never had the joint (the
+        /// item was hung on another machine). inStove skips the proxy's physics and disableCol keeps its
+        /// collider off, so such an item, taken off the hook and dropped, froze in the air. Clear the
+        /// three for a hangable that does not hang, is not in a crate and is not fuel in a stove.</summary>
+        private static void ClearStaleHangFlags(ShipItem item)
+        {
+            try
+            {
+                var hangable = item != null ? item.GetComponent<HangableItem>() : null;
+                if (hangable == null || hangable.IsHanging() || CrateIdOf(item) != 0 || ItemComponents.InStove(item)) return;
+                var irb = item.GetItemRigidbody();
+                if (irb == null || item.GetCurrentInventorySlot() >= 0) return;
+                irb.attached = false;
+                irb.disableCol = false;
+                irb.inStove = false;
+            }
+            catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] ClearStaleHangFlags: " + ex.Message); }
         }
 
         private static bool ShouldReplayNoArgHeldAction(ShipItem item, ItemAction action)
@@ -3356,6 +3428,7 @@ namespace SailwindCoop.Sync
 
             RemoveCachedLocalItem(oldId);   // drop stale BoatLocalItems cache entry so streaming won't re-add old id
             saveable.instanceId = hostId;
+            RetargetCrateContents(local, oldId, hostId);
 
             if (_byInstanceId.TryGetValue(oldId, out var old))
             {
@@ -3363,6 +3436,31 @@ namespace SailwindCoop.Sync
                 if (old.Item != null) _byItem.Remove(old.Item);
                 _net.Registry.Remove(old.NetId);
             }
+        }
+
+        /// <summary>Contents name their crate by its instanceId (<c>SaveablePrefab.currentCrateId</c>).
+        /// When a crate takes the host's id, items already inside still carry the old one, and a
+        /// crate action from this client would then name a crate the host does not have.</summary>
+        private void RetargetCrateContents(ShipItem crate, int oldId, int newId)
+        {
+            if (oldId == 0 || oldId == newId) return;
+            var inventory = crate != null ? crate.GetComponent<CrateInventory>() : null;
+            if (inventory == null) return;
+            try
+            {
+                foreach (var entry in _items)
+                {
+                    var sv = entry.Item != null ? entry.Item.GetComponent<SaveablePrefab>() : null;
+                    if (sv != null && sv.currentCrateId == oldId) sv.currentCrateId = newId;
+                }
+                if (inventory.containedItems != null)
+                    foreach (var item in inventory.containedItems)
+                    {
+                        var sv = item != null ? item.GetComponent<SaveablePrefab>() : null;
+                        if (sv != null && sv.currentCrateId == oldId) sv.currentCrateId = newId;
+                    }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemSync] RetargetCrateContents: " + e.Message); }
         }
 
         private void ReleaseUnsharedCollision(int hostId, ShipItem target)
@@ -3436,7 +3534,26 @@ namespace SailwindCoop.Sync
         private static int MissionIndexOf(ShipItem item)
         {
             var good = item != null ? item.GetComponent<Good>() : null;
-            return good != null ? good.GetMissionIndex() : -1;
+            if (good == null) return -1;
+            int index = good.GetMissionIndex();
+            if (index < 0 || MissionNamesProduct(item, index)) return index;
+            // A Good made without IslandMarket.SpawnGood (a mod's purchase, for one) keeps the prefab's
+            // serialized slot, usually 0. A slot whose mission carries another product cannot be this
+            // item's mission: the item is ordinary stock, here and on every machine it goes to.
+            good.RegisterAsMissionless();
+            try { item.UpdateLookText(); } catch { }
+            return -1;
+        }
+
+        /// <summary>False only when the mission in <paramref name="index"/> is known and carries a
+        /// different product; an unknown slot is left to the journal (<see cref="ApplyMissionIndex"/>).</summary>
+        private static bool MissionNamesProduct(ShipItem item, int index)
+        {
+            var missions = PlayerMissions.missions;
+            var mission = missions != null && index < missions.Length ? missions[index] : null;
+            var expected = mission != null && mission.goodPrefab != null ? mission.goodPrefab.GetComponent<SaveablePrefab>() : null;
+            var actual = item != null ? item.GetComponent<SaveablePrefab>() : null;
+            return expected == null || actual == null || expected.prefabIndex == actual.prefabIndex;
         }
 
         /// <summary>Client: give a good the mission slot the host's copy has. A Good prefab carries slot 0,
@@ -3457,6 +3574,13 @@ namespace SailwindCoop.Sync
                     // the slot, so the good stays plain until the mission is there (same as a vanilla load).
                     good.RegisterAsMissionless();
                     _pendingMissionGoods[instanceId] = missionIndex;
+                    return;
+                }
+                if (!MissionNamesProduct(item, missionIndex))
+                {
+                    bool changed = good.GetMissionIndex() != -1;
+                    good.RegisterAsMissionless();
+                    if (changed) item.UpdateLookText();
                     return;
                 }
                 if (good.GetMissionIndex() == missionIndex) return;
@@ -3662,6 +3786,10 @@ namespace SailwindCoop.Sync
                 BoatIndex = boatIndex,
                 Pos = pos,
                 Rot = rot,
+                Amount = FoldableState.Capture(item),
+                Health = item.health,
+                Sold = item.sold,
+                MissionIndex = MissionIndexOf(item),
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("out client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
         }
@@ -3728,8 +3856,20 @@ namespace SailwindCoop.Sync
                 _authoringItem = item;
                 _authoredIdentity[item] = new KeyValuePair<uint, uint>(actor, msg.RequestId);
                 item.sold = true;
+                // As IslandMarket.SpawnGood does: a Good prefab carries a serialized mission slot
+                // (usually 0), and a bought good is ordinary stock.
+                var good = go.GetComponent<Good>();
+                if (good != null) good.RegisterAsMissionless();
                 saveable.prefabIndex = msg.PrefabIndex;
                 saveable.RegisterToSave();   // assigns a fresh nonzero host id
+                ApplyScalarState(item, msg.Amount, msg.Health, msg.Sold, item.nailed);
+                // A mission good the client took from its belt keeps its mission: the game's own
+                // registration, as for a good the mission handed out. A slot that is empty here or
+                // names another product leaves it ordinary stock (set above).
+                var missions = PlayerMissions.missions;
+                if (good != null && msg.MissionIndex >= 0 && missions != null && msg.MissionIndex < missions.Length &&
+                    missions[msg.MissionIndex] != null && MissionNamesProduct(item, msg.MissionIndex))
+                    good.RegisterToMission(msg.MissionIndex, missions[msg.MissionIndex].dueDay);
                 RefreshItems(force: true);
                 var authored = _byItem[item];
                 authored.AuthorRequester = actor;

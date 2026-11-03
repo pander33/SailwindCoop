@@ -516,6 +516,12 @@ namespace SailwindCoop.Net
         public float CrestWindWavesWeight;
         // Time.timeScale хоста: 0 на JoinPause и в его меню, тогда часы воды у клиента стоят.
         public float HostTimeScale;
+        // The two inputs of OceanUpdaterCrest.DCTInertiaUpdate that belong to the local player:
+        // the inertia waves scale with GameState.distanceToLand and drop to a quarter while
+        // GameState.eyesFullyClosed. The client runs the updater with the host's values, so its
+        // sea is the one the host's boat floats on (Protocol 95).
+        public float CrestDistanceToLand;
+        public bool CrestEyesClosed;
 
         public MsgType Type => MsgType.EnvState;
 
@@ -541,6 +547,8 @@ namespace SailwindCoop.Net
             w.Put(CrestTargetInertiaAngle);
             w.Put(CrestWindWavesWeight);
             w.Put(HostTimeScale);
+            w.Put(CrestDistanceToLand);
+            w.Put(CrestEyesClosed);
         }
 
         public void Deserialize(NetDataReader r)
@@ -565,6 +573,8 @@ namespace SailwindCoop.Net
             CrestTargetInertiaAngle = r.GetFloat();
             CrestWindWavesWeight = r.GetFloat();
             HostTimeScale = r.GetFloat();
+            CrestDistanceToLand = r.GetFloat();
+            CrestEyesClosed = r.GetBool();
         }
     }
 
@@ -1664,6 +1674,10 @@ namespace SailwindCoop.Net
         public ushort BoatIndex;
         public Vector3 Pos;
         public Quaternion Rot;
+        public float Amount;
+        public float Health;
+        public bool Sold = true;
+        public int MissionIndex = -1;
 
         public MsgType Type => MsgType.FishCatch;
 
@@ -1675,6 +1689,10 @@ namespace SailwindCoop.Net
             w.Put(BoatIndex);
             w.PutVector3(Pos);
             w.PutQuaternion(Rot);
+            w.Put(Amount);
+            w.Put(Health);
+            w.Put(Sold);
+            w.Put(MissionIndex);
         }
 
         public void Deserialize(NetDataReader r)
@@ -1685,6 +1703,10 @@ namespace SailwindCoop.Net
             BoatIndex = r.GetUShort();
             Pos = r.GetVector3();
             Rot = r.GetQuaternion();
+            Amount = r.GetFloat();
+            Health = r.GetFloat();
+            Sold = r.GetBool();
+            MissionIndex = r.GetInt();
         }
     }
 

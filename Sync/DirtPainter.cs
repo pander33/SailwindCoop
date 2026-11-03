@@ -6,6 +6,13 @@ namespace SailwindCoop.Sync
     /// <summary>Shipping MasterPainter stroke with the originating player's color mode, without a new raycast.</summary>
     internal static class DirtPainter
     {
+        /// <summary>CleanableObject.Start makes its dirt texture later, and some objects never get one.</summary>
+        internal static bool HasTexture(CleanableObject target)
+        {
+            try { return target != null && target.GetCurrentDirtTex() != null; }
+            catch { return false; }
+        }
+
         internal static byte[] Capture(CleanableObject target)
         {
             var source = target.GetCurrentDirtTex();

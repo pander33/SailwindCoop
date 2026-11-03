@@ -33,7 +33,7 @@ namespace SailwindCoop.Sync
                 prefix: Hook(nameof(PreOrder), Priority.First), postfix: Hook(nameof(EndOrder), Priority.Last), finalizer: Hook(nameof(EndFault))));
             hooks.Install(typeof(ShipyardSailInstaller), "InstallSails", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreInstall))));
             hooks.Install(typeof(SaveableBoatCustomization), "GetData", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreData))));
-            hooks.Install(typeof(Sail), "FixedUpdate", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreSail))));
+            hooks.Install(typeof(Sail), "FixedUpdate", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreSail)), postfix: Hook(nameof(PostSail))));
             PatchHealth.Report("Shipyard refit", hooks);
         }
         private static HarmonyMethod Hook(string name, int priority = Priority.Normal)
@@ -74,6 +74,20 @@ namespace SailwindCoop.Sync
         {
             try { return !ShipyardSync.PauseSail(__instance); }
             catch (Exception error) { try { Report(error); } catch { } return true; }
+        }
+        // Sail.FixedUpdate sets isKinematic = false on its own body every physics step and pushes it
+        // with the local wind. On a client that body is a ControlsSync node following the host's pose,
+        // so the two fought each step and the yard shook. The game's calculation still runs (cloth,
+        // sound and apparent wind read it); only a held body is made kinematic again.
+        private static void PostSail(Sail __instance)
+        {
+            try
+            {
+                if (__instance == null) return;
+                var body = __instance.GetComponent<Rigidbody>();
+                if (body != null && !body.isKinematic && ControlsSync.HoldsBody(body)) body.isKinematic = true;
+            }
+            catch (Exception error) { try { Report(error); } catch { } }
         }
     }
 }

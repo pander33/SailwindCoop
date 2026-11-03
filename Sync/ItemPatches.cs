@@ -46,6 +46,8 @@ namespace SailwindCoop.Sync
             TryPatch(harmony, hooks, typeof(CrateInventory), "WithdrawItem", new[] { typeof(ShipItem) }, postfixName: nameof(PostCrateWithdraw));
             TryPatch(harmony, hooks, typeof(ShipItemCrate), "UnsealCrate", Type.EmptyTypes, prefixName: nameof(PreUnseal));
             TryPatch(harmony, hooks, typeof(CrateInventoryUI), "ShowInventory", new[] { typeof(CrateInventory) }, prefixName: nameof(PreShowInventory));
+            TryPatch(harmony, hooks, typeof(CrateInventoryUI), "RefreshButtons", Type.EmptyTypes,
+                prefixName: nameof(PreRefreshCrateButtons), postfixName: nameof(PostRefreshCrateButtons));
             // Cargo load/unload uses each player's OWN wallet (local money) → vanilla runs locally; we only
             // mirror the resulting membership (like crates). Postfix on insert; withdraw captures the item
             // in a prefix (it isn't an argument) and forwards it in the postfix.
@@ -562,6 +564,36 @@ namespace SailwindCoop.Sync
         {
             try { return !ItemSync.DropsCrateWindow(__0); }
             catch (Exception e) { WarnPatch("[ItemPatches] PreShowInventory: " + e.Message); return true; }
+        }
+
+        // RefreshButtons activates and clears only the rows the crate's mesh has, then hands
+        // containedItems[j] to buttons[j] whether that button is shown or not. A hidden button keeps
+        // the item it had last time, and an item past the visible rows (a mirrored membership can
+        // hold more than the crate shows) gets a hidden button whose UpdateItemPos then drags the
+        // item to a place nobody can click. Clear hidden buttons before, and return any item a hidden
+        // button received to the crate after.
+        private static void PreRefreshCrateButtons(CrateInventoryUI __instance)
+        {
+            try
+            {
+                var buttons = __instance != null ? __instance.buttons : null;
+                if (buttons == null) return;
+                foreach (var button in buttons)
+                    if (button != null && !button.gameObject.activeSelf) button.ShowItem(null);
+            }
+            catch (Exception e) { WarnPatch("[ItemPatches] PreRefreshCrateButtons: " + e.Message); }
+        }
+
+        private static void PostRefreshCrateButtons(CrateInventoryUI __instance)
+        {
+            try
+            {
+                var buttons = __instance != null ? __instance.buttons : null;
+                if (buttons == null || __instance.currentCrate == null) return;
+                foreach (var button in buttons)
+                    if (button != null && !button.gameObject.activeSelf) button.PutItemBack(__instance.currentCrate);
+            }
+            catch (Exception e) { WarnPatch("[ItemPatches] PostRefreshCrateButtons: " + e.Message); }
         }
 
         // Cargo load/unload runs locally (own wallet); we only mirror the resulting membership.

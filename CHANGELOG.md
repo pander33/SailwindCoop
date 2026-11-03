@@ -2,6 +2,30 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+The protocol is now 95: every player must update. Earlier builds cannot join a 95 host.
+
+Many of these fixes come from the reports and fixes in jankykev's fork
+([jankykev/SailwindCoop](https://github.com/jankykev/SailwindCoop)). Thank you!
+
+### Fixed
+
+- Sails and yards no longer shake on a client: the game's sail physics no longer fights the
+  pose the host sends.
+- The sea a client sees follows the host's even when the host is asleep alone or far from the
+  client: the height of the inertia waves now uses the host's distance to land and sleep state.
+- A mug or bowl the host sets down no longer falls over and spills on the other players' screens.
+- An item taken off a lamp hook on another player's machine no longer freezes in the air when
+  dropped; a client can no longer hang a second item on a hook the host already uses.
+- A good a client buys is ordinary stock for the host too, not cargo of the first mission. A
+  mission good taken from a belt slot keeps its mission and its state.
+- A crate a client bought can only be unsealed once the host knows it; unsealing it earlier
+  created contents the host never had. Items inside a crate keep pointing at it when it gets
+  the host's id, and the crate window no longer drags extra items to hidden slots.
+- Dirt sync skips objects that have no dirt texture instead of failing every half second.
+- Goods whose mission slot names another product are treated as ordinary stock.
+
 ## [0.6.0] - 2026-10-18
 
 The protocol is still 92, so 0.6.0 connects to 0.5.0 - 0.5.3. Everything new works on the machine

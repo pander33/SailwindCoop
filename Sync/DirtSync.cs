@@ -54,7 +54,8 @@ namespace SailwindCoop.Sync
         }
         private Surface Bind(CleanableObject target)
         {
-            if (!Registered(target) || ItemComponents.Read<Material>(target, "dirtMaterial") == null) return null;
+            if (!Registered(target) || ItemComponents.Read<Material>(target, "dirtMaterial") == null ||
+                !DirtPainter.HasTexture(target)) return null;
             int id = ItemComponents.Read<SaveableObject>(target, "saveable").sceneIndex;
             if (_surfaces.TryGetValue(id, out var old))
             {
@@ -112,6 +113,7 @@ namespace SailwindCoop.Sync
         }
         private static bool Capture(Surface surface)
         {
+            if (surface == null || !DirtPainter.HasTexture(surface.Target)) return false;
             byte[] png = DirtPainter.Capture(surface.Target);
             if (surface.Png != null && surface.Png.SequenceEqual(png)) return false;
             surface.Png = png; surface.Revision++; surface.Dirty = true; return true;
@@ -223,7 +225,8 @@ namespace SailwindCoop.Sync
         {
             if (ShipyardSync.PendingClean(surface.Target)) return false;
             if (!Eligible(surface, msg)) return true; // Finished obsolete transfer cannot replace prediction.
-            if (surface.Target == null || ItemComponents.Read<Material>(surface.Target, "dirtMaterial") == null) return false;
+            if (surface.Target == null || ItemComponents.Read<Material>(surface.Target, "dirtMaterial") == null ||
+                !DirtPainter.HasTexture(surface.Target)) return false;
             if (!DirtPainter.Capture(surface.Target).SequenceEqual(png))
             {
                 var texture = DirtPainter.Decode(png);

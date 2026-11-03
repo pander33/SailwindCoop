@@ -588,13 +588,23 @@ namespace SailwindCoop.Sync
                 if (n.Rb == null) continue;
                 _kinematicSaved.Add(new KeyValuePair<Rigidbody, bool>(n.Rb, n.Rb.isKinematic));
                 n.Rb.isKinematic = true;
+                _heldBodies.Add(n.Rb);
             }
         }
+
+        // Every body some client context holds kinematic. Sail.FixedUpdate clears isKinematic on its
+        // own body each physics step and pushes it with the local wind; ShipyardRefitPatches.PostSail
+        // asks here to put a held sail back before the step runs.
+        private static readonly HashSet<Rigidbody> _heldBodies = new HashSet<Rigidbody>();
+        internal static bool HoldsBody(Rigidbody body) => body != null && _heldBodies.Contains(body);
 
         private void RestoreKinematic()
         {
             foreach (var kv in _kinematicSaved)
+            {
+                _heldBodies.Remove(kv.Key);
                 if (kv.Key != null) kv.Key.isKinematic = kv.Value;
+            }
             _kinematicSaved.Clear();
         }
 

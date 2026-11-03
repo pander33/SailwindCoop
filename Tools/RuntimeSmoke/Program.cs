@@ -390,7 +390,7 @@ internal static class Program
                 }
                 finally { _fixtureClient = false; harmony.UnpatchSelf(); }
             });
-            Test("installed game matches all 95 types and 184 declared input signatures", VerifyGameInputCatalog);
+            Test("installed game matches all 96 types and 185 declared input signatures", VerifyGameInputCatalog);
             Test("installed game sleep and item actions use the catalogued overloads", VerifyGameActionEntries);
             Test("installed game recipe/component fields match typed adapters", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
@@ -922,7 +922,7 @@ internal static class Program
                 }
             }
             Assert(actual.SetEquals(InteractionActionCatalog.Types), "type inventory differs from installed game");
-            Assert(actual.Count == 95 && InteractionActionCatalog.Inputs.Length == 184, "audited baseline changed");
+            Assert(actual.Count == 96 && InteractionActionCatalog.Inputs.Length == 185, "audited baseline changed");
             foreach (var input in InteractionActionCatalog.Inputs)
                 Assert(Declares(types[input.TypeName], input), input.TypeName + "." + input.Method + " signature absent");
         }

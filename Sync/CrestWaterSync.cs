@@ -238,6 +238,8 @@ namespace SailwindCoop.Sync
                 msg.CrestTargetInertiaAngle = (float)TargetInertiaAngleField.GetValue(updater);
                 var windWaves = (ShapeGerstnerBatched)WindWavesField.GetValue(updater);
                 msg.CrestWindWavesWeight = windWaves != null ? windWaves._weight : 0f;
+                msg.CrestDistanceToLand = GameState.distanceToLand;
+                msg.CrestEyesClosed = GameState.eyesFullyClosed;
             }
             catch (Exception e)
             {
@@ -254,6 +256,9 @@ namespace SailwindCoop.Sync
             _hostTimeScale = msg.HostTimeScale;
             if (!msg.HasCrest) return;
             _haveHostTime = true;
+            _hostDistanceToLand = msg.CrestDistanceToLand;
+            _hostEyesClosed = msg.CrestEyesClosed;
+            _haveHostInputs = true;
 
             // Часы. CrestOceanTime снят хостом в момент ОТПРАВКИ, а доехал он за полпути RTT и
             // пролежит до следующего снапшота (4 Гц). Догонять голое значение — значит сойтись к
@@ -482,7 +487,59 @@ namespace SailwindCoop.Sync
             _haveHostTime = false;
             _hostTimeScale = 1f;
             _slewError = 0f;
+            _haveHostInputs = false;
             for (int i = 0; i < 9; i++) { _probeValid[i] = false; _probeHeights[i] = 0f; }
+        }
+
+        // =================================================================================
+        // Local inputs of the wave cycle. OceanUpdaterCrest.DCTInertiaUpdate scales the inertia
+        // waves by GameState.distanceToLand and by a quarter while GameState.eyesFullyClosed — both
+        // of the LOCAL player. A host asleep alone floated its boat on quarter-height waves while
+        // the client on the same deck saw full ones; players far apart saw different seas. On a
+        // client the updater runs with the host's two values, restored right after.
+        // =================================================================================
+        private static bool _haveHostInputs;
+        private static float _hostDistanceToLand;
+        private static bool _hostEyesClosed;
+
+        private struct LocalInputs { internal bool Swapped; internal float Distance; internal bool Eyes; }
+
+        internal static void Apply(HarmonyLib.Harmony harmony)
+        {
+            var update = typeof(OceanUpdaterCrest).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, null, Type.EmptyTypes, null);
+            if (update == null) throw new MissingMethodException(nameof(OceanUpdaterCrest), "Update");
+            var self = typeof(CrestWaterSync);
+            harmony.Patch(update,
+                prefix: new HarmonyLib.HarmonyMethod(self.GetMethod(nameof(PreUpdaterUpdate), BindingFlags.Static | BindingFlags.NonPublic)),
+                finalizer: new HarmonyLib.HarmonyMethod(self.GetMethod(nameof(EndUpdaterUpdate), BindingFlags.Static | BindingFlags.NonPublic)));
+        }
+
+        private static void PreUpdaterUpdate(out LocalInputs __state)
+        {
+            __state = default(LocalInputs);
+            try
+            {
+                if (!_haveHostInputs) return;
+                __state = new LocalInputs { Swapped = true, Distance = GameState.distanceToLand, Eyes = GameState.eyesFullyClosed };
+                GameState.distanceToLand = _hostDistanceToLand;
+                GameState.eyesFullyClosed = _hostEyesClosed;
+            }
+            catch { }
+        }
+
+        // A finalizer, so the player's own values come back even if the game's method throws.
+        private static Exception EndUpdaterUpdate(LocalInputs __state, Exception __exception)
+        {
+            try
+            {
+                if (__state.Swapped)
+                {
+                    GameState.distanceToLand = __state.Distance;
+                    GameState.eyesFullyClosed = __state.Eyes;
+                }
+            }
+            catch { }
+            return __exception;
         }
     }
 }

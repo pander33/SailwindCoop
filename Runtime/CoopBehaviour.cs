@@ -293,6 +293,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("BoatActivity", () => BoatActivityPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Wind sound", () => WindSoundPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Origin catch-up", () => OriginCatchUp.Apply(_harmony), patchFault);
+            PatchHealth.Install("Crest wave inputs", () => CrestWaterSync.Apply(_harmony), patchFault);
             PatchHealth.Install("Game menu", () => GameMenuUI.Apply(_harmony), patchFault);
 
             PatchGuard.Run(() => {

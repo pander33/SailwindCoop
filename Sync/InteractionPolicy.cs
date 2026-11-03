@@ -37,7 +37,7 @@ namespace SailwindCoop.Sync
         private static readonly System.Collections.Generic.HashSet<string> Local =
             new System.Collections.Generic.HashSet<string>
             {
-                "GPButtonAntiAliasing", "GPButtonLightQuality", "GPButtonScreenResolution",
+                "GPButtonAntiAliasing", "GPButtonBloomIntensity", "GPButtonLightQuality", "GPButtonScreenResolution",
                 "GPButtonResolutionUI", "GPButtonWindowMode", "GPButtonTargetFramerate",
                 "GPButtonKeybinding", "GPButtonResetKeybindings", "GPButtonSliderVolume",
                 "GPButtonSettingsCheckbo", "GPButtonInterface", "GPButtonExtraMenus",
