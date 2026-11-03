@@ -147,6 +147,14 @@ namespace SailwindCoop.Sync
             return rope == _rope && (LocalHeld || _gate.HasPending);
         }
 
+        /// <summary>Somebody, here or on another machine, carries this rope's anchor: its length then
+        /// follows the walk, not a crank, and the winch must not turn from it (ControlsWinches.cs).</summary>
+        public bool AnchorCarried(RopeControllerAnchor rope)
+        {
+            if (_fleet != null) { foreach (var c in _fleet.Values) if (c.AnchorCarried(rope)) return true; return false; }
+            return rope == _rope && (LocalHeld || _holder != 0);
+        }
+
         // Vanilla rewrites kinematic/trigger/interpolation each fixed step and can set the anchor.
         // Let it run for a local hand and for free host physics; remote copies are driven here.
         public bool SuppressPhysics(Anchor anchor)

@@ -939,7 +939,7 @@ internal static class Program
                 Assert(Math.Abs(crank.Angle - 18f) < 0.06f, "the approach stopped short: " + crank.Angle);
                 Assert(crank.Advance(0.89f, false, 90f + crank.Angle, 0.016f, gear, out _) == CrankStep.Idle, "an idle crank wrote a pose");
 
-                // A jump (a sail rolling up, a linked rope, a refit) is not a turn, and it keeps the
+                // A jump (a load, a resync, a refit) is not a turn, and it keeps the
                 // handle where it stands instead of snapping it to the new length.
                 var rolled = new CrankState();
                 rolled.Bind(1f, 0f);

@@ -13,9 +13,11 @@ namespace SailwindCoop.Sync
     /// </summary>
     internal static class WinchCrank
     {
-        /// <summary>A length step bigger than this did not come from a crank: a sail rolling up, a
-        /// linked rope, a load or a refit (see <c>RopeControllerSailReef</c>,
-        /// <c>RopeControllerSailAngle.LinkedLoosen</c>).</summary>
+        /// <summary>A length step bigger than this did not come from a crank: a load, a resync or a
+        /// refit. (A carried anchor lengthens its rope in small steps; ControlsWinches.cs stops the
+        /// crank for that by the anchor's holder, not by this threshold.) The length
+        /// runs 0..1, so this is a quarter of the whole rope; a quick release at gear 5 moves about
+        /// 0.05 per state packet.</summary>
         internal const float JumpLength = 0.25f;
 
         /// <summary>The crank turn (°) a rope length step stands for: <c>DeltaToLength</c> inverted.
@@ -149,7 +151,7 @@ namespace SailwindCoop.Sync
             Length = length;
 
             // The first length of a boat is a join or a resync (a saved length against the host's live
-            // one), and a step this big is a sail rolling up, a linked rope, a load or a refit: neither
+            // one), and a step this big is a load, a resync or a refit: neither
             // is a hand on the crank. Keep the handle where it stands and stop chasing.
             bool firstLook = !Ready;
             Ready = true;

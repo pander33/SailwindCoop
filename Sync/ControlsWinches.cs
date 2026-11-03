@@ -78,7 +78,10 @@ namespace SailwindCoop.Sync
 
                 // This winch itself first (the common case while the local player cranks), then the
                 // rope: two winches may share one rope, and a crank in the hand must never be driven.
-                bool heldHere = held == winch || Grabbed(winch.rotHandle) || IsLocalRopeHeld(rope, held);
+                // A carried anchor lengthens its rope as the player walks (Anchor.Update); the game does
+                // not turn the winch for that, so the crank stands as if held and keeps its reference.
+                bool heldHere = held == winch || Grabbed(winch.rotHandle) || IsLocalRopeHeld(rope, held) ||
+                    (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.AnchorCarried(anchorRope) ?? false));
 
                 CrankStep step = _crank[i].Advance(rope.currentLength, heldHere, z, dt,
                     winch.gearRatio, out float poseAngle);

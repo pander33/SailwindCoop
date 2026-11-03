@@ -35,6 +35,8 @@ The protocol is now 96: every player must update. Earlier builds cannot join a 9
   `Hips` bone, instead of at the feet.
 - A client's log is no longer flooded with PhysX warnings about kinematic bodies when it
   receives the host's items.
+- The anchor winch handle no longer spins on the other machines while a player carries the
+  anchor.
 - Sails and yards no longer shake on a client: the game's sail physics no longer fights the
   pose the host sends.
 - The sea a client sees follows the host's even when the host is asleep alone or far from the
