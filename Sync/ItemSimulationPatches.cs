@@ -82,28 +82,52 @@ namespace SailwindCoop.Sync
             if (!ClientSession) { __state = default(Before); return true; }
             return PreSimulationClient(__instance, out __state);
         }
+        // Per-frame, per-item hooks: a plain try/catch, not PatchGuard — its closure and delegates were
+        // most of a client's garbage (65 food items, every frame).
         private static bool PreSimulationClient(object __instance, out Before __state)
         {
-            var state = new Before(); bool run = true;
-            PatchGuard.Run(() => {
+            __state = default(Before);
+            try
+            {
                 var item = Item(__instance);
-                if (!SharedClient(item)) return;
+                if (!SharedClient(item)) return true;
+                var state = new Before();
                 state.Item = item; state.Captured = true; state.Health = item.health; state.Amount = item.amount;
                 state.PipeLocal = item is ShipItemPipe && item.held != null;
                 if (__instance is CookableFood cook) state.Heat = cook.GetCurrentHeat();
                 else if (__instance is ShipItemStove stove) state.Heat = stove.GetHeat();
                 else if (__instance is ShipItemLight light) state.LightOn = LightSync.IsOn(light);
+                __state = state;
                 // Fuel destruction belongs to the host; don't run the client's terminal branch.
-                if (__instance is StoveFuel && item.health <= 0f) run = false;
-            }, Report);
-            __state = state; return run;
+                return !(__instance is StoveFuel && item.health <= 0f);
+            }
+            catch (Exception error) { Report(error); return true; }
+        }
+        // currentHeat is put back every frame for every shared cooking item: a field ref, not
+        // FieldInfo.SetValue, which boxes the float.
+        private static AccessTools.FieldRef<CookableFood, float> _cookHeat;
+        private static AccessTools.FieldRef<ShipItemStove, float> _stoveHeat;
+        private static bool _heatRefsTried;
+        private static void SetHeat(object instance, float heat)
+        {
+            if (!_heatRefsTried)
+            {
+                _heatRefsTried = true;
+                try { _cookHeat = AccessTools.FieldRefAccess<CookableFood, float>("currentHeat"); } catch (Exception e) { Report(e); }
+                try { _stoveHeat = AccessTools.FieldRefAccess<ShipItemStove, float>("currentHeat"); } catch (Exception e) { Report(e); }
+            }
+            if (instance is CookableFood cook && _cookHeat != null) _cookHeat(cook) = heat;
+            else if (instance is ShipItemStove stove && _stoveHeat != null) _stoveHeat(stove) = heat;
+            else ItemComponents.Set(instance, "currentHeat", heat);
         }
         private static void PostSimulation(object __instance, Before __state)
         {
             if (__state.Captured) PostSimulationClient(__instance, __state);
         }
         private static void PostSimulationClient(object __instance, Before __state)
-            => PatchGuard.Run(() => {
+        {
+            try
+            {
                 if (!__state.Captured || __state.Item == null) return;
                 if (__state.PipeLocal)
                 {
@@ -113,12 +137,14 @@ namespace SailwindCoop.Sync
                 }
                 if (__instance is CookableFood)
                 {
-                    ItemComponents.Set(__instance, "currentHeat", __state.Heat);
+                    SetHeat(__instance, __state.Heat);
                     if (__instance is CookableFoodKettle kettle) ItemComponents.BoilSound(kettle);
                 }
-                else if (__instance is ShipItemStove) ItemComponents.Set(__instance, "currentHeat", __state.Heat);
+                else if (__instance is ShipItemStove) SetHeat(__instance, __state.Heat);
                 else if (__instance is ShipItemLight light) LightSync.ApplyState(light, __state.LightOn, __state.Health);
                 else if (__instance is StoveFuel) __state.Item.health = __state.Health;
-            }, Report);
+            }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
     }
 }

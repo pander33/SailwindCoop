@@ -25,14 +25,18 @@ namespace SailwindCoop.Sync
         }
         private static HarmonyMethod Callback(string name) => new HarmonyMethod(typeof(DirtPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic));
         private static void Report(Exception error) { try { Plugin.Logger?.LogWarning("[DirtPatches] " + error); } catch { } }
+        // Cleaner.LateUpdate runs every frame for every broom: plain try/catch, not PatchGuard (no
+        // closure per call). Report never throws.
         private static void PreHold(Cleaner __instance, out InteractionContext.Scope __state)
         {
-            InteractionContext.Scope state = null;
-            PatchGuard.Run(() => {
+            __state = null;
+            try
+            {
                 var item = ItemComponents.Read<ShipItem>(__instance, "item");
                 if (item?.held != null && !InteractionContext.Suppressed)
-                    state = InteractionContext.Begin(item.held.GetHeldItem() == item ? InteractionSource.ActiveHold : InteractionSource.RemoteApply);
-            }, Report); __state = state;
+                    __state = InteractionContext.Begin(item.held.GetHeldItem() == item ? InteractionSource.ActiveHold : InteractionSource.RemoteApply);
+            }
+            catch (Exception e) { Report(e); }
         }
         private static void PreOrder(out InteractionContext.Scope __state)
         {
@@ -40,7 +44,11 @@ namespace SailwindCoop.Sync
             // Concrete UI command. Failed affordability checks never reach CleanFully.
             PatchGuard.Run(() => { if (!InteractionContext.Suppressed) state = InteractionContext.Begin(InteractionSource.LocalInput); }, Report); __state = state;
         }
-        private static void EndScope(InteractionContext.Scope __state) => PatchGuard.Run(() => __state?.Dispose(), Report);
+        private static void EndScope(InteractionContext.Scope __state)
+        {
+            try { __state?.Dispose(); }
+            catch (Exception e) { Report(e); }
+        }
         private static bool PreStroke(CleanableObject paintedObject, out Stroke __state)
         {
             Stroke state = null; bool run = true;

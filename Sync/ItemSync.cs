@@ -143,6 +143,7 @@ namespace SailwindCoop.Sync
         private readonly ItemMembership<ShipItem> _crateMembership = new ItemMembership<ShipItem>();
         private readonly ItemMembership<ShipItem> _cargoMembership = new ItemMembership<ShipItem>();
         private readonly Dictionary<int, ItemStateMsg> _pendingStates = new Dictionary<int, ItemStateMsg>();
+        private readonly List<ItemStateMsg> _pendingStateBuffer = new List<ItemStateMsg>();
         private readonly Dictionary<int, SpawnObjectMsg> _pendingSpawns = new Dictionary<int, SpawnObjectMsg>();
         private readonly SpawnWait _spawnWait = new SpawnWait();
         // Client: mission goods whose mission slot is not in our journal yet (item id -> slot).
@@ -287,8 +288,14 @@ namespace SailwindCoop.Sync
                 if (reported != null) ReportSpawnWait(reported);
             }
             if (_net.Role == Role.Client && _pendingStates.Count != 0)
-                foreach (var state in new List<ItemStateMsg>(_pendingStates.Values))
+            {
+                // Retried every frame: a reused buffer, not a new list each time.
+                _pendingStateBuffer.Clear();
+                _pendingStateBuffer.AddRange(_pendingStates.Values);
+                foreach (var state in _pendingStateBuffer)
                     if (TryApplyItemState(state) == ItemApplyStatus.Applied) _pendingStates.Remove(state.InstanceId);
+                _pendingStateBuffer.Clear();
+            }
             if (_net.Role == Role.Client && _pendingMissionGoods.Count != 0) RetryMissionGoods();
             TickUnsealedCrate();
             SendLocalHeldPose(dt);

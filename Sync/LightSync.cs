@@ -28,6 +28,8 @@ namespace SailwindCoop.Sync
 
         private static FieldInfo _fOn;
         private static MethodInfo _miSetLight;
+        private static Action<ShipItemLight, bool> _setLight;
+        private static AccessTools.FieldRef<ShipItemLight, bool> _onRef;
 
         public float SnapshotHz = 2f;
         public int LightCount => _lights.Count;
@@ -70,9 +72,17 @@ namespace SailwindCoop.Sync
             light.health = health;
             try
             {
+                // Called every frame for every shared light on a client: a delegate, not Invoke
+                // (which allocates an argument array and a box per call).
                 if (_miSetLight == null)
+                {
                     _miSetLight = typeof(ShipItemLight).GetMethod("SetLight", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (_miSetLight != null) _miSetLight.Invoke(light, new object[] { on });
+                    if (_miSetLight != null)
+                        try { _setLight = (Action<ShipItemLight, bool>)Delegate.CreateDelegate(typeof(Action<ShipItemLight, bool>), _miSetLight); }
+                        catch (Exception e) { Plugin.Logger.LogWarning("[LightSync] SetLight delegate: " + e.Message); }
+                }
+                if (_setLight != null) _setLight(light, on);
+                else if (_miSetLight != null) _miSetLight.Invoke(light, new object[] { on });
                 else if (_fOn != null) _fOn.SetValue(light, on);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[LightSync] SetLight failed: " + e.Message); }
@@ -83,7 +93,14 @@ namespace SailwindCoop.Sync
             try
             {
                 if (_fOn == null)
+                {
                     _fOn = typeof(ShipItemLight).GetField("on", BindingFlags.NonPublic | BindingFlags.Instance);
+                    // Read every frame per shared light on a client: a field ref does not box.
+                    if (_fOn != null)
+                        try { _onRef = AccessTools.FieldRefAccess<ShipItemLight, bool>(_fOn); }
+                        catch (Exception e) { Plugin.Logger.LogWarning("[LightSync] on field ref: " + e.Message); }
+                }
+                if (_onRef != null) return _onRef(light);
                 return _fOn != null && (bool)_fOn.GetValue(light);
             }
             catch { return light != null && light.amount >= 1f; }

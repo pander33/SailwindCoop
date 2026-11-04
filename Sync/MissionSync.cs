@@ -23,6 +23,8 @@ namespace SailwindCoop.Sync
 
         private readonly CoopNet _net;
         private string _lastSig = null;     // host: last broadcast journal signature
+        private const float CheckSeconds = 0.25f;
+        private float _checkTimer;
 
         public string MissionText { get; private set; } = "—";
 
@@ -35,6 +37,10 @@ namespace SailwindCoop.Sync
         public void Tick(float dt)
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
+            // The signature is a string, a list and an array: built 4 times a second, not every frame.
+            _checkTimer += Time.unscaledDeltaTime;   // also while the host's world is held (timeScale 0)
+            if (_lastSig != null && _checkTimer < CheckSeconds) return;
+            _checkTimer = 0f;
             string sig = BuildSignature(out var entries);
             if (sig == _lastSig) return;
             _lastSig = sig;
@@ -370,6 +376,7 @@ namespace SailwindCoop.Sync
         public void Clear()
         {
             _lastSig = null;
+            _checkTimer = 0f;
             _lastDeliverId = 0;
             MissionText = "—";
         }

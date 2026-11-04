@@ -287,8 +287,17 @@ namespace SailwindCoop.Sync
         }
         private static HarmonyMethod Callback(string name, int priority = Priority.Normal) => new HarmonyMethod(typeof(InstrumentPosePatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)) { priority = priority };
         private static void Report(Exception error) { try { Plugin.Logger?.LogWarning("[InstrumentPosePatches] " + error); } catch { } }
-        private static bool PreSimulation(ShipItem __instance) => PatchGuard.Prefix(() => !(ItemSync.Instance?.RemoteInstrument(__instance) ?? false), Report);
-        private static bool PreFish(FishingRodFish __instance) => PatchGuard.Prefix(() => !(ItemSync.Instance?.RemoteInstrument(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")) ?? false), Report);
+        // Every frame per instrument and per fish: a plain try/catch, not PatchGuard (no closure per call).
+        private static bool PreSimulation(ShipItem __instance)
+        {
+            try { return !(ItemSync.Instance?.RemoteInstrument(__instance) ?? false); }
+            catch (Exception e) { Report(e); return true; }
+        }
+        private static bool PreFish(FishingRodFish __instance)
+        {
+            try { return !(ItemSync.Instance?.RemoteInstrument(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")) ?? false); }
+            catch (Exception e) { Report(e); return true; }
+        }
         private static void PostInput(ShipItem __instance) => PatchGuard.Run(() => { if (InteractionContext.HasInput && !InteractionContext.Suppressed) ItemSync.Instance?.InstrumentFinal(__instance); }, Report);
         private static void PreDrop(GoPointer __instance, out ShipItem __state)
         { ShipItem state = null; PatchGuard.Run(() => state = __instance.GetHeldItem() as ShipItem, Report); __state = state; }

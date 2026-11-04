@@ -864,9 +864,12 @@ namespace SailwindCoop.Sync
             => PatchGuard.Prefix(() => !InteractionSync.ShouldBlockLocally(__instance),
                 e => ReportPatch(4, nameof(PreBlock), __instance, e));
 
+        // Every physics step for every push collider: a plain try/catch, not PatchGuard (no closure).
         private static bool PrePushFixedUpdate(GoPointerButton __instance)
-            => PatchGuard.Prefix(() => !InteractionSync.ShouldBlockPushWhileHolding(__instance),
-                e => ReportPatch(5, nameof(PrePushFixedUpdate), __instance, e));
+        {
+            try { return !InteractionSync.ShouldBlockPushWhileHolding(__instance); }
+            catch (Exception e) { PatchGuard.Fail(x => ReportPatch(5, nameof(PrePushFixedUpdate), __instance, x), e); return true; }
+        }
 
     }
 }

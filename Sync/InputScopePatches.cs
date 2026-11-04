@@ -33,19 +33,27 @@ namespace SailwindCoop.Sync
         {
             try { Plugin.Logger?.LogWarning("[InputScopePatches] " + error); } catch { }
         }
+        // GoPointer.LateUpdate and the wheel's ExtraLateUpdate run every frame: plain try/catch here,
+        // not PatchGuard, whose closure and delegates were garbage on every call. Report never throws.
         private static bool PreInput(GoPointer __instance, out InteractionContext.Scope __state)
         {
-            InteractionContext.Scope state = null;
-            PatchGuard.Run(() => state = InteractionContext.Begin(InteractionSource.LocalInput), Report);
-            __state = state;
+            __state = null;
+            try { __state = InteractionContext.Begin(InteractionSource.LocalInput); }
+            catch (Exception e) { Report(e); }
             bool consumed = false;
-            PatchGuard.Run(() => consumed = CoopBehaviour.Instance?.Dice?.Input.Handle(__instance) == true, Report);
+            try { consumed = CoopBehaviour.Instance?.Dice?.Input.Handle(__instance) == true; }
+            catch (Exception e) { Report(e); }
             // A knocked-over player lets go of what it holds here, in the input scope, and points at nothing.
-            if (!consumed) PatchGuard.Run(() => consumed = CoopBehaviour.Instance?.Knockdown?.HandlePointer(__instance) == true, Report);
+            if (!consumed)
+                try { consumed = CoopBehaviour.Instance?.Knockdown?.HandlePointer(__instance) == true; }
+                catch (Exception e) { Report(e); }
             return !consumed;
         }
         private static void FinishInput(InteractionContext.Scope __state)
-            => PatchGuard.Run(() => __state?.Dispose(), Report);
+        {
+            try { __state?.Dispose(); }
+            catch (Exception e) { Report(e); }
+        }
 
         private struct LengthState { internal bool Captured; internal float Before; }
         private static void PreLength(GPButtonRopeWinch __instance, out LengthState __state)
@@ -79,14 +87,24 @@ namespace SailwindCoop.Sync
         private static void PreWheelInput(GPButtonSteeringWheel __instance, out WheelState __state)
         {
             var state = new WheelState();
-            PatchGuard.Run(() => { if (__instance != null && !InteractionContext.Suppressed)
-                { state.Input = __instance.currentInput; state.Held = ControlsSync.WheelHeld(__instance); state.Captured = true; } }, Report);
+            try
+            {
+                if (__instance != null && !InteractionContext.Suppressed)
+                { state.Input = __instance.currentInput; state.Held = ControlsSync.WheelHeld(__instance); state.Captured = true; }
+            }
+            catch (Exception e) { Report(e); }
             __state = state;
         }
         private static void PostWheelInput(GPButtonSteeringWheel __instance, WheelState __state)
-            => PatchGuard.Run(() => { if (__state.Captured && __state.Held && __instance != null &&
-                !__state.Input.Equals(__instance.currentInput) && !InteractionContext.Suppressed)
-                ControlsSync.Instance?.NotifyWheelInput(__instance); }, Report);
+        {
+            try
+            {
+                if (__state.Captured && __state.Held && __instance != null &&
+                    !__state.Input.Equals(__instance.currentInput) && !InteractionContext.Suppressed)
+                    ControlsSync.Instance?.NotifyWheelInput(__instance);
+            }
+            catch (Exception e) { Report(e); }
+        }
         private static void PostTouchWheel(GPButtonSteeringWheel __instance, float rotation)
             => PatchGuard.Run(() => {
                 if (__instance == null || InteractionContext.Suppressed || !ControlsSync.WheelHeld(__instance)) return;

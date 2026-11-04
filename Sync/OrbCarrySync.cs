@@ -263,6 +263,11 @@ namespace SailwindCoop.Sync
         private static void PreDrop(GoPointer __instance, out WindTotemOrb __state)
         { WindTotemOrb state = null; PatchGuard.Run(() => state = __instance.GetHeldItem() as WindTotemOrb, Report); __state = state; }
         private static void PostDrop(WindTotemOrb __state) => PatchGuard.Run(() => { if (__state != null && __state.held == null) WindTotemSync.Instance?.NotifyOrb(__state, false); }, Report);
-        private static bool PreUpdate(WindTotemOrb __instance) => PatchGuard.Prefix(() => !(WindTotemSync.Instance?.RemoteOrb(__instance) ?? false), Report);
+        // Every frame per orb: a plain try/catch, not PatchGuard (no closure per call).
+        private static bool PreUpdate(WindTotemOrb __instance)
+        {
+            try { return !(WindTotemSync.Instance?.RemoteOrb(__instance) ?? false); }
+            catch (Exception e) { Report(e); return true; }
+        }
     }
 }

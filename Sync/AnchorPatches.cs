@@ -29,7 +29,11 @@ namespace SailwindCoop.Sync
         }
         private static void PostDrop(Anchor __state)
             => PatchGuard.Run(() => { if (__state != null) AnchorSync.Instance?.NotifyDrop(__state); }, Report);
+        // Every physics step: a plain try/catch, not PatchGuard (no closure).
         private static bool PrePhysics(Anchor __instance)
-            => PatchGuard.Prefix(() => !(AnchorSync.Instance?.SuppressPhysics(__instance) ?? false), Report);
+        {
+            try { return !(AnchorSync.Instance?.SuppressPhysics(__instance) ?? false); }
+            catch (Exception e) { PatchGuard.Fail(Report, e); return true; }
+        }
     }
 }
