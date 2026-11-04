@@ -18,6 +18,9 @@ namespace SailwindCoop.Sync
         private readonly CoopNet _net;
         private readonly List<ShipItemLight> _lights = new List<ShipItemLight>();
         private readonly Dictionary<ShipItemLight, ushort> _index = new Dictionary<ShipItemLight, ushort>();
+        private readonly List<KeyValuePair<string, ShipItemLight>> _sortBuffer = new List<KeyValuePair<string, ShipItemLight>>();
+        private static readonly Comparison<KeyValuePair<string, ShipItemLight>> ByPath =
+            (a, b) => string.CompareOrdinal(a.Key, b.Key);
         private float _refreshTimer;
         private string _last = "—";
         private long _lastTick;
@@ -102,11 +105,16 @@ namespace SailwindCoop.Sync
         {
             _lights.Clear();
             _index.Clear();
+            // Ordered by hierarchy path (the index is the light's address in messages); each path is
+            // built once per light, not on every comparison.
+            _sortBuffer.Clear();
             foreach (var light in UnityEngine.Object.FindObjectsOfType<ShipItemLight>())
             {
-                if (light != null) _lights.Add(light);
+                if (light != null) _sortBuffer.Add(new KeyValuePair<string, ShipItemLight>(BoatLocator.PathOf(light.transform), light));
             }
-            _lights.Sort((a, b) => string.CompareOrdinal(BoatLocator.PathOf(a.transform), BoatLocator.PathOf(b.transform)));
+            _sortBuffer.Sort(ByPath);
+            foreach (var kv in _sortBuffer) _lights.Add(kv.Value);
+            _sortBuffer.Clear();
             for (int i = 0; i < _lights.Count && i <= ushort.MaxValue; i++)
                 if (_lights[i] != null) _index[_lights[i]] = (ushort)i;
         }

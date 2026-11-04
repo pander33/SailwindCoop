@@ -33,6 +33,8 @@ namespace SailwindCoop.Sync
         private readonly CoopNet _net;
         private Transform _cachedBoat;
         private BoatMooringRopes _bm;
+        private const float RopeSearchSeconds = 1f;
+        private float _nextRopeSearch;
         // Stable rope -> index map. Needed because MoorTo() reparents the rope under the DOCK,
         // so walking up the hierarchy no longer reaches BoatMooringRopes; the map doesn't care.
         private readonly System.Collections.Generic.Dictionary<PickupableBoatMooringRope, int> _ropeIndex
@@ -108,6 +110,9 @@ namespace SailwindCoop.Sync
             // Boats not known yet (still loading) is not "no boat" — keep the cached one.
             if (boat == null && !BoatLocator.IndicesAuthoritative) return;
             if (boat == _cachedBoat && _bm != null && _ropeIndex.Count > 0) return;
+            // A hull without mooring ropes is looked at again once a second, not every frame.
+            if (boat == _cachedBoat && Time.unscaledTime < _nextRopeSearch) return;
+            _nextRopeSearch = Time.unscaledTime + RopeSearchSeconds;
             bool boatChanged = boat != _cachedBoat;
             _cachedBoat = boat;
             if (_net.Role == Role.Client && boatChanged)
@@ -481,6 +486,7 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { MooringPatches.ClearIntents(); _fleet.Clear(); return; }
             _cachedBoat = null;
             _bm = null;
+            _nextRopeSearch = 0f;
             _ropeIndex.Clear();
             _clientStates.Clear();
             _missingApplyDock.Clear();

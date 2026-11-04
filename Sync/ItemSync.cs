@@ -3276,8 +3276,6 @@ namespace SailwindCoop.Sync
         // Per-type state (cooking / consumption)
         // -----------------------------------------------------------------
 
-        private static readonly Dictionary<string, FieldInfo> _fieldCache = new Dictionary<string, FieldInfo>();
-
         /// <summary>Host: the reliable state of an item taken from the host's belt (see
         /// <see cref="_hostHeldFromBelt"/>). Sent only once the hand holds it, from the entry as it is:
         /// BuildState reads the holder from the hand, so nothing is overridden and the holder is not kept
@@ -3315,16 +3313,6 @@ namespace SailwindCoop.Sync
         }
         // The former positional-only ItemExtra packet has no ordering; active senders use full ItemState.
         public void OnItemExtraState(ItemExtraStateMsg msg, LiteNetLib.NetPeer fromPeer) { }
-        private static FieldInfo GetFieldDeep(Type type, string name)
-        {
-            string key = type.FullName + "::" + name;
-            if (_fieldCache.TryGetValue(key, out var cached)) return cached;
-            FieldInfo fi = null;
-            for (Type t = type; t != null && fi == null; t = t.BaseType)
-                fi = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
-            _fieldCache[key] = fi;
-            return fi;
-        }
 
         private PickupableItem HeldItem()
         {
@@ -3347,15 +3335,48 @@ namespace SailwindCoop.Sync
             RefreshItems(force: true);
         }
 
+        /// <summary>Collections of one <see cref="RefreshItems(bool)"/> pass, kept between passes so a pass
+        /// allocates nothing new. A nested pass (a broadcast inside the pass calling back) gets its own.</summary>
+        private sealed class RefreshBuffers
+        {
+            public readonly Dictionary<int, ItemEntry> Prev = new Dictionary<int, ItemEntry>();
+            public readonly Dictionary<int, ShipItem> Alive = new Dictionary<int, ShipItem>();
+            public readonly List<OrderedItem> Ordered = new List<OrderedItem>();
+            public readonly List<ItemEntry> NewlyAdded = new List<ItemEntry>();
+
+            public void Clear() { Prev.Clear(); Alive.Clear(); Ordered.Clear(); NewlyAdded.Clear(); }
+        }
+
+        /// <summary>An item of the pass with its save identity read once.</summary>
+        private struct OrderedItem
+        {
+            public ShipItem Item;
+            public int InstanceId;
+            public int PrefabIndex;
+        }
+
+        private readonly RefreshBuffers _refreshBuffers = new RefreshBuffers();
+        private int _refreshDepth;
+
         private void RefreshItems(bool force)
         {
+            var buffers = _refreshDepth == 0 ? _refreshBuffers : new RefreshBuffers();
+            buffers.Clear();
+            _refreshDepth++;
+            try { RefreshItems(buffers); }
+            finally { _refreshDepth--; buffers.Clear(); }
+        }
+
+        private void RefreshItems(RefreshBuffers buffers)
+        {
             // Previously-known entries (carry live ShipItem refs; a destroyed item reads Unity-null).
-            var prev = new Dictionary<int, ItemEntry>(_byInstanceId);
+            var prev = buffers.Prev;
+            foreach (var kv in _byInstanceId) prev.Add(kv.Key, kv.Value);
             _pendingClientItems.Prune(item => item != null);
 
             // Alive set = previously-known still-alive (covers items that went temporarily inactive,
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
-            var alive = new Dictionary<int, ShipItem>();
+            var alive = buffers.Alive;
             foreach (var kv in prev)
                 if (kv.Value.Item != null && !_destroyingItems.Contains(kv.Value.Item) && HasStableIdentity(kv.Value.Item)) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
             foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
@@ -3404,19 +3425,26 @@ namespace SailwindCoop.Sync
                     if (!alive.ContainsKey(kv.Key)) BroadcastDespawn(kv.Value);
             }
 
-            var ordered = new List<ShipItem>(alive.Values);
-            ordered.Sort(CompareItems);
+            // Ordered by instance id: the index is the item's address in messages. The ids are read
+            // once per item here, not on every comparison.
+            var ordered = buffers.Ordered;
+            foreach (var item in alive.Values)
+            {
+                var s = item.GetComponent<SaveablePrefab>();
+                ordered.Add(new OrderedItem { Item = item, InstanceId = s != null ? s.instanceId : 0, PrefabIndex = s != null ? s.prefabIndex : 0 });
+            }
+            ordered.Sort(CompareOrdered);
 
             _items.Clear();
             _byItem.Clear();
             _byInstanceId.Clear();
 
-            var newlyAdded = new List<ItemEntry>();
+            var newlyAdded = buffers.NewlyAdded;
             for (int i = 0; i < ordered.Count && i <= ushort.MaxValue; i++)
             {
-                var item = ordered[i];
-                int instanceId = InstanceIdOf(item);
-                int prefabIndex = PrefabIndexOf(item);
+                var item = ordered[i].Item;
+                int instanceId = ordered[i].InstanceId;
+                int prefabIndex = ordered[i].PrefabIndex;
                 prev.TryGetValue(instanceId, out var e);
                 bool isNew = e == null;
                 if (e == null)
@@ -3711,13 +3739,13 @@ namespace SailwindCoop.Sync
                    && !InPersonalInventory(item);
         }
 
-        private static int CompareItems(ShipItem a, ShipItem b)
+        private static int CompareOrdered(OrderedItem a, OrderedItem b)
         {
-            int ai = InstanceIdOf(a);
-            int bi = InstanceIdOf(b);
+            int ai = a.InstanceId;
+            int bi = b.InstanceId;
             if (ai != 0 && bi != 0 && ai != bi) return ai.CompareTo(bi);
             if (ai != bi) return bi.CompareTo(ai);
-            return string.CompareOrdinal(BoatLocator.PathOf(a.transform), BoatLocator.PathOf(b.transform));
+            return string.CompareOrdinal(BoatLocator.PathOf(a.Item.transform), BoatLocator.PathOf(b.Item.transform));
         }
 
         private static int InstanceIdOf(ShipItem item)
