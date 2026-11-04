@@ -3343,8 +3343,9 @@ namespace SailwindCoop.Sync
             public readonly Dictionary<int, ShipItem> Alive = new Dictionary<int, ShipItem>();
             public readonly List<OrderedItem> Ordered = new List<OrderedItem>();
             public readonly List<ItemEntry> NewlyAdded = new List<ItemEntry>();
+            public readonly List<ShipItem> Scene = new List<ShipItem>();
 
-            public void Clear() { Prev.Clear(); Alive.Clear(); Ordered.Clear(); NewlyAdded.Clear(); }
+            public void Clear() { Prev.Clear(); Alive.Clear(); Ordered.Clear(); NewlyAdded.Clear(); Scene.Clear(); }
         }
 
         /// <summary>An item of the pass with its save identity read once.</summary>
@@ -3379,7 +3380,8 @@ namespace SailwindCoop.Sync
             var alive = buffers.Alive;
             foreach (var kv in prev)
                 if (kv.Value.Item != null && !_destroyingItems.Contains(kv.Value.Item) && HasStableIdentity(kv.Value.Item)) alive[kv.Key] = kv.Value.Item;   // Unity-null filters destroyed
-            foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            ShipItemRegistry.Snapshot(buffers.Scene);
+            foreach (var item in buffers.Scene)
             {
                 if (item == null || _destroyingItems.Contains(item) || !HasStableIdentity(item)) continue;
                 int id = InstanceIdOf(item);

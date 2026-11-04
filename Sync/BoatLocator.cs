@@ -19,8 +19,27 @@ namespace SailwindCoop.Sync
     {
         public const ushort NoBoat = ushort.MaxValue;
 
-        /// <summary>Rescan interval; picks up ownership changes.</summary>
+        /// <summary>Ownership refresh interval; picks up purchases made without our event.</summary>
         public const float CacheSeconds = 1f;
+
+        /// <summary>The hulls are searched again at least this often even without a change seen.</summary>
+        public const float HullRescanSeconds = 30f;
+
+        /// <summary>A boat of the registry with its hulls, ordered by path. Rebuilt only when the
+        /// registry or a hull changes; ownership is read from <see cref="Saveable"/> each refresh.</summary>
+        private sealed class BoatHulls
+        {
+            public int SceneIndex;
+            public SaveableObject Saveable;
+            public bool Purchasable;
+            public readonly List<Transform> Hulls = new List<Transform>();
+        }
+
+        private static readonly List<BoatHulls> _hulls = new List<BoatHulls>();
+        private static readonly SaveableObject[] _registrySeen = new SaveableObject[256];
+        private static int _registrySeenLength = -1;
+        private static bool _hullsValid;
+        private static float _hullsStamp = float.NegativeInfinity;
 
         private struct Entry
         {
@@ -59,6 +78,7 @@ namespace SailwindCoop.Sync
         public static void Invalidate()
         {
             _cacheStamp = float.NegativeInfinity;
+            _hullsValid = false;
         }
 
         /// <summary>False until an owned boat is known (purchase flags load after the registry exists).
@@ -121,45 +141,31 @@ namespace SailwindCoop.Sync
 
             if (registry != null)
             {
-                for (int si = 0; si < registry.Length && si <= 0xFF; si++)
+                if (!_hullsValid || RegistryChanged(registry) || HullsDestroyed() ||
+                    Time.unscaledTime - _hullsStamp >= HullRescanSeconds)
+                    RebuildHulls(registry);
+
+                foreach (var b in _hulls)
                 {
-                    var so = registry[si];
-                    if (so == null || so.GetComponent("BoatProbes") == null) continue;
-
-                    // Include inactive: distant boats are deactivated by the game.
-                    _hullScratch.Clear();
-                    foreach (var col in so.GetComponentsInChildren<BoatEmbarkCollider>(true))
+                    for (int sub = 0; sub < b.Hulls.Count && sub <= 0xFF; sub++)
                     {
-                        if (col == null || col.transform.parent == null) continue;
-                        Transform hull = col.transform.parent;
-                        bool dup = false;
-                        for (int k = 0; k < _hullScratch.Count; k++)
-                            if (_hullScratch[k].Value == hull) { dup = true; break; }
-                        if (!dup) _hullScratch.Add(new KeyValuePair<string, Transform>(PathOf(hull), hull));
-                    }
-                    if (_hullScratch.Count == 0) continue;
-                    _hullScratch.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
-
-                    bool purchasable = so.GetComponent("PurchasableBoat") != null;
-                    for (int sub = 0; sub < _hullScratch.Count && sub <= 0xFF; sub++)
-                    {
-                        ushort id = (ushort)((sub << 8) | si);
+                        ushort id = (ushort)((sub << 8) | b.SceneIndex);
                         if (id == NoBoat) continue;
                         var e = new Entry
                         {
                             Id = id,
-                            Boat = _hullScratch[sub].Value,
-                            Saveable = so,
-                            Purchasable = purchasable,
+                            Boat = b.Hulls[sub],
+                            Saveable = b.Saveable,
+                            Purchasable = b.Purchasable,
                         };
                         _byId[id] = e;
                         _idOf[e.Boat] = id;
                         // Same rule as SaveableObject.UnpurchasedBoatOrMooringRope.
-                        if (so.extraSetting) _ownedScratch.Add(e);
+                        if (b.Saveable.extraSetting) _ownedScratch.Add(e);
                     }
                 }
             }
-
+            else _hullsValid = false;
             // Non-purchasable boats first, then by id.
             _ownedScratch.Sort((a, b) =>
             {
@@ -170,6 +176,7 @@ namespace SailwindCoop.Sync
 
             // Empty registry = scene not loaded yet; do not cache.
             _haveScan = _byId.Count > 0;
+            if (!_haveScan) _hullsValid = false;
             _cacheStamp = Time.unscaledTime;
 
             // Activity is left out so hiding a distant boat does not bump the epoch.
@@ -182,6 +189,68 @@ namespace SailwindCoop.Sync
                     Plugin.Logger.LogInfo("[BoatLocator] Boats: " + _byId.Count + " saveable, owned " +
                                           Signature(withActivity: true));
             }
+        }
+
+        /// <summary>The game fills its fixed registry array as objects register, so the array is the same
+        /// object for a whole world: compare its slots with the ones the hulls were built from.</summary>
+        private static bool RegistryChanged(SaveableObject[] registry)
+        {
+            int n = Mathf.Min(registry.Length, _registrySeen.Length);
+            if (n != _registrySeenLength) return true;
+            for (int i = 0; i < n; i++)
+                if (!ReferenceEquals(registry[i], _registrySeen[i])) return true;
+            return false;
+        }
+
+        private static bool HullsDestroyed()
+        {
+            foreach (var b in _hulls)
+            {
+                if (b.Saveable == null) return true;
+                for (int i = 0; i < b.Hulls.Count; i++)
+                    if (b.Hulls[i] == null) return true;
+            }
+            return false;
+        }
+
+        private static void RebuildHulls(SaveableObject[] registry)
+        {
+            _hulls.Clear();
+            int n = Mathf.Min(registry.Length, _registrySeen.Length);
+            for (int i = 0; i < _registrySeen.Length; i++) _registrySeen[i] = i < n ? registry[i] : null;
+            _registrySeenLength = n;
+            _hullsStamp = Time.unscaledTime;
+            _hullsValid = true;
+
+            for (int si = 0; si < registry.Length && si <= 0xFF; si++)
+            {
+                var so = registry[si];
+                if (so == null || so.GetComponent<Crest.BoatProbes>() == null) continue;
+
+                // Include inactive: distant boats are deactivated by the game.
+                _hullScratch.Clear();
+                foreach (var col in so.GetComponentsInChildren<BoatEmbarkCollider>(true))
+                {
+                    if (col == null || col.transform.parent == null) continue;
+                    Transform hull = col.transform.parent;
+                    bool dup = false;
+                    for (int k = 0; k < _hullScratch.Count; k++)
+                        if (_hullScratch[k].Value == hull) { dup = true; break; }
+                    if (!dup) _hullScratch.Add(new KeyValuePair<string, Transform>(PathOf(hull), hull));
+                }
+                if (_hullScratch.Count == 0) continue;
+                _hullScratch.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+
+                var boat = new BoatHulls
+                {
+                    SceneIndex = si,
+                    Saveable = so,
+                    Purchasable = so.GetComponent<PurchasableBoat>() != null,
+                };
+                for (int k = 0; k < _hullScratch.Count; k++) boat.Hulls.Add(_hullScratch[k].Value);
+                _hulls.Add(boat);
+            }
+            _hullScratch.Clear();
         }
 
         private static string Signature(bool withActivity)

@@ -19,6 +19,7 @@ namespace SailwindCoop.Sync
         private readonly List<ShipItemLight> _lights = new List<ShipItemLight>();
         private readonly Dictionary<ShipItemLight, ushort> _index = new Dictionary<ShipItemLight, ushort>();
         private readonly List<KeyValuePair<string, ShipItemLight>> _sortBuffer = new List<KeyValuePair<string, ShipItemLight>>();
+        private readonly List<ShipItem> _sceneBuffer = new List<ShipItem>();
         private static readonly Comparison<KeyValuePair<string, ShipItemLight>> ByPath =
             (a, b) => string.CompareOrdinal(a.Key, b.Key);
         private float _refreshTimer;
@@ -108,10 +109,15 @@ namespace SailwindCoop.Sync
             // Ordered by hierarchy path (the index is the light's address in messages); each path is
             // built once per light, not on every comparison.
             _sortBuffer.Clear();
-            foreach (var light in UnityEngine.Object.FindObjectsOfType<ShipItemLight>())
+            // Lights are ship items: the shared registry replaces a scene search of their own (same set:
+            // both see only active objects). All lights, not only the shared item set.
+            ShipItemRegistry.Snapshot(_sceneBuffer);
+            foreach (var item in _sceneBuffer)
             {
-                if (light != null) _sortBuffer.Add(new KeyValuePair<string, ShipItemLight>(BoatLocator.PathOf(light.transform), light));
+                if (item is ShipItemLight light && light != null)
+                    _sortBuffer.Add(new KeyValuePair<string, ShipItemLight>(BoatLocator.PathOf(light.transform), light));
             }
+            _sceneBuffer.Clear();
             _sortBuffer.Sort(ByPath);
             foreach (var kv in _sortBuffer) _lights.Add(kv.Value);
             _sortBuffer.Clear();

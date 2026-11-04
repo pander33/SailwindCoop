@@ -283,6 +283,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Mooring", () => MooringPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Damage", () => BoatDamagePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Lights", () => LightPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Item registry", () => ShipItemRegistry.Apply(_harmony), patchFault);
             PatchHealth.Install("Items", () => ItemPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Item results", () => ItemOperationPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Item simulation", () => ItemSimulationPatches.Apply(_harmony), patchFault);

@@ -34,6 +34,11 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<WindTotemOrb, Carry> _orbByInstance = new Dictionary<WindTotemOrb, Carry>();
         private uint _nextOrbRequest;
         private float _orbScan, _orbTimer;
+        // The full search of all orbs (inactive ones too) costs ~1.4 ms. Active orbs bind themselves through
+        // the WindTotemOrb.Update prefix, so the search runs on entering a world, every 0.5 s while a host
+        // state waits for its orb or the Update hook is missing, and otherwise every 5 s.
+        private const float OrbScanFast = 0.5f, OrbScanSlow = 5f;
+        private bool _orbScanDue = true;
         public string LastOrbAction { get; private set; } = "—";
         private static string Identity(Transform transform)
         {
@@ -63,9 +68,11 @@ namespace SailwindCoop.Sync
             else if (_net.Role == Role.Client) _net.Broadcast(new OrbRequestMsg { OrbId = id, ParentId = parent, Action = OrbAction.Baseline }, DeliveryMethod.ReliableOrdered);
             return carry;
         }
+        private Carry FindBound(string id, string parent)
+            => _orbs.TryGetValue(id, out var carry) && carry.Orb != null && (parent == null || carry.Parent == parent) ? carry : null;
         private Carry FindOrb(string id, string parent = null)
         {
-            if (_orbs.TryGetValue(id, out var carry) && carry.Orb != null && (parent == null || carry.Parent == parent)) return carry;
+            var carry = FindBound(id, parent); if (carry != null) return carry;
             foreach (var orb in Resources.FindObjectsOfTypeAll<WindTotemOrb>())
                 if (orb != null && orb.gameObject.scene.IsValid() && orb.gameObject.scene.isLoaded && Identity(orb.transform) == id &&
                     (parent == null || Identity(orb.totem) == parent)) return BindOrb(orb);
@@ -126,14 +133,16 @@ namespace SailwindCoop.Sync
         }
         private void TickOrbs(float dt)
         {
-            if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || !CoordSpace.Ready) return;
+            if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || !CoordSpace.Ready) { _orbScanDue = true; return; }
             _orbScan += dt; _orbTimer += dt;
-            if (_orbScan >= 0.5f)
+            float scanEvery = _waitingOrbs.Count > 0 || !OrbCarryPatches.UpdateHooked ? OrbScanFast : OrbScanSlow;
+            if (_orbScanDue || _orbScan >= scanEvery)
             {
-                _orbScan = 0;
+                _orbScan = 0; _orbScanDue = false;
                 foreach (var orb in Resources.FindObjectsOfTypeAll<WindTotemOrb>()) BindOrb(orb);
+                // The search above bound every orb there is, so a waiting state looks only among the bound ones.
                 foreach (var pair in new List<KeyValuePair<string, OrbStateMsg>>(_waitingOrbs))
-                { var carry = FindOrb(pair.Key, pair.Value.ParentId); if (carry != null) { ReceiveOrb(carry, pair.Value); _waitingOrbs.Remove(pair.Key); } }
+                { var carry = FindBound(pair.Key, pair.Value.ParentId); if (carry != null) { ReceiveOrb(carry, pair.Value); _waitingOrbs.Remove(pair.Key); } }
             }
             bool send = _orbTimer >= 1f / 15f; if (send) _orbTimer = 0;
             foreach (var carry in _orbs.Values)
@@ -233,7 +242,7 @@ namespace SailwindCoop.Sync
         private void ClearOrbs()
         {
             foreach (var carry in _orbs.Values) if (carry.Orb != null) { RestoreOrb(carry); if (!Local(carry.Orb)) carry.Orb.OnDrop(); }
-            _orbs.Clear(); _orbByInstance.Clear(); _waitingOrbs.Clear(); _orbScan = _orbTimer = 0; _nextOrbRequest = 0; LastOrbAction = "—";
+            _orbs.Clear(); _orbByInstance.Clear(); _waitingOrbs.Clear(); _orbScan = _orbTimer = 0; _orbScanDue = true; _nextOrbRequest = 0; LastOrbAction = "—";
         }
     }
     internal static class OrbCarryPatches
@@ -243,9 +252,11 @@ namespace SailwindCoop.Sync
             var hooks = new PatchHookCatalog();
             hooks.Install(typeof(GoPointer), "PickUpItem", new[] { typeof(PickupableItem) }, m => harmony.Patch(m, postfix: Callback(nameof(PostPickup))));
             hooks.Install(typeof(GoPointer), "DropItem", Type.EmptyTypes, m => harmony.Patch(m, prefix: Callback(nameof(PreDrop)), postfix: Callback(nameof(PostDrop))));
-            hooks.Install(typeof(WindTotemOrb), "Update", Type.EmptyTypes, m => harmony.Patch(m, prefix: Callback(nameof(PreUpdate))));
+            hooks.Install(typeof(WindTotemOrb), "Update", Type.EmptyTypes, m => { harmony.Patch(m, prefix: Callback(nameof(PreUpdate))); UpdateHooked = true; });
             PatchHealth.Report("Wind orb carry", hooks);
         }
+        /// <summary>The Update prefix binds every active orb, so the full orb search can be rare.</summary>
+        internal static bool UpdateHooked { get; private set; }
         private static HarmonyMethod Callback(string name) => new HarmonyMethod(typeof(OrbCarryPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic));
         private static void Report(Exception error) { try { Plugin.Logger?.LogWarning("[OrbCarryPatches] " + error); } catch { } }
         private static void PostPickup(PickupableItem item) => PatchGuard.Run(() => { if (item is WindTotemOrb orb && orb.held != null) WindTotemSync.Instance?.NotifyOrb(orb, true); }, Report);
