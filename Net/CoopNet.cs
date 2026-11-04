@@ -1048,8 +1048,16 @@ namespace SailwindCoop.Net
         {
             if (Role == Role.Host)
             {
+                // Written once for all clients, not once per client.
+                NetDataWriter writer = null;
+                bool oversized = false;
                 foreach (var s in _sessions.Values)
-                    if (s.HandshakeDone) s.Peer.Send(msg, method);
+                {
+                    if (!s.HandshakeDone) continue;
+                    if (writer == null) writer = Protocol.Write(msg);
+                    oversized |= s.Peer.SendWritten(writer, method);
+                }
+                if (oversized) PeerExt.ReportOversized(msg.Type, writer.Length);
             }
             else if (_hostPeer != null)
             {

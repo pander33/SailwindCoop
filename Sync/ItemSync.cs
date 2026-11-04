@@ -176,6 +176,11 @@ namespace SailwindCoop.Sync
         private float _sendTimer;
         private float _heldPoseTimer;
         private float _extraTimer;
+        // SendExtraState goes through the item list in ExtraSlices parts, one part per tick at
+        // ExtraSlices times the rate: every item is still looked at ExtraStateHz times a second, and the
+        // work and garbage of a full hold are not built in one frame.
+        private const int ExtraSlices = 4;
+        private int _extraCursor;
         private float _altHeldTimer;
         private bool _baselineReady;     // local world finished loading its save items
         private int _baselineCount = -1;
@@ -3297,12 +3302,21 @@ namespace SailwindCoop.Sync
         private void SendExtraState(float dt)
         {
             _extraTimer += dt;
-            if (_extraTimer < 1f / Mathf.Max(0.5f, ExtraStateHz)) return;
+            if (_extraTimer < 1f / (Mathf.Max(0.5f, ExtraStateHz) * ExtraSlices)) return;
             _extraTimer = 0f;
+            int count = _items.Count;
+            if (count == 0) { _extraCursor = 0; return; }
+            // The list is rebuilt by RefreshItems; the cursor carries on (an item moved by the rebuild is
+            // at worst looked at one part late or early), so items at the end are never starved.
+            if (_extraCursor >= count) _extraCursor = 0;
+            int end = Mathf.Min(count, _extraCursor + (count + ExtraSlices - 1) / ExtraSlices);
+            int from = _extraCursor;
+            _extraCursor = end >= count ? 0 : end;
             // BuildState advances the revision exactly when the item's semantic state differs from the
             // last one built. Unchanged items send nothing; a run of changes ends with one reliable state.
-            foreach (var e in _items)
+            for (int i = from; i < end; i++)
             {
+                var e = _items[i];
                 if (e.Item == null) continue;
                 // Other callers of BuildState (operation capture, pose stream) advance the revision too,
                 // so compare with the revision this pass last sent rather than with the value before the call.
@@ -3532,7 +3546,7 @@ namespace SailwindCoop.Sync
         private static ShipItem FindLiveItem(int instanceId, int prefabIndex)
         {
             if (instanceId <= 0 || prefabIndex <= 0) return null;
-            foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            foreach (var item in ShipItemRegistry.Active())
             {
                 if (item == null) continue;
                 var saveable = item.GetComponent<SaveablePrefab>();
@@ -4166,7 +4180,7 @@ namespace SailwindCoop.Sync
             _refreshTimer = 0f;
             _sendTimer = 0f;
             _heldPoseTimer = 0f;
-            _extraTimer = 0f;
+            _extraTimer = 0f; _extraCursor = 0;
             _altHeldTimer = 0f;
             _baselineReady = false;
             _baselineCount = -1;

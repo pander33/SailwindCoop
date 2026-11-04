@@ -177,15 +177,25 @@ namespace SailwindCoop.Net
         public static void Send(this NetPeer peer, INetMessage msg, DeliveryMethod method)
         {
             var writer = Protocol.Write(msg);
+            if (peer.SendWritten(writer, method)) ReportOversized(msg.Type, writer.Length);
+        }
+
+        /// <summary>Sends an already written message (see <see cref="Protocol.Write"/>); one writer can go
+        /// to several peers, LiteNetLib copies its bytes. True when it went reliably for being too large;
+        /// the caller reports that once (<see cref="ReportOversized"/>).</summary>
+        public static bool SendWritten(this NetPeer peer, NetDataWriter writer, DeliveryMethod method)
+        {
             // LiteNetLib throws on an Unreliable payload above the peer MTU and only fragments reliable
             // channels. A snapshot that outgrew one datagram (a large hull's ControlState) is still
-            // delivered, in order, instead of failing every send.
-            if (method == DeliveryMethod.Unreliable && writer.Length > peer.GetMaxSinglePacketSize(method))
-            {
-                method = DeliveryMethod.ReliableOrdered;
-                try { Oversized?.Invoke(msg.Type, writer.Length); } catch { }
-            }
-            peer.Send(writer, method);
+            // delivered, in order, instead of failing every send. The MTU is per peer.
+            bool oversized = method == DeliveryMethod.Unreliable && writer.Length > peer.GetMaxSinglePacketSize(method);
+            peer.Send(writer, oversized ? DeliveryMethod.ReliableOrdered : method);
+            return oversized;
+        }
+
+        public static void ReportOversized(MsgType type, int bytes)
+        {
+            try { Oversized?.Invoke(type, bytes); } catch { }
         }
     }
 }

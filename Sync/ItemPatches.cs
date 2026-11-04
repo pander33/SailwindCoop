@@ -430,7 +430,7 @@ namespace SailwindCoop.Sync
                     Pos = __instance != null ? __instance.transform.position : Vector3.zero,
                     ExistingIds = new HashSet<int>(),
                 };
-                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+                foreach (var item in ShipItemRegistry.Active())
                 {
                     int id = PatchInstanceId(item);
                     if (id > 0) __state.ExistingIds.Add(id);
@@ -446,7 +446,7 @@ namespace SailwindCoop.Sync
                 if (__state == null || __state.PrefabIndex <= 0) return;
                 ShipItem best = null;
                 float bestSq = 25f;
-                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+                foreach (var item in ShipItemRegistry.Active())
                 {
                     if (item == null || !item.sold) continue;
                     int id = PatchInstanceId(item);

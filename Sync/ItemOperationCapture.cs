@@ -55,7 +55,7 @@ namespace SailwindCoop.Sync
             if (creates)
             {
                 scope.Original = new HashSet<int>();
-                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>()) if (item != null) scope.Original.Add(item.GetInstanceID());
+                foreach (var item in ShipItemRegistry.Active()) if (item != null) scope.Original.Add(item.GetInstanceID());
             }
             _active = scope; return scope;
         }
@@ -154,7 +154,7 @@ namespace SailwindCoop.Sync
         private static void RegisterCreated(ItemOperationCapture.Scope scope)
         {
             if (scope.Original == null) return;
-            foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+            foreach (var item in ShipItemRegistry.Active())
             {
                 if (item == null || scope.Original.Contains(item.GetInstanceID())) continue;
                 var saveable = item.GetComponent<SaveablePrefab>();

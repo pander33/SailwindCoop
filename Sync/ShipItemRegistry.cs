@@ -55,6 +55,15 @@ namespace SailwindCoop.Sync
             Verify(into);
         }
 
+        /// <summary>A new list of the items on active objects, for a one-off search at a player's action
+        /// (the caller may keep or change it).</summary>
+        internal static List<ShipItem> Active()
+        {
+            var list = new List<ShipItem>();
+            Snapshot(list);
+            return list;
+        }
+
         private static void Verify(List<ShipItem> snapshot)
         {
             if (Time.unscaledTime < _nextVerify) return;

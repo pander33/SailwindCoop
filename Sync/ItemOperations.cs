@@ -108,7 +108,7 @@ namespace SailwindCoop.Sync
             var created = new List<CreatedItemState>();
             var localCreated = new Dictionary<int, ShipItem>();
             if (originalObjects != null)
-                foreach (var item in UnityEngine.Object.FindObjectsOfType<ShipItem>())
+                foreach (var item in ShipItemRegistry.Active())
                     if (item != null && !originalObjects.Contains(item.GetInstanceID()) && HasStableIdentity(item))
                     {
                         var state = CaptureOperationItem(item);
