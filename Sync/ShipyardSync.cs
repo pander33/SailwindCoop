@@ -96,23 +96,28 @@ namespace SailwindCoop.Sync
                 if (t == null) return false;
                 var mi = AccessTools.Method(t, "PurchaseBoat");
                 if (mi == null) return false;
-                var postfix = new HarmonyMethod(typeof(ShipyardPatches).GetMethod(nameof(PostPurchase),
+                // A finalizer, not a postfix: since game 0.39 PurchaseBoat ends with a loop over
+                // BoatRefs.masts, which has empty slots, and throws on the first one after the boat is
+                // already paid and marked bought. A throw skips postfixes, so the purchase never went out.
+                var finalizer = new HarmonyMethod(typeof(ShipyardPatches).GetMethod(nameof(FinishPurchase),
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic));
-                harmony.Patch(mi, postfix: postfix);
+                harmony.Patch(mi, finalizer: finalizer);
                 return true;
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShipyardPatches] PurchaseBoat: " + e.Message); return false; }
         }
 
-        private static void PostPurchase(PurchasableBoat __instance)
+        /// <summary>Runs whether or not the game's method threw; the game's own exception is left as
+        /// it is. The boat counts as bought only if the game got as far as marking it.</summary>
+        private static void FinishPurchase(PurchasableBoat __instance)
         {
             try
             {
-                if (ShipyardSync.Instance == null || __instance == null) return;
+                if (ShipyardSync.Instance == null || __instance == null || !__instance.isPurchased()) return;
                 var so = __instance.GetComponent<SaveableObject>();
                 if (so != null) ShipyardSync.Instance.NotifyPurchase(so.sceneIndex);
             }
-            catch (Exception e) { ShipyardSync.Report("PostPurchase", e); }
+            catch (Exception e) { ShipyardSync.Report("FinishPurchase", e); }
         }
     }
 }

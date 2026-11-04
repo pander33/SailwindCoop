@@ -13,6 +13,10 @@ All notable user-facing changes are documented in this file.
   instead of moving in steps and running ahead of the hand.
 - A rope a client moors to a post is shown on the post on the host's screen too, instead of
   hanging in the air where the client's hand was.
+- A boat bought at a shipyard becomes bought for everyone in the session. Since game 0.39 the
+  purchase stayed on the buyer's machine.
+- A shared sleep in house beds lasts until morning, as a house bed does in the game, instead of
+  ending after four and a half hours.
 
 ## [0.7.0] - 2026-11-03
 

@@ -609,7 +609,9 @@ namespace SailwindCoop.Sync
 				if (_personal || _blackout || (inBed && GameState.currentHouse != null)) flags |= SleepPresenceMsg.Wants;
 			}
 			if (PlayerNeeds.sleep >= NeedsSleepBelow) flags |= SleepPresenceMsg.Rested;
-			if (GameState.sleepingInTavern) flags |= SleepPresenceMsg.Tavern;
+			// A house bed sleeps like a tavern night in the game (Sleep.Update: no waking when
+			// rested, morning between 7 and 10); the flag only asks the host for that ending.
+			if (GameState.sleepingInTavern || (inBed && GameState.currentHouse != null)) flags |= SleepPresenceMsg.Tavern;
 			if (GameState.sleepingInTavern || GameState.currentBoat == null || CurrentBoatMoored())
 				flags |= SleepPresenceMsg.Timeskip;
 			return flags;
