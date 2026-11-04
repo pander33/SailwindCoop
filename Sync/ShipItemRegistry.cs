@@ -22,9 +22,11 @@ namespace SailwindCoop.Sync
         private static readonly Predicate<ShipItem> IsGone = item => item == null;
         private static bool _seeded;
 
-        // Temporary check of the registry against the search it replaces; remove after the game check.
+#if DEBUG
+        // Check of the registry against the search it replaces, Debug builds only: it is that search.
         private const float VerifySeconds = 30f;
         private static float _nextVerify;
+#endif
 
         /// <summary>True when the Awake hook is installed.</summary>
         internal static bool Ready { get; private set; }
@@ -52,7 +54,9 @@ namespace SailwindCoop.Sync
             _items.RemoveWhere(IsGone);
             foreach (var item in _items)
                 if (item.gameObject.activeInHierarchy) into.Add(item);
+#if DEBUG
             Verify(into);
+#endif
         }
 
         /// <summary>A new list of the items on active objects, for a one-off search at a player's action
@@ -64,6 +68,7 @@ namespace SailwindCoop.Sync
             return list;
         }
 
+#if DEBUG
         private static void Verify(List<ShipItem> snapshot)
         {
             if (Time.unscaledTime < _nextVerify) return;
@@ -88,6 +93,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShipItemRegistry] check failed: " + e.Message); }
         }
+#endif
 
         internal static void Apply(Harmony harmony)
         {
