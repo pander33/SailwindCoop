@@ -33,6 +33,10 @@ namespace SailwindCoop.Sync
             public uint NetId;
             public ShipItem Item;
             public readonly NetTransform Net = new NetTransform();
+            /// <summary>Host: the last pose sample of the client holding this item, as it came. The
+            /// host shows the item from <see cref="Net"/> (delayed like the holder's avatar), but
+            /// what it sends on is this sample, or every client would get the delay twice.</summary>
+            public ItemRequestMsg HeldSample;
             public uint HolderNetId;
             public Vector3 LastPos;
             public long LastTick;
@@ -351,6 +355,7 @@ namespace SailwindCoop.Sync
 
         public void ApplyRemote()
         {
+            if (_net.Role == Role.Host) { ApplyClientHeldOnHost(); return; }
             if (_net.Role != Role.Client) return;
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
@@ -375,6 +380,48 @@ namespace SailwindCoop.Sync
                 e.Net.Apply(e.Item.transform, _net.Clock.ServerTick);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
+        }
+
+        /// <summary>
+        /// Host: an item in a client's hand is shown from the buffer of that client's pose stream,
+        /// at the same delay as the client's avatar. Put down packet by packet it moved in 15 Hz
+        /// steps and ran ahead of the avatar's hand by the interpolation delay.
+        /// </summary>
+        private void ApplyClientHeldOnHost()
+        {
+            if (!CoordSpace.Ready || Time.timeScale <= 0.0001f) return;
+            foreach (var e in _items)
+            {
+                if (e.Item == null || e.HeldSample == null || !e.Net.HasData) continue;
+                if (e.HolderNetId == 0 || e.HolderNetId == _net.MyNetId) continue;
+                if (InStove(e)) continue;
+                e.Net.Apply(e.Item.transform, _net.Clock.ServerTick);
+                MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
+            }
+        }
+
+        /// <summary>Host: one pose sample of the client holding the item goes into the buffer
+        /// <see cref="ApplyClientHeldOnHost"/> plays. A change of frame starts the buffer again.</summary>
+        private void BufferClientHeldPose(ItemEntry e, ItemRequestMsg msg)
+        {
+            if (ItemComponents.InStove(e.Item)) return;
+            var last = e.HeldSample;
+            if (last == null || !e.Net.HasData || last.Frame != msg.Frame || last.BoatIndex != msg.BoatIndex)
+            {
+                e.Net.Clear();
+                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
+                if (msg.Frame == CoordFrame.Boat) EnsureBoatParentState(e.Item, msg.BoatIndex);
+                else EnsureWorldParentState(e.Item);
+            }
+            e.HeldSample = msg;
+            e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+        }
+
+        /// <summary>Host: forget the buffered hand of a client — any action but a pose sample ends it.</summary>
+        private static void ClearClientHeldPose(ItemEntry e)
+        {
+            e.HeldSample = null;
+            e.Net.Clear();
         }
 
         // Items that must be puppets but whose ItemRigidbody.Start has not run yet (see SetPuppet).
@@ -662,6 +709,7 @@ namespace SailwindCoop.Sync
 
             bool continuous = msg.Action == ItemAction.Pose || msg.Action == ItemAction.AltHeld;
             if (!e.Requests.Accept(actor, msg.RequestId, continuous)) return;
+            if (!continuous) ClearClientHeldPose(e);
             if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (msg.Action == ItemAction.Consume)
             {
@@ -945,10 +993,15 @@ namespace SailwindCoop.Sync
             // An interactive State is an absolute result of the player's action and is taken whole.
             if (msg.Action == ItemAction.Drop || (msg.Action == ItemAction.State && !msg.IsInteraction))
                 msg.Health = KeepWorldOwned(e.Item, msg.Details, msg.Health);
-            ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
-                          acceptClientScalars ? msg.Amount : FoldableState.Capture(e.Item),
-                          acceptClientScalars ? msg.Health : e.Item.health,
-                          acceptClientScalars ? msg.Sold : e.Item.sold, acceptClientScalars ? msg.Nailed : e.Item.nailed, e.HolderNetId != 0 || worldDrop);
+            // The holder's pose stream is played from a buffer (ApplyClientHeldOnHost); a pose from
+            // anyone else, and every other action, is put down at once as before.
+            if (msg.Action == ItemAction.Pose && e.HolderNetId == actor)
+                BufferClientHeldPose(e, msg);
+            else
+                ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
+                              acceptClientScalars ? msg.Amount : FoldableState.Capture(e.Item),
+                              acceptClientScalars ? msg.Health : e.Item.health,
+                              acceptClientScalars ? msg.Sold : e.Item.sold, acceptClientScalars ? msg.Nailed : e.Item.nailed, e.HolderNetId != 0 || worldDrop);
             if (acceptClientScalars)
             {
                 ItemComponents.Apply(e.Item, msg.Details);
@@ -1054,6 +1107,7 @@ namespace SailwindCoop.Sync
 
                 e.HolderNetId = 0;
                 e.InventorySlot = -1;
+                if (_net.Role == Role.Host) ClearClientHeldPose(e);
                 _localHeld.Remove(e.Item);
                 RestoreDisconnectedItem(e.Item);
 
@@ -1733,6 +1787,11 @@ namespace SailwindCoop.Sync
         private ItemStateMsg BuildState(ItemEntry e, long tick)
         {
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
+            // The host shows a client's held item delayed (ApplyClientHeldOnHost); what it sends is the
+            // holder's own last sample, so the other clients do not get that delay on top of theirs.
+            var held = e.HeldSample;
+            if (held != null && e.HolderNetId != 0 && e.HolderNetId != _net.MyNetId)
+            { frame = held.Frame; boatIndex = held.BoatIndex; pos = held.Pos; rot = held.Rot; vel = held.Vel; }
             uint holder = e.HolderNetId != 0 ? e.HolderNetId : (LocalHand(e.Item) ? _net.MyNetId : 0);
             int inventorySlot = PersonalInventorySlotOf(e.Item);
             if (inventorySlot < 0) inventorySlot = e.InventorySlot;

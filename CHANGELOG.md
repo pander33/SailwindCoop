@@ -2,6 +2,18 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- The anchor winch handle no longer spins on the other machines while a player carries the
+  anchor.
+- An item the host takes from its belt is reliably shown in the host's hand on every client.
+- An item a client holds moves smoothly on the host's screen and stays in the avatar's hand,
+  instead of moving in steps and running ahead of the hand.
+- A rope a client moors to a post is shown on the post on the host's screen too, instead of
+  hanging in the air where the client's hand was.
+
 ## [0.7.0] - 2026-11-03
 
 The protocol is now 96: every player must update. Earlier builds cannot join a 96 host.
@@ -35,10 +47,6 @@ The protocol is now 96: every player must update. Earlier builds cannot join a 9
   `Hips` bone, instead of at the feet.
 - A client's log is no longer flooded with PhysX warnings about kinematic bodies when it
   receives the host's items.
-- The anchor winch handle no longer spins on the other machines while a player carries the
-  anchor.
-- An item the host takes from its belt is reliably shown in the host's hand on every client
-  (after the jankykev fork, `b3c0e84`).
 - Sails and yards no longer shake on a client: the game's sail physics no longer fights the
   pose the host sends.
 - The sea a client sees follows the host's even when the host is asleep alone or far from the

@@ -163,7 +163,12 @@ namespace SailwindCoop.Sync
                 using (InteractionContext.Begin(InteractionSource.RemoteApply))
                 {
                     if (msg.Held && msg.Part == 0 && _bm.ropes[msg.Index].IsMoored()) _bm.ropes[msg.Index].Unmoor();
-                    SlaveCarry(carry); carry.Pose.Apply(carry.Item.transform, _net.Clock.ServerTick);
+                    SlaveCarry(carry);
+                    // MoorTo owns the dock endpoint (as in TickCarry). A client's throw sends Moor before
+                    // the drop, so the drop finds the end already on the post; its pose is the hand's,
+                    // and putting it there left the knot hanging above the post on the host only.
+                    if (msg.Part == 1 || !_bm.ropes[msg.Index].IsMoored())
+                        carry.Pose.Apply(carry.Item.transform, _net.Clock.ServerTick);
                     // A drop runs the game's own return sequence, which reads the rope attachment and
                     // resets the visual itself when it ends. Resetting the visual first clears that
                     // attachment: the sequence then throws on its first step and the part stays where
