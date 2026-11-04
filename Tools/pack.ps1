@@ -170,12 +170,12 @@ function Pack([string]$name) {
         $current = [System.IO.File]::ReadAllText($newReadme)
         $readmePath = Join-Path $stage 'README.md'
         $published = [System.IO.File]::ReadAllText($readmePath)
-        foreach ($heading in 'Installation', 'Установка') {
-            $pattern = '(?s)### [^\r\n]*' + $heading + '\r?\n.*?(?=\r?\n### )'
-            $replacement = [regex]::Match($current, $pattern).Value
-            if (-not $replacement -or -not [regex]::IsMatch($published, $pattern)) { Fail "README section missing: $heading" }
-            $published = [regex]::Replace($published, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement })
-        }
+        # The README is English only since 0.7.1 (sections are '##'); a README published before has
+        # '###' sections and a Russian half, whose installation section is left as it was.
+        $pattern = '(?s)#{2,3} [^\r\n]*Installation\r?\n.*?(?=\r?\n#{2,3} )'
+        $replacement = [regex]::Match($current, $pattern).Value
+        if (-not $replacement -or -not [regex]::IsMatch($published, $pattern)) { Fail 'README section missing: Installation' }
+        $published = [regex]::Replace($published, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement })
         [System.IO.File]::WriteAllText($readmePath, $published, [System.Text.UTF8Encoding]::new($false))
         Remove-Item $newReadme
     }

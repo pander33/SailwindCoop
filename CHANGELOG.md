@@ -2,7 +2,22 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.7.1] - 2026-11-04
+
+The protocol is still 96: 0.7.1 plays together with 0.7.0, but updating is recommended.
+
+### Changed
+
+- The mod costs about half as much frame time on the host and a third less on a client.
+  The periodic searches through the whole scene for items, lights, wind orbs and boat hulls
+  are gone, and the longest frames on the host are about 3 ms shorter.
+- The mod's hooks that run every frame no longer make garbage on each call, so the game's
+  garbage collection, a short hitch of a few milliseconds, should come less often, most of all
+  on a client.
+- A message to every client is written once instead of once per client, and the host sends
+  the periodic item state in four parts instead of all at once.
+- The mission journal reaches clients within a quarter of a second of a change instead of in
+  the same frame.
 
 ### Fixed
 
