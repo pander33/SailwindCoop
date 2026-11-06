@@ -11,6 +11,7 @@
     <Compile Include="..\..\Net\BoatGenerationBook.cs" Link="Net\BoatGenerationBook.cs" />
     <Compile Include="..\..\Sync\AtomicSaveFile.cs" Link="AtomicSaveFile.cs" />
     <Compile Include="..\..\Sync\DiceGame.cs" Link="DiceGame.cs" />
+    <Compile Include="..\..\Sync\LiarDiceGame.cs" Link="LiarDiceGame.cs" />
     <Compile Include="..\..\Sync\DiceJournal.cs" Link="DiceJournal.cs" />
     <Compile Include="..\..\Net\ModManifest.cs" Link="Net\ModManifest.cs" />
     <Compile Include="..\..\Net\ModVersions.cs" Link="Net\ModVersions.cs" />

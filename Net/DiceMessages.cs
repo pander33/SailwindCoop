@@ -6,7 +6,8 @@ namespace SailwindCoop.Net
 	public enum DiceAction : byte
 	{
 		Place, Join, Leave, Ready, Start, Roll, SetHeldMask, Bank, Pause,
-		ResumeReady, CancelVote, Remove, Rematch, RequestBaseline, Presence, SetStake
+		ResumeReady, CancelVote, Remove, Rematch, RequestBaseline, Presence, SetStake,
+		SetMode, LiarBid, LiarChallenge, LiarNext
 	}
 
 	public sealed class DiceRequestMsg : INetMessage
@@ -30,7 +31,8 @@ namespace SailwindCoop.Net
 			Action = (DiceAction) r.GetByte(); TableId = r.GetUInt(); Epoch = r.GetUInt(); RequestId = r.GetUInt();
 			Revision = r.GetUInt(); TurnId = r.GetUInt(); BoatIndex = r.GetUShort(); MatchId = r.GetString(64);
 			Mask = r.GetByte(); Flag = r.GetBool(); X = r.GetFloat(); Y = r.GetFloat(); Z = r.GetFloat(); Yaw = r.GetFloat(); Stake = r.GetUShort();
-			if (Action > DiceAction.SetStake || Mask > 7) throw new InvalidDataException("Dice request format");
+			if (Action > DiceAction.LiarNext || Mask > 7 || Action == DiceAction.SetMode && Mask > 1 ||
+				Action == DiceAction.LiarBid && (Mask < 1 || Mask > 6 || Stake < 1 || Stake > 25)) throw new InvalidDataException("Dice request format");
 		}
 	}
 
@@ -68,6 +70,12 @@ namespace SailwindCoop.Net
 		public long AnchorTick, ElapsedMs, PresentationAtMs;
 		public byte[] Faces = new byte[3];
 		public DicePlayerData[] Players = new DicePlayerData[0];
+		public byte Mode, LiarFace, LiarSeat, LiarLoser = 255, LiarActual;
+		public ushort LiarQuantity;
+		public int LiarRound;
+		public bool LiarRevealed;
+		public byte[] DiceLeft = new byte[5], LiarHands = new byte[25];
+		public DiceStateMsg WithHands(byte[] hands) { var copy = (DiceStateMsg) MemberwiseClone(); copy.LiarHands = hands; return copy; }
 		public MsgType Type => MsgType.DiceState;
 		public void Serialize(NetDataWriter w)
 		{
@@ -78,6 +86,9 @@ namespace SailwindCoop.Net
 			for (int i = 0; i < 3; i++) w.Put(Faces[i]);
 			w.Put(OwnerNetId); w.Put(Stake); w.Put(StakeCurrency); w.Put(StakesAllowed);
 			w.Put((byte) Players.Length); foreach (var p in Players) p.Write(w);
+			w.Put(Mode); w.Put(LiarFace); w.Put(LiarSeat); w.Put(LiarLoser); w.Put(LiarActual); w.Put(LiarQuantity); w.Put(LiarRound); w.Put(LiarRevealed);
+			for (int i = 0; i < 5; i++) w.Put(DiceLeft[i]);
+			for (int i = 0; i < 25; i++) w.Put(LiarHands[i]);
 		}
 		public void Deserialize(NetDataReader r)
 		{
@@ -91,7 +102,12 @@ namespace SailwindCoop.Net
 			OwnerNetId = r.GetUInt(); Stake = r.GetUShort(); StakeCurrency = r.GetByte(); StakesAllowed = r.GetBool();
 			int count = r.GetByte(); if (count > 5) throw new InvalidDataException("Dice seat count");
 			Players = new DicePlayerData[count]; for (int i = 0; i < count; i++) { Players[i] = new DicePlayerData(); Players[i].Read(r); }
-			if (Phase > 10 || ResumePhase > 10 || HeldMask > 7 || RollHeldMask > 7 || Round > 2 || (count > 0 && Seat >= count))
+			Mode = r.GetByte(); LiarFace = r.GetByte(); LiarSeat = r.GetByte(); LiarLoser = r.GetByte(); LiarActual = r.GetByte();
+			LiarQuantity = r.GetUShort(); LiarRound = r.GetInt(); LiarRevealed = r.GetBool();
+			for (int i = 0; i < 5; i++) { DiceLeft[i] = r.GetByte(); if (DiceLeft[i] > 5) throw new InvalidDataException("Liar dice count"); }
+			for (int i = 0; i < 25; i++) { LiarHands[i] = r.GetByte(); if (LiarHands[i] > 6) throw new InvalidDataException("Liar dice face"); }
+			if (Mode > 1 || LiarFace > 6 || LiarQuantity > 25 || LiarActual > 25 || LiarSeat >= 5 || (LiarLoser != 255 && LiarLoser >= 5) ||
+				Phase > 12 || ResumePhase > 12 || HeldMask > 7 || RollHeldMask > 7 || Round > 2 || (count > 0 && Seat >= count))
 				throw new InvalidDataException("Dice state format");
 			foreach (byte face in Faces) if (face > 6) throw new InvalidDataException("Dice face");
 		}

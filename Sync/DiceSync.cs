@@ -199,7 +199,7 @@ namespace SailwindCoop.Sync
 			{
 				var seat = table.Game.Seats.FirstOrDefault(p => p.Identity == identity);
 				if (seat != null && !seat.Connected) { seat.NetId = id; seat.Connected = true; Publish(table); }
-				net.SendToPlayer(id, table.State, DeliveryMethod.ReliableOrdered);
+				SendState(table, id);
 			}
 			net.SendToPlayer(id, new DiceBaselineMsg { Revision = revision, Tables = tables.Keys.ToArray() }, DeliveryMethod.ReliableOrdered);
 			net.SendToPlayer(id, new DiceJournalMsg { Text = JournalText }, DeliveryMethod.ReliableOrdered);
@@ -256,7 +256,7 @@ namespace SailwindCoop.Sync
 				Guid owner = IdentityOf(actor);
 				// A player has one table: setting up another one moves it, wherever the old one stands.
 				var old = tables.Values.FirstOrDefault(t => t.Owner == owner);
-				if (old != null && old.Game.Phase >= DicePhase.AwaitRoll && old.Game.Phase <= DicePhase.RollingReroll) result.Detail = "Your dice table is in use. Finish or cancel the party first.";
+				if (old != null && DiceGame.InProgress(old.Game.Phase)) result.Detail = "Your dice table is in use. Finish or cancel the party first.";
 				else if (tables.Count - (old != null ? 1 : 0) >= DiceTablePlace.MaxTables) result.Detail = "There are already " + DiceTablePlace.MaxTables + " dice tables in this world.";
 				else if (!shore && BoatLocator.FindByIndex(request.BoatIndex) == null) result.Detail = "That boat is not available for a dice table.";
 				else if (!shore && tables.Values.Any(t => t != old && t.State.BoatIndex == request.BoatIndex)) result.Detail = "This boat already has a dice table.";
@@ -289,10 +289,14 @@ namespace SailwindCoop.Sync
 						if (changed && game.Seats.Count >= 2 && game.Seats.All(p => p.Ready && p.Connected))
 						{
 							if (game.RollId == 0) game.FirstSeat = random.Next(game.Seats.Count);
-							game.Start();
+							game.Start(RollFace);
 						}
 						break;
-					case DiceAction.Start: if (game.RollId == 0) game.FirstSeat = random.Next(Math.Max(1, game.Seats.Count)); changed = game.Start(); break;
+					case DiceAction.Start: if (game.RollId == 0) game.FirstSeat = random.Next(Math.Max(1, game.Seats.Count)); changed = game.Start(RollFace); break;
+					case DiceAction.SetMode: changed = game.SetMode(request.Mask); break;
+					case DiceAction.LiarBid: changed = game.LiarBid(request.Stake, request.Mask); break;
+					case DiceAction.LiarChallenge: changed = game.LiarChallenge(); break;
+					case DiceAction.LiarNext: changed = game.LiarNext(RollFace); break;
 					case DiceAction.Roll:
 						if (game.Phase == DicePhase.AwaitRoll || game.Phase == DicePhase.Selecting && !game.Rerolled && game.HeldMask != 7)
 							changed = game.Roll(new[] { (byte) random.Next(1, 7), (byte) random.Next(1, 7), (byte) random.Next(1, 7) }, clock.Elapsed(net.Clock.ServerTick));
@@ -315,7 +319,15 @@ namespace SailwindCoop.Sync
 			}
 			result.Revision = table?.State.Revision ?? revision;
 			if (actor == net.MyNetId) { if (result.Detail != "") CoopBehaviour.Notice(result.Detail); }
-			else { net.SendToPlayer(actor, result, DeliveryMethod.ReliableOrdered); if (table != null) net.SendToPlayer(actor, table.State, DeliveryMethod.ReliableOrdered); }
+			else { net.SendToPlayer(actor, result, DeliveryMethod.ReliableOrdered); if (table != null) SendState(table, actor); }
+		}
+		private byte RollFace() => (byte) random.Next(1, 7);
+		private void SendState(DiceTable table, uint viewer)
+		{
+			// Every send path (publish, baseline, stale request and reconnect) uses this projection.
+			var state = table.State;
+			if (state.Mode == 1) state = state.WithHands(table.Game.Liar.VisibleHands(table.Game.Seats.FindIndex(p => p.NetId == viewer)));
+			net.SendToPlayer(viewer, state, DeliveryMethod.ReliableOrdered);
 		}
 		private void Publish(DiceTable table)
 		{
@@ -332,6 +344,11 @@ namespace SailwindCoop.Sync
 			state.Round = (byte) game.Round; state.Seat = (byte) game.Seat; state.FirstSeat = (byte) game.FirstSeat;
 			state.PresentationAtMs = game.PresentationAtMs;
 			state.Stake = game.Stake; state.StakeCurrency = game.StakeCurrency;
+			state.Mode = game.Mode; state.LiarFace = game.Liar.Face; state.LiarQuantity = game.Liar.Quantity;
+			state.LiarSeat = (byte) Math.Max(0, game.Liar.BidSeat); state.LiarLoser = game.Liar.Loser < 0 ? (byte) 255 : (byte) game.Liar.Loser;
+			state.LiarActual = (byte) game.Liar.Actual; state.LiarRound = game.Liar.Round; state.LiarRevealed = game.Liar.Revealed;
+			state.DiceLeft = new byte[5]; Array.Copy(game.Liar.DiceLeft, state.DiceLeft, game.Liar.DiceLeft.Length);
+			state.LiarHands = game.Liar.VisibleHands(game.Seats.FindIndex(p => p.NetId == net.MyNetId));
 			state.StakesAllowed = AllowStakes && (WalletSync.Instance == null || !WalletSync.Instance.Shared);
 			state.ClockEpoch = clock.Epoch.ToString("N"); state.ClockRevision = clock.Revision;
 			state.AnchorTick = clock.AnchorServerTick; state.ElapsedMs = clock.ElapsedAtAnchorMs; state.Running = clock.Running;
@@ -342,7 +359,7 @@ namespace SailwindCoop.Sync
 				Scores = (int[]) p.Scores.Clone(), Scored = (bool[]) p.Scored.Clone()
 			}).ToArray();
 			table.View?.ObservePresentation(state);
-			Broadcast(state);
+			foreach (uint id in net.ReadyClientIds()) SendState(table, id);
 			if (completed) Settle(state);
 		}
 		// A loser pays the stake itself, from its own wallet, when it sees the party end. A state that

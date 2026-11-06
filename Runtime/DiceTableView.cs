@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace SailwindCoop.Runtime
 {
-	public sealed class DiceTableView : IDisposable
+	public sealed partial class DiceTableView : IDisposable
 	{
 		public readonly GameObject Root;
 		private readonly Transform top, cup;
@@ -234,6 +234,8 @@ namespace SailwindCoop.Runtime
 		}
 		public void Apply(DiceStateMsg state, long tick)
 		{
+			if (state.Mode == 1) { ApplyLiar(state, tick); return; }
+			HideLiar();
 			if (state.BoatIndex == BoatLocator.NoBoat)
 				Root.transform.position = CoordSpace.RealToLocal(new Vector3(state.X, state.Y, state.Z));
 			long elapsed = state.ElapsedMs + (state.Running ? Math.Max(0, tick - state.AnchorTick) : 0);
@@ -351,6 +353,7 @@ namespace SailwindCoop.Runtime
 		}
 		public void ObservePresentation(DiceStateMsg state)
 		{
+			if (state.Mode == 1) return;
 			if (observedMatch == state.MatchId && observedRoll == state.RollId) return;
 			if (observedMatch != state.MatchId) pendingPresentations.Clear();
 			observedMatch = state.MatchId; observedRoll = state.RollId;

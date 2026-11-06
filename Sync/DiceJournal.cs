@@ -32,7 +32,7 @@ namespace SailwindCoop.Sync
 		public bool Add(DiceGame game)
 		{
 			if (game.Phase != DicePhase.Completed || Matches.Any(m => m.MatchId == game.MatchId)) return false;
-			Matches.Add(new DiceMatchRecord { MatchId = game.MatchId, Players = game.Seats.Select(p => p.Copy()).ToArray() });
+			Matches.Add(new DiceMatchRecord { MatchId = game.MatchId, Mode = game.Mode, Players = game.Seats.Select(p => p.Copy()).ToArray() });
 			return true;
 		}
 		public void Save(string path) => AtomicSaveFile.Write(path, Write);
@@ -40,11 +40,11 @@ namespace SailwindCoop.Sync
 		{
 			using (var writer = new BinaryWriter(stream, Encoding.UTF8, true))
 			{
-				writer.Write(3); writer.Write(Identity.ToByteArray());
+				writer.Write(4); writer.Write(Identity.ToByteArray());
 				writer.Write(Matches.Count);
 				foreach (var match in Matches)
 				{
-					writer.Write(match.MatchId.ToByteArray()); writer.Write(match.Players.Length);
+					writer.Write(match.MatchId.ToByteArray()); writer.Write(match.Mode); writer.Write(match.Players.Length);
 					foreach (var p in match.Players)
 					{
 						writer.Write(p.Identity.ToByteArray()); writer.Write(p.Name);
@@ -58,12 +58,15 @@ namespace SailwindCoop.Sync
 		{
 			using (var reader = new BinaryReader(stream, Encoding.UTF8, true))
 			{
-				if (reader.ReadInt32() != 3) throw new InvalidDataException("Unknown dice journal schema");
+				int schema = reader.ReadInt32();
+				if (schema != 3 && schema != 4) throw new InvalidDataException("Unknown dice journal schema");
 				var journal = new DiceJournal { Identity = new Guid(reader.ReadBytes(16)) };
 				int count = reader.ReadInt32(); if (count < 0 || count > 100000) throw new InvalidDataException("Dice match count");
 				for (int m = 0; m < count; m++)
 				{
 					var match = new DiceMatchRecord { MatchId = new Guid(reader.ReadBytes(16)) };
+					if (schema >= 4) match.Mode = reader.ReadByte();
+					if (match.Mode > 1) throw new InvalidDataException("Dice game mode");
 					int seats = reader.ReadInt32(); if (seats < 2 || seats > 5) throw new InvalidDataException("Dice seats");
 					match.Players = new DiceSeat[seats];
 					for (int p = 0; p < seats; p++)
@@ -90,18 +93,22 @@ namespace SailwindCoop.Sync
 					if (player == null || player.Total != match.Players.Max(p => p.Total)) continue;
 					if (match.Players.Count(p => p.Total == player.Total) == 1) wins++; else shared++;
 				}
-				text.AppendLine(group.Last().Name + ": " + group.Count() + " games, " + wins + " wins, " + shared +
-					" shared; best " + group.Max(p => p.Total) + ", turn " + group.Max(p => p.Scores.Max()) +
-					", pairs " + group.Sum(p => p.Pairs) + ", triples " + group.Sum(p => p.Triples));
+				text.Append(group.Last().Name + ": " + group.Count() + " games, " + wins + " wins, " + shared + " shared");
+				var threeRounds = Matches.Where(m => m.Mode == 0).SelectMany(m => m.Players).Where(p => p.Identity == group.Key).ToArray();
+				if (threeRounds.Length > 0) text.Append("; best " + threeRounds.Max(p => p.Total) + ", turn " + threeRounds.Max(p => p.Scores.Max()) +
+					", pairs " + threeRounds.Sum(p => p.Pairs) + ", triples " + threeRounds.Sum(p => p.Triples));
+				text.AppendLine();
 			}
 			foreach (var match in Matches.Skip(Math.Max(0, Matches.Count - 5)))
-				text.AppendLine(string.Join(" / ", match.Players.Select(p => p.Name + " " + p.Total)));
+				text.AppendLine((match.Mode == 1 ? "Liar's Dice: " : "Three Rounds: ") + string.Join(" / ", match.Players.Select(p =>
+					p.Name + (match.Mode == 1 ? (p.Total == 1 ? " won" : " lost") : " " + p.Total))));
 			return text.ToString();
 		}
 	}
 	public sealed class DiceMatchRecord
 	{
 		public Guid MatchId;
+		public byte Mode;
 		public DiceSeat[] Players;
 	}
 }

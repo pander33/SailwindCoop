@@ -11,7 +11,7 @@ namespace SailwindCoop.Runtime
 	// score board each take the pick-up button and the use button. Only setting the table up starts
 	// elsewhere, from the gesture wheel. In close view, players have dedicated hotkeys and a bottom
 	// HUD action bar for smooth, rapid play.
-	public sealed class DiceTableInput
+	public sealed partial class DiceTableInput
 	{
 		private struct Choice
 		{
@@ -64,7 +64,7 @@ namespace SailwindCoop.Runtime
 		{
 			// Setting up a table again moves the one the player already has; the host decides the same way.
 			var mine = MyTable();
-			if (mine != null && mine.State.Phase >= (byte) DicePhase.AwaitRoll && mine.State.Phase <= (byte) DicePhase.RollingReroll)
+			if (mine != null && DiceGame.InProgress((DicePhase) mine.State.Phase))
 			{
 				CoopBehaviour.Notice("Your dice table is in use. Finish or cancel the party first.");
 				return;
@@ -92,10 +92,12 @@ namespace SailwindCoop.Runtime
 		public void ObservePresence()
 		{
 			closeUp.Tick();
+			if (!closeUp.Active) buttonPeek = false;
 			var coop = CoopBehaviour.Instance;
 			bool available = !GameState.inBed && !GameState.sleeping;
 			foreach (var table in sync.Tables)
 			{
+				if (table.View != null && (!closeUp.Active || closeUp.Table != table)) table.View.ShowLiarHand = false;
 				bool visible = available && !placing && GameState.playing && !GameState.currentlyLoading &&
 					!coop.CoopMenuOpen && !BoatCamera.on && Time.timeScale > 0 &&
 					(closeUp.Active ? closeUp.Table == table : !GameState.inCursorMenu && Within(table, 2.5f));
@@ -172,6 +174,7 @@ namespace SailwindCoop.Runtime
 			uint me = coop.Net.MyNetId;
 			var state = table.State;
 			var phase = (DicePhase) state.Phase;
+			if (state.Mode == 1 && (phase == DicePhase.LiarBidding || phase == DicePhase.LiarReveal)) return HandleLiarActions(table);
 			int seat = Array.FindIndex(state.Players, p => p.NetId == me);
 			bool seated = seat >= 0, turn = seated && state.Seat == seat;
 
@@ -266,7 +269,7 @@ namespace SailwindCoop.Runtime
 			}
 
 			// If cursor is over the bottom HUD action bar, suppress 3D raycasting so clicks don't hit background items
-			if (Input.mousePosition.y < 64f)
+			if (Input.mousePosition.y < (phase == DicePhase.Lobby ? 108f : 64f))
 			{
 				Hint = "";
 				return true;
@@ -332,10 +335,16 @@ namespace SailwindCoop.Runtime
 			for (int i = 0; i < state.Players.Length; i++)
 				if (state.Players[i].NetId == me) { seat = i; break; }
 			bool seated = seat >= 0, turn = seated && state.Seat == seat;
-			bool playing = phase >= DicePhase.AwaitRoll && phase <= DicePhase.RollingReroll, over = phase == DicePhase.Completed || phase == DicePhase.Cancelled;
+			bool playing = DiceGame.InProgress(phase), over = phase == DicePhase.Completed || phase == DicePhase.Cancelled;
 			// Joining belongs to the table, regardless of which piece caught the player's eye.
 			if (!alt && phase == DicePhase.Lobby && !seated && state.Players.Length < DiceGame.MaxSeats)
 				return Set(ref choice, "Join game", DiceAction.Join);
+			if (state.Mode == 1 && (phase == DicePhase.LiarBidding || phase == DicePhase.LiarReveal))
+			{
+				if (target == BoardTarget && alt && seated) return Set(ref choice, "pause the party", DiceAction.Pause);
+				if (alt) return false;
+				choice.Closer = true; choice.Label = "open Liar's Dice (hold P to peek)"; return true;
+			}
 			if (target == DiceTableView.TableTarget)
 			{
 				if (alt) return false;
@@ -667,6 +676,9 @@ namespace SailwindCoop.Runtime
 
 		private void DrawCloseUpHUD(DiceTable table)
 		{
+			DrawModeChoice(table);
+			if (table.State.Mode == 1 && ((DicePhase) table.State.Phase == DicePhase.LiarBidding || (DicePhase) table.State.Phase == DicePhase.LiarReveal))
+			{ DrawLiarHUD(table); return; }
 			float barW = Mathf.Clamp(Screen.width * 0.84f, 680f, 1020f);
 			float barH = 46f;
 			float barX = (Screen.width - barW) * 0.5f;

@@ -9,11 +9,11 @@
 A co-op multiplayer mod for Sailwind: sail one world together with up to four friends, over a
 local network, a VPN, or Steam.
 
-**Current Version:** 0.7.1
-**Wire Protocol:** 96. Every machine needs a build with protocol 96; earlier builds cannot connect to it.
+**Current Version:** 0.8.0
+**Wire Protocol:** 97. Every machine needs a build with protocol 97; earlier builds cannot connect to it.
 **Requirements:** BepInEx 5.x, Sailwind 0.40
 
-The mod is in early development (v0.7.1). Expect bugs, and please report them.
+The mod is in early development (v0.8.0). Expect bugs, and please report them.
 
 ## Features
 
@@ -42,7 +42,7 @@ The mod comes in two editions that play together. The **Thunderstore edition** i
 a mod manager: <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>. The **full
 edition** (GitHub) can also download mods the host has and you are missing. The title of the
 status overlay (F8 -> Settings -> Show Status) shows the edition, for example
-`Sailwind Co-op 0.7.1 (Thunderstore)`.
+`Sailwind Co-op 0.8.0 (Thunderstore)`.
 
 Manual install of the full edition:
 

@@ -66,6 +66,12 @@ namespace ProtocolSmoke
             CheckPopulatedMessage(new DiceResultMsg { RequestId = 7, Revision = 90, Result = DiceResultKind.ResyncNeeded, Detail = "changed" }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new DiceBaselineMsg { Revision = 100, Tables = new uint[] { 3, 4, 5 } }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new DiceJournalMsg { Text = "Player 1: 42 points" }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceRequestMsg { Action = DiceAction.LiarBid, TableId = 18, Revision = 7, TurnId = 3, Stake = 12, Mask = 5 }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new DiceStateMsg { Mode = 1, TableId = 18, Phase = 11, ResumePhase = 11, Seat = 1,
+                LiarFace = 5, LiarQuantity = 12, LiarSeat = 0, LiarRound = 4, DiceLeft = new byte[] { 3, 4, 0, 0, 0 },
+                LiarHands = Enumerable.Range(0, 25).Select(i => i >= 5 && i < 9 ? (byte) 5 : (byte) 0).ToArray(),
+                Players = new[] { new DicePlayerData { Name = "Host", NetId = 1 }, new DicePlayerData { Name = "Guest", NetId = 2 } }
+            }, failures, ref populated, ref truncated);
             foreach (var type in messageTypes.Where(t => t.GetField("LayoutHash") != null || t == typeof(SpawnObjectMsg) ||
                 t == typeof(FishCatchMsg) || t == typeof(ItemRequestMsg) || t == typeof(ItemStateMsg) || t == typeof(StormStateMsg) || t == typeof(ChartRequestMsg) || t == typeof(ChartStateMsg) || t == typeof(DirtRequestMsg) || t == typeof(DirtStateMsg) || t == typeof(OrbRequestMsg) || t == typeof(OrbStateMsg) || t == typeof(WindRequestMsg) || t == typeof(InstrumentRequestMsg) || t == typeof(InstrumentStateMsg) || typeof(ItemOperationBody).IsAssignableFrom(t) || typeof(RefitBody).IsAssignableFrom(t)))
             {

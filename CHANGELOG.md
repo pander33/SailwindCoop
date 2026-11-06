@@ -2,6 +2,20 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+Everyone must update: wire protocol 97 cannot connect to protocol 96 builds.
+
+### Added
+
+- Liar's Dice for 2–5 players, selectable by the table owner in the lobby alongside Three Rounds.
+  Start with five dice each, raise a bid or call a bluff, and lose one die when wrong; the last
+  player with dice wins. Ones are not wild.
+- Hold P or the right mouse button in close view to peek at your own dice. Other hands are
+  sent only when a bluff is called. All hands stay visible until the crew starts the next round.
+- Liar's Dice uses the existing stakes, pause, reconnect and match journal. Old journals remain
+  readable; new journal files store the game mode.
+
 ## [0.7.1] - 2026-11-04
 
 The protocol is still 96: 0.7.1 plays together with 0.7.0, but updating is recommended.

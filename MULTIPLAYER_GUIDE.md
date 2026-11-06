@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.7.1) uses **protocol 96**, requires Sailwind 0.40, and cannot connect to
+Every machine needs a build with the same protocol number. The current build (0.8.0) uses **protocol 97**, requires Sailwind 0.40, and cannot connect to
 earlier builds. A host on 0.4.3 or later accepts other versions of the mod that use the same protocol; a host on 0.4.2 or earlier requires the exact same version. Some features still await end-to-end in-game verification; the release notes list them.
 
 <!--full-->
@@ -14,7 +14,7 @@ The mod comes in two editions that use the same protocol and can play together. 
 edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN, VPN or Steam and
 compares mods when joining. The **full edition** adds
 downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.7.1 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.8.0 (Thunderstore)`. Sections below that apply to one edition say so.
 
 <!--/full-->
 
@@ -272,8 +272,9 @@ Best current practice: use one main boat for normal co-op sailing, and test ding
 
 ### Deck Dice
 
-A short game for two to five players at a low folding table, played sitting on the deck (crouch). Everything is done at the table; there is
-no menu for it. The hint under the crosshair names what the pick-up button and the use button do
+Two games for two to five players at a low folding table, played sitting on the deck (crouch).
+The table owner chooses **Three Rounds** or **Liar's Dice** in close view while the table is in the lobby.
+Changing the game resets everyone's ready confirmation. The hint under the crosshair names what the pick-up button and the use button do
 on the part of the table you are looking at.
 
 - **Set up a table:** hold `G`, choose **Dice table**, look at a level spot on the deck, a pier or
@@ -281,11 +282,20 @@ on the part of the table you are looking at.
   A player has one table at a time, a boat has one table, and a world has at most five. Setting
   up a table again moves the one you already have, wherever it stands, unless dice are being
   rolled at it right now; a paused party ends with the move.
-- **Sit down and start:** press the pick-up button on the cup to sit down, again to say you are
+- **Sit down and start:** look at any part of the table and press the pick-up button to join. Press the cup or **Ready** in close view to say you are
   ready. The party starts by itself as soon as everyone seated is ready (two players or more).
-- **A turn:** the cup rolls three dice. Press a die to keep it, the cup to reroll the others once,
+- **Three Rounds:** the cup rolls three dice. Press a die to keep it, the cup to reroll the others once,
   or the score board to take the points. Points are the sum of the dice, plus 4 for a pair or 12
   for a triple. Three rounds; the highest total wins and equal totals share the victory.
+- **Liar's Dice:** everyone starts with five hidden dice. Hold **P**, the right mouse button,
+  or **Hold to peek** in close view to inspect your own hand. Ones are ordinary faces, not wild.
+  In your turn, bid how many dice of a face you believe exist across all hands. Increase the
+  quantity, or increase the face while keeping the quantity. The panel offers quantity and
+  face buttons; arrows adjust them and **Enter** submits the bid.
+  Press **L** or **Liar!** to challenge the previous bid. All hands are revealed: if the bid
+  exists, the caller loses a die; otherwise the bidder loses one. Read the result, then press
+  **Space / Next round**. The loser opens the next round, or the next surviving player if the
+  loser has no dice left. The last player with dice wins. Spectators receive no hidden faces.
 - **Pause:** the use button on the score board pauses the party; so does a seated player who
   leaves the boat, goes to bed or disconnects. Everyone seated presses the cup to go on. A paused
   party can be cancelled by a vote at the board, or by a player who leaves at the cup.
@@ -302,7 +312,7 @@ on the part of the table you are looking at.
   loser pays the stake to the winner, divided between the winners of a shared victory.
 - **Close view:** sitting down brings the table close, so that it fills the screen. The cursor is
   free there: the left mouse button does what the pick-up button does and the right one what the
-  use button does. Press `T`, take a step aside or right-click beside the table to step back;
+  use button does in Three Rounds. Press `Esc`, `T`, **Step back**, or take a step aside to step back;
   a seated player comes close again with the pick-up button on the cup, and `T` on a table you are
   looking at opens the view for anyone, also for a player who only watches.
   The other players see no difference. `Dice.CloseUp = false` stops the view from opening by

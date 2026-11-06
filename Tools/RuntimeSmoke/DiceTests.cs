@@ -14,6 +14,7 @@ internal static class DiceTests
 	}
 	public static void Run(Action<string, Action> test)
 	{
+		LiarDiceTests.Run(test);
 		test("dice scores: all 216 outcomes and permutations", () =>
 		{
 			int pairs = 0, triples = 0, sum = 0, minimum = 30, maximum = 0;

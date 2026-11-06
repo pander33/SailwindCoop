@@ -7,7 +7,7 @@ namespace SailwindCoop.Sync
 	public enum DicePhase : byte
 	{
 		Unfolding, Lobby, AwaitRoll, RollingInitial, Selecting, RollingReroll,
-		Paused, Completed, Cancelled, Folding, Removed
+		Paused, Completed, Cancelled, Folding, Removed, LiarBidding, LiarReveal
 	}
 
 	public sealed class DiceSeat
@@ -45,6 +45,18 @@ namespace SailwindCoop.Sync
 		public long PresentationAtMs;
 		public ushort Stake;
 		public byte StakeCurrency;
+		// 0 = Three Rounds, 1 = Liar's Dice. Kept here, not in Unity or the transport.
+		public byte Mode;
+		public LiarDiceGame Liar = new LiarDiceGame();
+		public static bool InProgress(DicePhase phase) => phase >= DicePhase.AwaitRoll && phase <= DicePhase.RollingReroll ||
+			phase == DicePhase.LiarBidding || phase == DicePhase.LiarReveal;
+		public bool SetMode(byte mode)
+		{
+			if (Phase != DicePhase.Lobby || Mode == mode) return false;
+			Mode = mode; Liar = new LiarDiceGame();
+			foreach (var player in Seats) player.Ready = false;
+			return true;
+		}
 
 		public static int Score(byte first, byte second, byte third)
 			=> first + second + third + (first == second && second == third ? 12 :
@@ -87,11 +99,15 @@ namespace SailwindCoop.Sync
 			return true;
 		}
 
-		public bool Start()
+		public bool Start(Func<byte> roll = null)
 		{
 			if (Phase != DicePhase.Lobby || Seats.Count < 2) return false;
 			Round = 0;
 			Seat = FirstSeat % Seats.Count;
+			if (Mode == 1)
+			{
+				Liar.Start(Seats.Count, Seat, roll); Phase = DicePhase.LiarBidding; TurnId++; return true;
+			}
 			BeginTurn();
 			return true;
 		}
@@ -150,7 +166,7 @@ namespace SailwindCoop.Sync
 
 		public bool Pause()
 		{
-			if (Phase == DicePhase.Paused || Phase >= DicePhase.Completed || Phase <= DicePhase.Lobby) return false;
+			if (!InProgress(Phase)) return false;
 			ResumePhase = Phase;
 			Phase = DicePhase.Paused;
 			foreach (var player in Seats) { player.ResumeReady = false; player.CancelVote = false; }
@@ -159,7 +175,7 @@ namespace SailwindCoop.Sync
 
 		public bool Cancel()
 		{
-			if (Phase >= DicePhase.Completed || Phase <= DicePhase.Lobby) return false;
+			if (!InProgress(Phase) && Phase != DicePhase.Paused) return false;
 			Phase = DicePhase.Cancelled;
 			return true;
 		}
@@ -204,7 +220,28 @@ namespace SailwindCoop.Sync
 			Phase = DicePhase.Lobby;
 			Round = 0; Seat = FirstSeat; HeldMask = 0; Rerolled = false;
 			Faces = new byte[3];
+			Liar = new LiarDiceGame();
 			return true;
+		}
+
+		public bool LiarBid(ushort quantity, byte face)
+		{
+			if (Mode != 1 || Phase != DicePhase.LiarBidding) return false;
+			Liar.Bid(quantity, face); Seat = Liar.Seat; TurnId++; return true;
+		}
+		public bool LiarChallenge()
+		{
+			if (Mode != 1 || Phase != DicePhase.LiarBidding || !Liar.Challenge()) return false;
+			Seat = Liar.Seat; TurnId++;
+			Phase = Liar.Winner < 0 ? DicePhase.LiarReveal : DicePhase.Completed;
+			if (Liar.Winner >= 0)
+				for (int i = 0; i < Seats.Count; i++) { Seats[i].Scores[0] = i == Liar.Winner ? 1 : 0; Seats[i].Scored[0] = true; }
+			return true;
+		}
+		public bool LiarNext(Func<byte> roll)
+		{
+			if (Mode != 1 || Phase != DicePhase.LiarReveal) return false;
+			Liar.NextRound(roll); Seat = Liar.Seat; Phase = DicePhase.LiarBidding; TurnId++; return true;
 		}
 
 		public bool Advance(long elapsedMs)
