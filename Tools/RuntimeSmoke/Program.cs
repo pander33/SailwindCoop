@@ -309,6 +309,17 @@ internal static class Program
                 var wrap = new ItemRequestOrder();
                 Assert(wrap.Accept(10, uint.MaxValue, false) && wrap.Accept(10, 1, false), "request wrap rejected");
             });
+            Test("held pose ordering survives a reliable action with the same request ID", () => {
+                var order = new ItemRequestOrder();
+                Assert(order.Accept(10, 3, false), "pickup rejected");
+                Assert(order.AcceptPose(10, 4, 300), "new pose could not arrive before the reliable action");
+                Assert(order.Accept(10, 4, false), "pose blocked its reliable action");
+                Assert(!order.AcceptPose(10, 4, 250), "older pose crossed the action");
+                Assert(order.AcceptPose(10, 4, 310), "newer pose rejected");
+                Assert(order.AcceptPose(11, 4, 200), "another sender shared the watermark");
+                Assert(order.AcceptPose(10, 5, 100), "new request could not recover from a clock adjustment");
+                Assert(!order.AcceptPose(10, 4, 400), "old request reopened after newer pose");
+            });
             Test("operation origin nests, suppresses relay and restores after faults", () => {
                 Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "dirty initial origin");
                 using (InteractionContext.Begin(InteractionSource.LocalInput))

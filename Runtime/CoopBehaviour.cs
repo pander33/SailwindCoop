@@ -204,13 +204,13 @@ namespace SailwindCoop.Runtime
             Env = new EnvironmentSync(Net);
             CrestWater = new CrestWaterSync();
             Env.Crest = CrestWater;
-            Controls = new ControlsSync(Net);
+            Controls = new ControlsSync(Net) { InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value };
             new BoatAuthority(Net);
             Anchor = new AnchorSync(Net);
             Mooring = new MooringSync(Net);
             Damage = new BoatDamageSync(Net);
             Lights = new LightSync(Net);
-            Items = new ItemSync(Net);
+            Items = new ItemSync(Net) { InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value };
             Charts = new ChartSync(Net);
             Dirt = new DirtSync(Net);
             Interactions = new InteractionSync(Net);

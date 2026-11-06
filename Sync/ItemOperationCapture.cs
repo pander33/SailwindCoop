@@ -47,11 +47,16 @@ namespace SailwindCoop.Sync
         internal static void RainbowEffect() { if (_active != null && !InteractionContext.Suppressed) _active.WorldEffects |= 1; }
         internal static void TotemEffect()
         { if (_active != null && !InteractionContext.Suppressed) { _active.WorldEffects |= 2; _active.TotemAttraction = WeatherStorms.totemAttraction; } }
-        internal static Scope Begin(string label, bool creates, bool completedInput = false)
+        internal static Scope Begin(string label, bool creates, bool completedInput, ShipItem first, ShipItem second)
         {
             if (_active != null || InteractionContext.Suppressed || (!InteractionContext.HasInput && !completedInput) ||
                 ItemSync.Instance == null || !ItemSync.Instance.IsSessionActive) return null;
-            var scope = new Scope { Label = label, Before = ItemSync.Instance.CaptureOperationItems() };
+            var scope = new Scope
+            {
+                Label = label,
+                Before = first != null ? ItemSync.Instance.CaptureOperationParticipants(first, second) :
+                    ItemSync.Instance.CaptureOperationItems()
+            };
             if (creates)
             {
                 scope.Original = new HashSet<int>();
@@ -136,9 +141,34 @@ namespace SailwindCoop.Sync
                     if (ItemSync.Instance != null && ItemSync.Instance.IsClientSession &&
                         !InteractionContext.HasInput && !completion && !InteractionContext.Suppressed) { run = false; return; }
                 }
-                state = ItemOperationCapture.Begin(__originalMethod.DeclaringType.Name + "." + name,
-                    __originalMethod.DeclaringType == typeof(ShipItemKnife) ||
-                    __originalMethod.DeclaringType == typeof(ShipItemTobaccoPack), completion);
+                var type = __originalMethod.DeclaringType;
+                ShipItem first = null, second = null;
+                // These vanilla methods mutate only the receiver, their explicit item argument,
+                // and (for cutting) the newly created items tracked by the scope.
+                if (name == "OnItemClick" && (type == typeof(ShipItemBottle) || type == typeof(ShipItemSoup) ||
+                    type == typeof(ShipItemKettle) || type == typeof(ShipItemPipe) ||
+                    type == typeof(ShipItemSalt) || type == typeof(ShipItemStove)) ||
+                    name == "LoadFuel")
+                {
+                    first = __instance as ShipItem;
+                    second = __args[0] as ShipItem;
+                }
+                else if (name == "OnItemClick" && (type == typeof(HullDamageButton) || type == typeof(BoatDamageWaterButton)) ||
+                    name == "InsertFuel")
+                    first = __args[0] as ShipItem;
+                else if (name == "InsertIntoCookTrigger")
+                    first = (__instance as CookableFood)?.GetComponent<ShipItem>();
+                else if (name == "CutFood")
+                {
+                    first = __instance as ShipItem;
+                    second = (__args[0] as FoodState)?.GetComponent<ShipItem>();
+                }
+                else if (name == "CutPack" || name == "Drink" || name == "EatFood" ||
+                    ((type == typeof(ShipItemLight) || type == typeof(ShipItemOakum)) && name == "OnAltActivate"))
+                    first = __instance as ShipItem;
+
+                state = ItemOperationCapture.Begin(type.Name + "." + name,
+                    type == typeof(ShipItemKnife) || type == typeof(ShipItemTobaccoPack), completion, first, second);
             }, Report);
             __state = state;
             return run;

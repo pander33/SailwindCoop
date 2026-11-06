@@ -15,6 +15,7 @@ namespace SailwindCoop.Sync
         {
             if (!Equal(sent, now, false)) return false;
             var a = sent.Details; var b = now.Details;
+            if (a == null || b == null) return sent.Health.Equals(now.Health);
             bool lamp = sent.LightOn && now.LightOn;
             if (ItemAgeing.Health(sent.Health, now.Health, BurningFuel(sent, now), lamp ? lampFull : 0f)) return false;
             if (a.HasCookable && ItemAgeing.Heat(a.CookHeat, b.CookHeat)) return false;
@@ -32,7 +33,7 @@ namespace SailwindCoop.Sync
             if (a.HolderNetId != b.HolderNetId || a.InventorySlot != b.InventorySlot ||
                 !a.Amount.Equals(b.Amount) || a.Sold != b.Sold ||
                 a.Nailed != b.Nailed || a.Attached != b.Attached || a.CrateId != b.CrateId ||
-                !a.Details.Equals(b.Details, ageing) || a.CargoPort != b.CargoPort || a.LightOn != b.LightOn || a.Extras.Length != b.Extras.Length) return false;
+                !(a.Details == null ? b.Details == null : a.Details.Equals(b.Details, ageing)) || a.CargoPort != b.CargoPort || a.LightOn != b.LightOn || a.Extras.Length != b.Extras.Length) return false;
             if (ageing && !a.Health.Equals(b.Health)) return false;
             for (int i = 0; i < a.Extras.Length; i++) if (!a.Extras[i].Equals(b.Extras[i])) return false;
             return true;

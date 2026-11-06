@@ -63,6 +63,30 @@ namespace SailwindCoop.Sync
     internal sealed class ItemRequestOrder
     {
         private readonly Dictionary<uint, uint> _actions = new Dictionary<uint, uint>();
+        private Dictionary<uint, PoseOrder> _poses;
+
+        private struct PoseOrder
+        {
+            internal uint Request;
+            internal long Tick;
+        }
+
+        // A reliable action can clear the render buffer after a pose with the same request
+        // has already arrived. Keep the sender's ordering independently of that buffer.
+        internal bool AcceptPose(uint actor, uint request, long tick)
+        {
+            if (!Accept(actor, request, pose: true)) return false;
+            if (_poses == null) _poses = new Dictionary<uint, PoseOrder>();
+            if (_poses.TryGetValue(actor, out var previous))
+            {
+                int order = request == 0 || previous.Request == 0
+                    ? 0 : unchecked((int)(request - previous.Request));
+                if (order < 0 || (order == 0 && tick < previous.Tick)) return false;
+            }
+            _poses[actor] = new PoseOrder { Request = request, Tick = tick };
+            return true;
+        }
+
         internal bool Accept(uint actor, uint request, bool pose)
         {
             if (request == 0) return true; // manifest and older domain requests have no local prediction.

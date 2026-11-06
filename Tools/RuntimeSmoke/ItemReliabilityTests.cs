@@ -225,11 +225,22 @@ internal static class ItemReliabilityTests
             Assert(waiting.Count == 1 && waiting.ContainsKey(((ulong)11 << 32) | 41), "disconnect kept actor wait or dropped other guest");
             Assert(ledger.TryGet(10, 42, out var previous) && ReferenceEquals(previous, retained), "disconnect discarded started effects");
         });
+        test("retained wire reply replaces in-progress marker without reopening an operation", () => {
+            var ledger = new OperationLedger<byte[]>();
+            Assert(ledger.TryBegin(10, 42, null, out _), "first request did not start");
+            Assert(!ledger.TryBegin(10, 42, null, out var pending) && pending == null, "in-progress request reopened");
+            var reply = new byte[] { 1, 4, 9 };
+            ledger.Replace(10, 42, reply);
+            Assert(!ledger.TryBegin(10, 42, null, out var retained) && ReferenceEquals(retained, reply), "exact reply lost");
+            Assert(ledger.TryBegin(11, 42, null, out _), "other actor was treated as duplicate");
+        });
         test("production T11 snapshot binding membership commit preflight and disconnect paths are wired", VerifyProductionPaths);
         test("production consumed cleanup retries past tombstone instead of falsely completing", VerifyConsumedCleanup);
     }
     private static string PluginPath()
     {
+        string candidate = Environment.GetEnvironmentVariable("SAILWINDCOOP_SMOKE_PLUGIN");
+        if (!string.IsNullOrEmpty(candidate)) return Path.GetFullPath(candidate);
         var metadata = (AssemblyMetadataAttribute)Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyMetadataAttribute), false)
             .First(value => ((AssemblyMetadataAttribute)value).Key == "GameDir");
         return Path.Combine(metadata.Value, "BepInEx", "plugins", "SailwindCoop", "SailwindCoop.dll");

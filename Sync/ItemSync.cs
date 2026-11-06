@@ -32,7 +32,7 @@ namespace SailwindCoop.Sync
             public int PrefabIndex;
             public uint NetId;
             public ShipItem Item;
-            public readonly NetTransform Net = new NetTransform();
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
             /// <summary>Host: the last pose sample of the client holding this item, as it came. The
             /// host shows the item from <see cref="Net"/> (delayed like the holder's avatar), but
             /// what it sends on is this sample, or every client would get the delay twice.</summary>
@@ -54,6 +54,9 @@ namespace SailwindCoop.Sync
             public readonly ChangeStream PoseStream = new ChangeStream();
             public ItemRequestMsg SentPose;
             public ItemStateMsg LastSemantic;
+            public ItemStateMsg RemotePose;
+            public ItemStateMsg AppliedRemoteState;
+            public uint AppliedLocalRequest;
             public readonly ItemStateGate Gate = new ItemStateGate();
             public readonly ItemRequestOrder Requests = new ItemRequestOrder();
             public StoveFuel Fuel;
@@ -144,6 +147,8 @@ namespace SailwindCoop.Sync
         private readonly ItemMembership<ShipItem> _cargoMembership = new ItemMembership<ShipItem>();
         private readonly Dictionary<int, ItemStateMsg> _pendingStates = new Dictionary<int, ItemStateMsg>();
         private readonly List<ItemStateMsg> _pendingStateBuffer = new List<ItemStateMsg>();
+        private float _nextPendingStateRetry;
+        private int _pendingStateCursor;
         private readonly Dictionary<int, SpawnObjectMsg> _pendingSpawns = new Dictionary<int, SpawnObjectMsg>();
         private readonly SpawnWait _spawnWait = new SpawnWait();
         // Client: mission goods whose mission slot is not in our journal yet (item id -> slot).
@@ -220,6 +225,7 @@ namespace SailwindCoop.Sync
 
         public float SnapshotHz = 5f;
         public float HeldPoseHz = 15f;
+        public float InterpDelayMs = 100f;
         public float ExtraStateHz = 2f;
         public float AltHeldHz = 15f;
         public int ItemCount => _items.Count;
@@ -287,15 +293,7 @@ namespace SailwindCoop.Sync
                 }
                 if (reported != null) ReportSpawnWait(reported);
             }
-            if (_net.Role == Role.Client && _pendingStates.Count != 0)
-            {
-                // Retried every frame: a reused buffer, not a new list each time.
-                _pendingStateBuffer.Clear();
-                _pendingStateBuffer.AddRange(_pendingStates.Values);
-                foreach (var state in _pendingStateBuffer)
-                    if (TryApplyItemState(state) == ItemApplyStatus.Applied) _pendingStates.Remove(state.InstanceId);
-                _pendingStateBuffer.Clear();
-            }
+            if (_net.Role == Role.Client) RetryPendingItemStates();
             if (_net.Role == Role.Client && _pendingMissionGoods.Count != 0) RetryMissionGoods();
             TickUnsealedCrate();
             SendLocalHeldPose(dt);
@@ -316,7 +314,7 @@ namespace SailwindCoop.Sync
             float interval = 1f / Mathf.Max(1f, HeldPoseHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
-            _sendTimer = 0f;
+            _sendTimer %= interval;
 
             long tick = _net.Clock.ServerTick;
             foreach (var e in _items)
@@ -335,6 +333,30 @@ namespace SailwindCoop.Sync
                     e.WasActive = false;
                 }
             }
+        }
+
+        private void RetryPendingItemStates()
+        {
+            if (_pendingStateBuffer.Count == 0)
+            {
+                if (_pendingStates.Count == 0 || Time.unscaledTime < _nextPendingStateRetry) return;
+                _pendingStateBuffer.AddRange(_pendingStates.Values);
+            }
+
+            // Spread retries across frames. A newer packet or despawn can supersede a queued retry.
+            int end = Math.Min(_pendingStateCursor + 32, _pendingStateBuffer.Count);
+            while (_pendingStateCursor < end)
+            {
+                var state = _pendingStateBuffer[_pendingStateCursor++];
+                if (_pendingStates.TryGetValue(state.InstanceId, out var current) && current == state &&
+                    TryApplyItemState(state) == ItemApplyStatus.Applied)
+                    _pendingStates.Remove(state.InstanceId);
+            }
+            if (_pendingStateCursor < _pendingStateBuffer.Count) return;
+
+            _pendingStateBuffer.Clear();
+            _pendingStateCursor = 0;
+            _nextPendingStateRetry = Time.unscaledTime + 0.1f;
         }
 
         private void ProcessPendingDynamic()
@@ -436,6 +458,8 @@ namespace SailwindCoop.Sync
             e.Net.Clear();
         }
 
+        private static readonly List<Collider> PuppetColliders = new List<Collider>();
+
         // Items that must be puppets but whose ItemRigidbody.Start has not run yet (see SetPuppet).
         private static readonly HashSet<ShipItem> _puppetAwaitingStart = new HashSet<ShipItem>();
         private static readonly List<ShipItem> _puppetStartScratch = new List<ShipItem>();
@@ -504,8 +528,14 @@ namespace SailwindCoop.Sync
                 if (irb != null)
                 {
                     irb.ToggleCollider(!puppet);
-                    foreach (var col in irb.GetComponentsInChildren<Collider>(true))
-                        if (col != null) col.enabled = !puppet;
+                    // Components can change without a transform hierarchy notification.
+                    irb.GetComponentsInChildren(true, PuppetColliders);
+                    try
+                    {
+                        foreach (var col in PuppetColliders)
+                            if (col != null && col.enabled == puppet) col.enabled = !puppet;
+                    }
+                    finally { PuppetColliders.Clear(); }
                 }
                 var body = irb != null ? irb.GetBody() : null;
                 if (body != null)
@@ -698,7 +728,6 @@ namespace SailwindCoop.Sync
                 return;
             }
             if (_net.Role != Role.Host) return;
-            RefreshItems(force: true);
 
             uint actor = _net.PlayerNetIdForPeer(fromPeer);
             if (actor == 0) return;
@@ -708,19 +737,27 @@ namespace SailwindCoop.Sync
             {
                 // Charts and dirt textures are not pushed here: the client asks for each map and each
                 // surface when it binds it, and pushing them as well sent every texture twice.
+                RefreshItems(force: true);
                 SendManifest(fromPeer);
                 return;
             }
 
-            var e = HostLookup(msg.InstanceId, msg.PrefabIndex);
+            bool pose = msg.Action == ItemAction.Pose;
+            var e = pose ? HostLookup(msg.InstanceId, msg.PrefabIndex) : null;
+            if (!IsCurrentItemEntry(e))
+            {
+                RefreshItems(force: true);
+                e = HostLookup(msg.InstanceId, msg.PrefabIndex);
+            }
             if (e == null || e.Item == null)
             {
                 Remember("reject req id=" + msg.InstanceId + " prefab=" + msg.PrefabIndex);
                 return;
             }
 
-            bool continuous = msg.Action == ItemAction.Pose || msg.Action == ItemAction.AltHeld;
-            if (!e.Requests.Accept(actor, msg.RequestId, continuous)) return;
+            bool continuous = pose || msg.Action == ItemAction.AltHeld;
+            if (pose ? !e.Requests.AcceptPose(actor, msg.RequestId, msg.Tick) :
+                !e.Requests.Accept(actor, msg.RequestId, continuous)) return;
             if (!continuous) ClearClientHeldPose(e);
             if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (msg.Action == ItemAction.Consume)
@@ -1046,19 +1083,31 @@ namespace SailwindCoop.Sync
         {
             if (TryApplyItemState(msg) != ItemApplyStatus.Applied) QueueState(msg);
         }
-        private ItemApplyStatus TryApplyItemState(ItemStateMsg msg)
+        private ItemApplyStatus TryApplyItemState(ItemStateMsg msg, bool operationResult = false)
         {
             if (_net.Role != Role.Client || _tombstones.Contains(msg.InstanceId)) return ItemApplyStatus.Applied;
             if (!_hostIds.Contains(msg.InstanceId) || !_byInstanceId.TryGetValue(msg.InstanceId, out var e) || e.Item == null)
-                return ItemApplyStatus.Pending;
-            if (e.PrefabIndex != msg.PrefabIndex) return ItemApplyStatus.Pending;
-            bool semantic, pose;
+                return WaitForItemState(msg, "item identity");
+            if (e.PrefabIndex != msg.PrefabIndex) return WaitForItemState(msg, "prefab mismatch");
             var accepted = e.Gate.Copy();
-            if (!accepted.Receive(msg.Revision, msg.Tick, msg.Requester, msg.RequestId, _net.MyNetId, out semantic, out pose))
+            if (!accepted.Receive(msg.Revision, msg.Tick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
                 return ItemApplyStatus.Applied;
-            if (!ItemComponents.BindingsReady(e.Item, msg.Details)) return ItemApplyStatus.Pending;
+            bool locallyHeld = msg.HolderNetId == _net.MyNetId && HeldItem() == e.Item;
+            if (!operationResult && !semantic && !locallyHeld && msg.HolderNetId != _net.MyNetId &&
+                e.AppliedLocalRequest == e.LastLocalRequest && !ItemComponents.HasPendingBinding(e.Item) &&
+                ItemSemanticState.Equal(e.AppliedRemoteState, msg))
+            {
+                if (pose) PushRemoteItemPose(e, msg);
+                e.Gate.Commit(accepted);
+                return ItemApplyStatus.Applied;
+            }
+            if (!ItemComponents.BindingsReady(e.Item, msg.Details, out var stoveTargets))
+                return WaitForItemState(msg, "stove binding");
+            if (!locallyHeld && (msg.CrateId != 0 || msg.CargoPort >= 0) && !MembershipTargetsReady(e.Item, msg))
+                return WaitForItemState(msg, "container target");
             return e.Gate.Apply(accepted, () => {
-            uint previousHolder = e.HolderNetId;
+            // The writes below can partially succeed before a container or binding fails.
+            e.AppliedRemoteState = null;
             e.HolderNetId = msg.HolderNetId;
             e.InventorySlot = msg.InventorySlot;
             // Every accepted revision is complete; no individual metadata field bypasses ordering.
@@ -1071,33 +1120,77 @@ namespace SailwindCoop.Sync
             else
             {
                 ApplyScalarState(e.Item, msg.Amount, msg.Health, msg.Sold, msg.Nailed);
-                ItemComponents.Apply(e.Item, msg.Details);
+                ItemComponents.Apply(e.Item, msg.Details, stoveTargets);
                 if (e.Item is ShipItemLight light) LightSync.ApplyState(light, msg.LightOn, msg.Health);
             }
-            bool locallyHeld = msg.HolderNetId == _net.MyNetId && HeldItem() == e.Item;
             if (!locallyHeld)
             {
                 var crate = TryApplyCrateMembership(e.Item, msg.CrateId);
-                if (crate != ItemApplyStatus.Applied) return crate;
+                if (crate != ItemApplyStatus.Applied) return WaitForItemState(msg, "crate apply", crate);
                 var cargo = TryApplyCargoMembership(e.Item, msg.CargoPort);
-                if (cargo != ItemApplyStatus.Applied) return cargo;
+                if (cargo != ItemApplyStatus.Applied) return WaitForItemState(msg, "cargo apply", cargo);
                 SetProxyAttached(e.Item, msg.Attached);
                 // The host refused a hook this client hung the item on (occupied there), or another
                 // player took it: a joint made by this machine's own hook click must not stay.
                 if (!msg.Attached && msg.HolderNetId != _net.MyNetId) DisconnectHangable(e.Item);
             }
-            if (ItemComponents.HasPendingBinding(e.Item)) return ItemApplyStatus.Pending;
+            if (ItemComponents.HasPendingBinding(e.Item)) return WaitForItemState(msg, "binding apply");
             // The call below switches the root collider back on, which a log in a stove must not have.
             if (!InStove(e)) SetRemoteInventoryVisual(e.Item, hidden: msg.InventorySlot >= 0 && msg.HolderNetId != _net.MyNetId);
-            if (!locallyHeld && pose)
-            {
-                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
-                if (semantic || previousHolder == _net.MyNetId) e.Net.Clear();
-                e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
-            }
+            if (!locallyHeld && pose) PushRemoteItemPose(e, msg);
+            e.AppliedRemoteState = ownReport || locallyHeld ? null : msg;
+            e.AppliedLocalRequest = e.LastLocalRequest;
             return ItemApplyStatus.Applied;
             });
         }
+
+        private void PushRemoteItemPose(ItemEntry e, ItemStateMsg msg)
+        {
+            var previous = e.RemotePose;
+            bool frameChanged = previous == null || previous.Frame != msg.Frame ||
+                (msg.Frame == CoordFrame.Boat && previous.BoatIndex != msg.BoatIndex);
+            if (frameChanged)
+                ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
+            if (frameChanged || previous.HolderNetId != msg.HolderNetId ||
+                previous.InventorySlot != msg.InventorySlot || previous.CrateId != msg.CrateId ||
+                previous.CargoPort != msg.CargoPort || previous.Attached != msg.Attached ||
+                previous.Nailed != msg.Nailed ||
+                previous.Details?.CookStoveId != msg.Details?.CookStoveId ||
+                previous.Details?.CookSlot != msg.Details?.CookSlot ||
+                previous.Details?.FuelStoveId != msg.Details?.FuelStoveId ||
+                previous.Details?.FuelInserted != msg.Details?.FuelInserted)
+            {
+                e.Net.Clear();
+            }
+            e.RemotePose = msg;
+            e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+        }
+
+#if DEBUG
+        private float _nextPendingReport;
+        private readonly Dictionary<string, int> _pendingAttemptsByReason = new Dictionary<string, int>();
+#endif
+        private ItemApplyStatus WaitForItemState(ItemStateMsg msg, string reason, ItemApplyStatus status = ItemApplyStatus.Pending)
+        {
+#if DEBUG
+            _pendingAttemptsByReason.TryGetValue(reason, out int attempts);
+            _pendingAttemptsByReason[reason] = attempts + 1;
+            float now = Time.unscaledTime;
+            if (now >= _nextPendingReport)
+            {
+                _nextPendingReport = now + 2f;
+                var summary = new System.Text.StringBuilder();
+                foreach (var count in _pendingAttemptsByReason)
+                    summary.Append(count.Key).Append('=').Append(count.Value).Append(' ');
+                Plugin.Logger.LogInfo("[ItemSync] Waiting for " + reason + " id=" + msg.InstanceId +
+                    " pending=" + _pendingStates.Count + " sampleAgeMs=" + (_net.Clock.ServerTick - msg.Tick) +
+                    " attempts: " + summary);
+                _pendingAttemptsByReason.Clear();
+            }
+#endif
+            return status;
+        }
+
         private void QueueState(ItemStateMsg msg)
         {
             ItemStateMsg previous;
@@ -1149,7 +1242,7 @@ namespace SailwindCoop.Sync
             float interval = 1f / Mathf.Max(1f, HeldPoseHz);
             _heldPoseTimer += dt;
             if (_heldPoseTimer < interval) return;
-            _heldPoseTimer = 0f;
+            _heldPoseTimer %= interval;
 
             if (held != null) StreamLocalPose(held);
 
@@ -1175,8 +1268,11 @@ namespace SailwindCoop.Sync
         /// <summary>Send one unreliable Pose for a locally-carried item (hand or belt).</summary>
         private void StreamLocalPose(ShipItem item)
         {
-            RefreshItems(force: false);
-            if (!_byItem.TryGetValue(item, out var e)) return;
+            if (!_byItem.TryGetValue(item, out var e) || !IsCurrentItemEntry(e))
+            {
+                RefreshItems(force: false);
+                if (!_byItem.TryGetValue(item, out e)) return;
+            }
             _localHeld[item] = _net.MyNetId;
             if (!InPersonalInventory(item))
                 SetPuppet(item, true);    // hand-held items stay visual/kinematic; belt slots need vanilla ItemRigidbody
@@ -3309,8 +3405,9 @@ namespace SailwindCoop.Sync
         private void SendExtraState(float dt)
         {
             _extraTimer += dt;
-            if (_extraTimer < 1f / (Mathf.Max(0.5f, ExtraStateHz) * ExtraSlices)) return;
-            _extraTimer = 0f;
+            float interval = 1f / (Mathf.Max(0.5f, ExtraStateHz) * ExtraSlices);
+            if (_extraTimer < interval) return;
+            _extraTimer %= interval;
             int count = _items.Count;
             if (count == 0) { _extraCursor = 0; return; }
             // The list is rebuilt by RefreshItems; the cursor carries on (an item moved by the rebuild is
@@ -3484,16 +3581,26 @@ namespace SailwindCoop.Sync
                 e.Index = (ushort)i;
                 e.InstanceId = instanceId;
                 e.PrefabIndex = prefabIndex;
-                if (e.Item != item) { e.FuelResolved = false; e.LampResolved = false; }
+                if (e.Item != item)
+                {
+                    e.FuelResolved = false;
+                    e.LampResolved = false;
+                    e.AppliedRemoteState = null;
+                    e.RemotePose = null;
+                }
                 e.Item = item;
                 if (_net.Role == Role.Host && _authoredIdentity.TryGetValue(item, out var author))
                 { e.AuthorRequester = author.Key; e.AuthorRequestId = author.Value; }
-                e.Net.InterpDelayMs = 90f;
+                e.Net.InterpDelayMs = InterpDelayMs;
                 _items.Add(e);
                 _byItem[item] = e;
                 _byInstanceId[instanceId] = e;
                 _net.Registry.RegisterFixed(e.NetId, NetObjKind.Item, NetRegistry.HostAuthority, item);
-                if (isNew && _net.Role == Role.Host && _baselineReady) newlyAdded.Add(e);
+                if (isNew)
+                {
+                    if (_net.Role == Role.Host && _baselineReady) newlyAdded.Add(e);
+                    if (_net.Role == Role.Client) _nextPendingStateRetry = 0f;
+                }
             }
 
             // Host: items that appeared after load (caught fish, cooked food, crate contents) -> spawn.
@@ -3751,10 +3858,19 @@ namespace SailwindCoop.Sync
             return HasStableIdentity(item);
         }
 
-        private static bool HasStableIdentity(ShipItem item)
+        private bool IsCurrentItemEntry(ItemEntry entry)
         {
-            if (item == null) return false;
-            var saveable = item.GetComponent<SaveablePrefab>();
+            if (entry == null || entry.Item == null || _destroyingItems.Contains(entry.Item)) return false;
+            var saveable = entry.Item.GetComponent<SaveablePrefab>();
+            return HasStableIdentity(entry.Item, saveable) &&
+                saveable.instanceId == entry.InstanceId && saveable.prefabIndex == entry.PrefabIndex;
+        }
+
+        private static bool HasStableIdentity(ShipItem item)
+            => item != null && HasStableIdentity(item, item.GetComponent<SaveablePrefab>());
+
+        private static bool HasStableIdentity(ShipItem item, SaveablePrefab saveable)
+        {
             // Personal belt items (slots 0..4) are PLAYER-LOCAL: each player owns its own belt, persisted via
             // CoopProfile. They are excluded from the shared/host-authoritative item set so they never leak
             // across peers. The host's RefreshItems diff turns the belt-in/out transitions into despawn/spawn.
@@ -3769,6 +3885,14 @@ namespace SailwindCoop.Sync
             if (ai != 0 && bi != 0 && ai != bi) return ai.CompareTo(bi);
             if (ai != bi) return bi.CompareTo(ai);
             return string.CompareOrdinal(BoatLocator.PathOf(a.Item.transform), BoatLocator.PathOf(b.Item.transform));
+        }
+
+        internal ShipItemStove FindTrackedStove(int id)
+        {
+            if (_byInstanceId.TryGetValue(id, out var entry) && entry.Item is ShipItemStove stove &&
+                stove != null && stove.gameObject.activeInHierarchy && InstanceIdOf(stove) == id)
+                return stove;
+            return null;
         }
 
         private static int InstanceIdOf(ShipItem item)
@@ -4162,6 +4286,13 @@ namespace SailwindCoop.Sync
             _hostIds.Clear();
             _tombstones.Clear();
             _pendingStates.Clear();
+#if DEBUG
+            _nextPendingReport = 0f;
+            _pendingAttemptsByReason.Clear();
+#endif
+            _pendingStateBuffer.Clear();
+            _pendingStateCursor = 0;
+            _nextPendingStateRetry = 0f;
             _crateMembership.Clear();
             _unsealedCrate = null;
             _cargoMembership.Clear();

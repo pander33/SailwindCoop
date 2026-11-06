@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace SailwindCoop.Sync
@@ -27,6 +26,14 @@ namespace SailwindCoop.Sync
 
         private readonly SnapshotBuffer<Snap> _buf = new SnapshotBuffer<Snap>(s => s.Tick, 32);
         private const float MaxExtrapolateMs = 250f;
+        private const float MaxAngularExtrapolateMs = 100f;
+        private const float RecoveryMs = 80f;
+        private long _lastRenderTick, _recoveryTick;
+        private bool _wasExtrapolating, _recovering;
+        private Snap _lastPredictionStart, _lastPredictionEnd;
+        private Vector3 _recoveryPosition;
+        private Quaternion _recoveryRotation;
+        internal bool SmoothUnderruns;
 
         /// <summary>Interpolation delay in ms (config). Larger = smoother but more lag.</summary>
         public float InterpDelayMs = 100f;
@@ -81,7 +88,7 @@ namespace SailwindCoop.Sync
             // Before the oldest sample: snap to oldest.
             if (renderTick <= _buf[0].Tick)
             {
-                Convert(_buf[0].RealPos, _buf[0].Rot, out pos, out rot);
+                ConvertSample(renderTick, _buf[0].RealPos, _buf[0].Rot, out pos, out rot);
                 realVel = _buf[0].RealVel;
                 return true;
             }
@@ -90,8 +97,9 @@ namespace SailwindCoop.Sync
             var last = _buf[_buf.Count - 1];
             if (renderTick >= last.Tick)
             {
-                float ahead = Mathf.Min(renderTick - last.Tick, MaxExtrapolateMs) / 1000f;
-                Convert(last.RealPos + last.RealVel * ahead, last.Rot, out pos, out rot);
+                var previous = SmoothUnderruns && _buf.Count >= 2 ? _buf[_buf.Count - 2] : last;
+                Predict(previous, last, renderTick, out var predictedPosition, out var predictedRotation);
+                ConvertSample(renderTick, predictedPosition, predictedRotation, out pos, out rot);
                 realVel = last.RealVel;
                 return true;
             }
@@ -105,7 +113,7 @@ namespace SailwindCoop.Sync
                 {
                     float span = b.Tick - a.Tick;
                     float f = span > 0 ? (renderTick - a.Tick) / span : 0f;
-                    Convert(Vector3.Lerp(a.RealPos, b.RealPos, f), Quaternion.Slerp(a.Rot, b.Rot, f),
+                    ConvertSample(renderTick, Vector3.Lerp(a.RealPos, b.RealPos, f), Quaternion.Slerp(a.Rot, b.Rot, f),
                             out pos, out rot);
                     realVel = Vector3.Lerp(a.RealVel, b.RealVel, f);
                     return true;
@@ -114,12 +122,70 @@ namespace SailwindCoop.Sync
             return false;
         }
 
-        private void Convert(Vector3 storedPos, Quaternion storedRot, out Vector3 pos, out Quaternion rot)
+        private static void Predict(Snap previous, Snap last, long tick, out Vector3 position, out Quaternion rotation)
         {
+            float gap = tick - last.Tick;
+            position = last.RealPos + last.RealVel * (Mathf.Min(gap, MaxExtrapolateMs) / 1000f);
+            rotation = last.Rot;
+            long span = last.Tick - previous.Tick;
+            if (gap <= 0f || gap >= MaxExtrapolateMs || span <= 0 || span > MaxExtrapolateMs) return;
+
+            // A change-only stream may end here. Settle on the last authoritative rotation.
+            float angularAhead = Mathf.Min(gap, MaxAngularExtrapolateMs) *
+                (1f - Mathf.InverseLerp(MaxAngularExtrapolateMs, MaxExtrapolateMs, gap));
+            float step = Quaternion.Angle(previous.Rot, last.Rot);
+            float fraction = angularAhead / span;
+            if (step > 0f) fraction = Mathf.Min(fraction, 25f / step);
+            rotation = Quaternion.SlerpUnclamped(previous.Rot, last.Rot, 1f + fraction);
+        }
+
+        private void ApplyRecovery(long tick, ref Vector3 position, ref Quaternion rotation)
+        {
+            if (!_recovering) return;
+            float elapsed = tick - _recoveryTick;
+            if (elapsed < 0f || elapsed >= RecoveryMs) return;
+
+            float weight = 1f - elapsed / RecoveryMs;
+            position += _recoveryPosition * weight;
+            rotation *= Quaternion.Slerp(Quaternion.identity, _recoveryRotation, weight);
+        }
+
+        private void ConvertSample(long tick, Vector3 storedPos, Quaternion storedRot, out Vector3 pos, out Quaternion rot)
+        {
+            if (SmoothUnderruns)
+            {
+                var newest = _buf[_buf.Count - 1];
+                if (_recovering && (tick < _recoveryTick || tick - _recoveryTick >= RecoveryMs))
+                    _recovering = false;
+                // Compare the two paths at the current render tick, including any previous correction.
+                if (_wasExtrapolating && newest.Tick > _lastPredictionEnd.Tick && tick >= _lastRenderTick &&
+                    tick - _lastRenderTick <= RecoveryMs)
+                {
+                    Predict(_lastPredictionStart, _lastPredictionEnd, tick, out var oldPosition, out var oldRotation);
+                    ApplyRecovery(tick, ref oldPosition, ref oldRotation);
+                    _recoveryPosition = oldPosition - storedPos;
+                    _recoveryRotation = Quaternion.Inverse(storedRot) * oldRotation;
+                    _recovering = _recoveryPosition.sqrMagnitude <= 1f &&
+                        Quaternion.Angle(Quaternion.identity, _recoveryRotation) <= 35f;
+                    _recoveryTick = tick;
+                }
+                ApplyRecovery(tick, ref storedPos, ref storedRot);
+                _wasExtrapolating = tick > newest.Tick;
+                if (_wasExtrapolating)
+                {
+                    _lastPredictionEnd = newest;
+                    _lastPredictionStart = _buf.Count >= 2 ? _buf[_buf.Count - 2] : newest;
+                }
+                _lastRenderTick = tick;
+            }
             pos = ToWorldPos != null ? ToWorldPos(storedPos) : storedPos;
             rot = ToWorldRot != null ? ToWorldRot(storedRot) : storedRot;
         }
 
-        public void Clear() => _buf.Clear();
+        public void Clear()
+        {
+            _buf.Clear();
+            _wasExtrapolating = _recovering = false;
+        }
     }
 }

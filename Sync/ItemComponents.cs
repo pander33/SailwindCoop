@@ -11,7 +11,19 @@ namespace SailwindCoop.Sync
         private static readonly Dictionary<Type, Dictionary<string, FieldInfo>> Fields = new Dictionary<Type, Dictionary<string, FieldInfo>>();
         private static readonly Dictionary<ShipItem, ItemDetails> Pending = new Dictionary<ShipItem, ItemDetails>();
         private static readonly MethodInfo FoodLookText = typeof(FoodState).GetMethod("UpdateLookText", BindingFlags.Instance | BindingFlags.NonPublic);
-        internal static void Clear() => Pending.Clear();
+        private static readonly List<ShipItem> StoveLookupItems = new List<ShipItem>();
+        private static readonly Dictionary<int, ShipItemStove> SceneStoves = new Dictionary<int, ShipItemStove>();
+        private static readonly List<KeyValuePair<ShipItem, ItemDetails>> WaitingBindings = new List<KeyValuePair<ShipItem, ItemDetails>>();
+        private static int _stoveLookupFrame = -1;
+        private static float _nextBindingRetry;
+
+        internal static void Clear()
+        {
+            Pending.Clear();
+            SceneStoves.Clear();
+            _stoveLookupFrame = -1;
+            _nextBindingRetry = 0f;
+        }
         internal static void RemoveBindings(ShipItem item)
         {
             if (item == null) return;
@@ -27,16 +39,21 @@ namespace SailwindCoop.Sync
         }
         internal static void RetryBindings()
         {
-            if (Pending.Count == 0) return;
-            var waiting = new List<KeyValuePair<ShipItem, ItemDetails>>(Pending);
-            foreach (var pair in waiting)
+            if (Pending.Count == 0 || Time.unscaledTime < _nextBindingRetry) return;
+            _nextBindingRetry = Time.unscaledTime + 0.1f;
+            WaitingBindings.AddRange(Pending);
+            try
             {
-                if (pair.Key == null) { Pending.Remove(pair.Key); continue; }
-                var cook = pair.Key.GetComponent<CookableFood>();
-                bool ready = !pair.Value.HasCookable || cook == null || ApplyCookBinding(pair.Key, cook, pair.Value.CookStoveId, pair.Value.CookSlot);
-                ready &= ApplyFuelBinding(pair.Key, pair.Value);
-                if (ready) Pending.Remove(pair.Key);
+                foreach (var pair in WaitingBindings)
+                {
+                    if (pair.Key == null) { Pending.Remove(pair.Key); continue; }
+                    var cook = pair.Key.GetComponent<CookableFood>();
+                    bool ready = !pair.Value.HasCookable || cook == null || ApplyCookBinding(pair.Key, cook, pair.Value.CookStoveId, pair.Value.CookSlot);
+                    ready &= ApplyFuelBinding(pair.Key, pair.Value);
+                    if (ready) Pending.Remove(pair.Key);
+                }
             }
+            finally { WaitingBindings.Clear(); }
         }
         internal static FieldInfo Field(Type type, string name)
         {
@@ -51,18 +68,32 @@ namespace SailwindCoop.Sync
         }
         internal static T Read<T>(object value, string name) => (T)Field(value.GetType(), name).GetValue(value);
         internal static void Set(object value, string name, object state) => Field(value.GetType(), name).SetValue(value, state);
-        internal static bool BindingsReady(ShipItem item, ItemDetails state)
+        internal struct StoveBindings
         {
+            internal StoveCookTrigger Cook;
+            internal StoveFuelTrigger Fuel;
+        }
+
+        internal static bool BindingsReady(ShipItem item, ItemDetails state) => BindingsReady(item, state, out _);
+
+        internal static bool BindingsReady(ShipItem item, ItemDetails state, out StoveBindings targets)
+        {
+            targets = default;
             if (state == null) return true;
             if (item == null) return false;
-            var stove = state.CookStoveId != 0 ? FindStove(state.CookStoveId) : null;
-            bool cookReady = ItemTargetReadiness.Binding(state.HasCookable, item.GetComponent<CookableFood>() != null,
-                state.CookStoveId != 0, stove != null, stove != null && stove.slots != null && state.CookSlot >= 0 &&
-                state.CookSlot < stove.slots.Length && stove.slots[state.CookSlot] != null);
-            var fuelStove = state.FuelStoveId != 0 ? FindStove(state.FuelStoveId) : null;
-            return cookReady && ItemTargetReadiness.Binding(state.HasFuel, item.GetComponent<StoveFuel>() != null,
-                state.FuelStoveId != 0, fuelStove != null,
-                fuelStove != null && fuelStove.GetComponentInChildren<StoveFuelTrigger>(true) != null);
+            if (state.HasCookable)
+            {
+                targets.Cook = FindCookSlot(state.CookStoveId, state.CookSlot);
+                if (item.GetComponent<CookableFood>() == null || (state.CookStoveId != 0 && targets.Cook == null))
+                    return false;
+            }
+            if (state.HasFuel)
+            {
+                targets.Fuel = FindFuelTrigger(state.FuelStoveId);
+                if (item.GetComponent<StoveFuel>() == null || (state.FuelStoveId != 0 && targets.Fuel == null))
+                    return false;
+            }
+            return true;
         }
         internal static bool HasPendingBinding(ShipItem item) => Pending.ContainsKey(item);
         internal static bool SaveLoaded(ShipItem item)
@@ -115,7 +146,7 @@ namespace SailwindCoop.Sync
             CaptureInstruments(item, state);
             return state;
         }
-        internal static void Apply(ShipItem item, ItemDetails state)
+        internal static void Apply(ShipItem item, ItemDetails state, StoveBindings? targets = null)
         {
             if (state == null || item == null) return;
             Pending.Remove(item);
@@ -129,7 +160,7 @@ namespace SailwindCoop.Sync
             if (state.HasCookable && cook != null)
             {
                 Set(cook, "currentHeat", state.CookHeat);
-                if (!ApplyCookBinding(item, cook, state.CookStoveId, state.CookSlot)) Pending[item] = state;
+                if (!ApplyCookBinding(item, cook, state.CookStoveId, state.CookSlot, targets)) Pending[item] = state;
                 // The base material updater assumes food-specific renderer fields exist.
                 if (cook.GetType() == typeof(CookableFood)) cook.UpdateMaterial();
             }
@@ -145,7 +176,7 @@ namespace SailwindCoop.Sync
                 kettle.currentCookedTeaAmount = state.CookedTeaAmount; kettle.currentTeaType = (LiquidType)state.TeaType;
             }
             if (state.HasStove && item is ShipItemStove stove) Set(stove, "currentHeat", state.StoveHeat);
-            if (!ApplyFuelBinding(item, state)) Pending[item] = state;
+            if (!ApplyFuelBinding(item, state, targets)) Pending[item] = state;
             if (state.HasPipe && item is ShipItemPipe pipe)
             {
                 Set(pipe, "currentHeat", state.PipeHeat);
@@ -169,17 +200,25 @@ namespace SailwindCoop.Sync
             var cook = item.GetComponent<CookableFood>();
             if (cook != null) ApplyCookBinding(item, cook, 0, -1);
         }
-        private static bool ApplyCookBinding(ShipItem item, CookableFood cook, int stoveId, int slotIndex)
+        private static StoveCookTrigger FindCookSlot(int id, int slot)
+        {
+            var stove = FindStove(id);
+            return stove != null && stove.slots != null && slot >= 0 && slot < stove.slots.Length
+                ? stove.slots[slot] : null;
+        }
+
+        private static StoveFuelTrigger FindFuelTrigger(int id)
+        {
+            var stove = FindStove(id);
+            return stove != null ? stove.GetComponentInChildren<StoveFuelTrigger>(true) : null;
+        }
+
+        private static bool ApplyCookBinding(ShipItem item, CookableFood cook, int stoveId, int slotIndex, StoveBindings? targets = null)
         {
             var previous = cook.GetCurrentCookTrigger();
-            StoveCookTrigger target = null;
-            if (stoveId != 0)
-            {
-                var stove = FindStove(stoveId);
-                // Missing target is loading, not evidence that the cookable was removed.
-                if (stove == null || stove.slots == null || slotIndex < 0 || slotIndex >= stove.slots.Length || stove.slots[slotIndex] == null) return false;
-                target = stove.slots[slotIndex];
-            }
+            var target = targets.HasValue ? targets.Value.Cook : FindCookSlot(stoveId, slotIndex);
+            // Missing target is loading, not evidence that the cookable was removed.
+            if (stoveId != 0 && target == null) return false;
             if (previous != null && previous.currentFood == cook) previous.currentFood = null;
             Set(cook, "currentTrigger", target);
             if (target != null) target.currentFood = cook;
@@ -187,22 +226,23 @@ namespace SailwindCoop.Sync
             if (body != null) { body.inStove = target != null; body.disableCol = target != null; if (target != null) body.attached = true; }
             return true;
         }
-        private static bool ApplyFuelBinding(ShipItem item, ItemDetails state)
+        private static bool ApplyFuelBinding(ShipItem item, ItemDetails state, StoveBindings? targets = null)
         {
             var fuel = item.GetComponent<StoveFuel>();
             if (!state.HasFuel || fuel == null) return true;
             var old = Read<StoveFuelTrigger>(fuel, "fuelTrigger");
-            StoveFuelTrigger target = null;
-            if (state.FuelStoveId != 0)
-            {
-                var stove = FindStove(state.FuelStoveId);
-                if (stove == null || (target = stove.GetComponentInChildren<StoveFuelTrigger>(true)) == null) return false;
-            }
+            var target = targets.HasValue ? targets.Value.Fuel : FindFuelTrigger(state.FuelStoveId);
+            if (state.FuelStoveId != 0 && target == null) return false;
+            bool membershipChanged = fuel.inserted != state.FuelInserted || old != target;
             fuel.inserted = state.FuelInserted; Set(fuel, "lit", state.FuelLit);
             Set(fuel, "fuelTrigger", target);
             Set(fuel, "cookTrigger", target != null ? Read<StoveCookTrigger>(target, "cookTrigger") : null);
             PlaceFuel(item, state.FuelInserted ? target : null);
-            RebuildFuelCount(old); if (target != old) RebuildFuelCount(target);
+            if (membershipChanged)
+            {
+                RebuildFuelCount(old);
+                if (target != old) RebuildFuelCount(target);
+            }
             return true;
         }
         internal static bool InStove(ShipItem item)
@@ -267,8 +307,21 @@ namespace SailwindCoop.Sync
         private static ShipItemStove FindStove(int id)
         {
             if (id == 0) return null;
-            foreach (var stove in UnityEngine.Object.FindObjectsOfType<ShipItemStove>()) if (Id(stove) == id) return stove;
-            return null;
+            var tracked = ItemSync.Instance?.FindTrackedStove(id);
+            if (tracked != null) return tracked;
+
+            // A stove can appear before ItemSync rebuilds its index, or be absent from the shared set.
+            if (_stoveLookupFrame != Time.frameCount)
+            {
+                _stoveLookupFrame = Time.frameCount;
+                SceneStoves.Clear();
+                ShipItemRegistry.Snapshot(StoveLookupItems);
+                foreach (var item in StoveLookupItems)
+                    if (item is ShipItemStove stove && stove != null) SceneStoves[Id(stove)] = stove;
+                StoveLookupItems.Clear();
+            }
+            return SceneStoves.TryGetValue(id, out var found) && found != null && found.gameObject.activeInHierarchy &&
+                Id(found) == id ? found : null;
         }
     }
 }

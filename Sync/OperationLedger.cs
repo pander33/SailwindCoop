@@ -14,6 +14,9 @@ namespace SailwindCoop.Sync
             if (_results.TryGetValue(key, out previous)) return false;
             _results[key] = initial; return true;
         }
+        internal void Replace(uint actor, uint operation, T result)
+            => _results[((ulong)actor << 32) | operation] = result;
+
         internal void Clear() => _results.Clear();
     }
 }

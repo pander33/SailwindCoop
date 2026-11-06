@@ -152,6 +152,7 @@ namespace SailwindCoop.Sync
         private void TickInstruments(float dt)
         {
             if (!CoordSpace.Ready || !GameState.playing || GameState.currentlyLoading) return;
+            if (_instruments.Count == 0) return;
             foreach (var pair in new List<KeyValuePair<int, Instrument>>(_instruments))
                 if (!_byInstanceId.TryGetValue(pair.Key, out var alive) || alive.Item != pair.Value.Item)
                 { RestoreInstrument(pair.Value); _instruments.Remove(pair.Key); _waitingInstruments.Remove(pair.Key); }

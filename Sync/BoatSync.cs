@@ -27,7 +27,7 @@ namespace SailwindCoop.Sync
         {
             public ushort Index;
             public Transform Boat;
-            public readonly NetTransform Net = new NetTransform();
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
             /// <summary>The boat's body: on the hull itself or, as in game 0.39, on the hull's parent
             /// (the object with <c>BoatProbes</c> and <c>BoatDamage</c>). This is what is placed — the
             /// hull rides on it — so the body, its colliders and the hull never part.</summary>
@@ -116,7 +116,7 @@ namespace SailwindCoop.Sync
             float interval = 1f / Mathf.Max(1, SnapshotHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
-            _sendTimer = 0f;
+            _sendTimer %= interval;
 
             long tick = _net.Clock.ServerTick;
             foreach (var hb in _hostBoats.Values)

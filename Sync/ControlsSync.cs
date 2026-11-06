@@ -140,7 +140,7 @@ namespace SailwindCoop.Sync
             _net = net;
             Instance = this;
 
-            _fleet = new BoatContexts<ControlsSync>((boat, id) => new ControlsSync(net, boat, id), c => c.Clear(),
+            _fleet = new BoatContexts<ControlsSync>((boat, id) => new ControlsSync(net, boat, id) { InterpDelayMs = InterpDelayMs }, c => c.Clear(),
                 boat => BoatLayout.Stamp(boat.GetComponentsInChildren<RopeController>(true), boat.GetComponentsInChildren<HingeJoint>(true), boat.GetComponentsInChildren<GPButtonSteeringWheel>(true)));
         }
 

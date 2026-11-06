@@ -23,7 +23,7 @@ namespace SailwindCoop.Sync
             public Transform Head;
             public Animator Animator;
             public AvatarPoseDriver PoseDriver;
-            public readonly NetTransform Net = new NetTransform();
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
             public Quaternion HeadWorldRot = Quaternion.identity;
             public bool HeadDrivenByAnimator;
             public float AnimSpeed;
@@ -40,6 +40,10 @@ namespace SailwindCoop.Sync
             public CoordFrame LastPoseFrame;
             public ushort LastPoseBoatIndex;
             public bool HasPoseFrame;
+            public long LastPoseTick;
+            public long PoseFrameStartTick;
+            public readonly SnapshotBuffer<PlayerStateMsg> PoseDetails = new SnapshotBuffer<PlayerStateMsg>(m => m.Tick, 32);
+            public bool WaitingForFirstPose;
             // Boat-frame converters are rebuilt only when the deck changes: they used to be allocated
             // fresh for every inbound PlayerState (two closures per packet, per remote, at SnapshotHz).
             public Transform PoseBoat;
@@ -64,6 +68,7 @@ namespace SailwindCoop.Sync
             public EmoteId Emote;
             public long EmoteTick;                // host-clock start of the current emote
             public long EmoteVoicedTick;          // start tick of the emote whose shout was played
+            public long? PendingEmoteVoiceTick;
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -476,7 +481,8 @@ namespace SailwindCoop.Sync
             if (index == BoatLocator.NoBoat) return false;
             foreach (var a in _remotes.Values)
             {
-                if (a.Go == null || !a.HasPoseFrame || a.LastPoseFrame != CoordFrame.Boat || a.LastPoseBoatIndex != index) continue;
+                if (a.Go == null || !a.HasPoseFrame || a.LastPoseFrame != CoordFrame.Boat || a.LastPoseBoatIndex != index ||
+                    a.WaitingForFirstPose || a.PoseBoat != boat) continue;
                 localPos = boat.InverseTransformPoint(a.Go.transform.position);
                 return true;
             }
@@ -620,7 +626,7 @@ namespace SailwindCoop.Sync
             float interval = 1f / Mathf.Max(1, SnapshotHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
-            _sendTimer = 0f;
+            _sendTimer %= interval;
 
             long tick = _net.Clock.ServerTick;
             Transform pl = _localPlayer;
@@ -964,8 +970,6 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Host)
             {
                 if (_net.PlayerNetIdForPeer(fromPeer) != msg.NetId) return;
-                BoatAuthority.Instance?.Record(msg, fromPeer);
-                _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
                 _net.RelayExcept(msg, fromPeer, LiteNetLib.DeliveryMethod.Unreliable);
             }
 
@@ -977,62 +981,47 @@ namespace SailwindCoop.Sync
             if (!_remotes.TryGetValue(msg.NetId, out var a))
             {
                 a = CreateAvatar(msg.NetId);
+                a.WaitingForFirstPose = true;
+                if (a.Go != null) a.Go.SetActive(false);
                 _remotes[msg.NetId] = a;
             }
             a.Net.InterpDelayMs = InterpDelayMs;
-            if (a.HasPoseFrame && a.LastPoseFrame != msg.Frame)
+            bool frameChanged = !a.HasPoseFrame || a.LastPoseFrame != msg.Frame ||
+                (msg.Frame == CoordFrame.Boat && a.LastPoseBoatIndex != msg.BoatIndex);
+            if (a.HasPoseFrame && msg.Tick <= a.LastPoseTick)
+            {
+                if (!frameChanged && msg.Tick > a.PoseFrameStartTick && msg.Tick < a.LastPoseTick)
+                {
+                    a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+                    a.PoseDetails.Push(msg);
+                }
+                return;
+            }
+            if (_net.Role == Role.Host)
+            {
+                BoatAuthority.Instance?.Record(msg, fromPeer);
+                _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
+            }
+            if (frameChanged)
+            {
                 a.Net.Clear();
+                a.PoseDetails.Clear();
+                a.PoseFrameStartTick = a.HasPoseFrame ? msg.Tick : long.MinValue;
+                a.PoseBoat = null;
+            }
+            a.LastPoseTick = msg.Tick;
             a.LastPoseFrame = msg.Frame;
             a.LastPoseBoatIndex = msg.BoatIndex;
             a.HasPoseFrame = true;
 
-            // Pick how this remote's buffered pose converts to local world space.
-            if (msg.Frame == CoordFrame.Boat)
-            {
-                Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
-                if (boat != null)
-                {
-                    if (a.PoseBoat != boat || a.BoatToWorldPos == null)
-                    {
-                        Transform b = boat;   // captured once per deck change, not once per packet
-                        a.PoseBoat = b;
-                        a.BoatToWorldPos = p => b.TransformPoint(p);
-                        a.BoatToWorldRot = q => b.rotation * q;
-                    }
-                    a.Net.ToWorldPos = a.BoatToWorldPos;
-                    a.Net.ToWorldRot = a.BoatToWorldRot;
-                    a.HeadWorldRot = boat.rotation * msg.HeadRot;
-                }
-                // If we have no boat yet, leave the previous converter; the avatar will
-                // settle once we're aboard.
-            }
-            else
-            {
-                a.Net.ToWorldPos = RealToLocalPos;
-                a.Net.ToWorldRot = IdentityRot;
-                a.HeadWorldRot = msg.HeadRot;
-            }
-
             a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            a.PoseDetails.Push(msg);
             UpdateAnimatorTargets(a, msg);
-            a.Hands = msg.Hands;
             a.StateAt = Time.unscaledTime;
-            a.HandR = msg.HandR;
-            a.HandL = msg.HandL;
-            // Последняя поза лёжа остаётся: по ней аватар плавно встаёт после сброса бита.
-            if ((msg.Hands & PlayerStateMsg.Lying) != 0)
-            {
-                a.LieHead = msg.LieHead;
-                a.LieDir = msg.LieDir;
-            }
 
             var emote = (EmoteId)msg.Emote;
-            if (emote == EmoteId.LandHo && msg.EmoteTick != a.EmoteVoicedTick && a.Go != null &&
-                _net.Clock.ServerTick - msg.EmoteTick < EmoteVoiceWindowMs)
-            {
-                a.EmoteVoicedTick = msg.EmoteTick;
-                EmoteAudio.PlayLandHoAt(a.Go.transform);
-            }
+            if (emote == EmoteId.LandHo && msg.EmoteTick != a.EmoteVoicedTick)
+                a.PendingEmoteVoiceTick = msg.EmoteTick;
             a.Emote = emote;
             a.EmoteTick = msg.EmoteTick;
         }
@@ -1048,10 +1037,70 @@ namespace SailwindCoop.Sync
             foreach (var a in _remotes.Values)
             {
                 if (a.Go == null) continue;
+                if (a.LastPoseFrame == CoordFrame.Boat)
+                {
+                    var boat = BoatLocator.FindByIndex(a.LastPoseBoatIndex);
+                    if (boat == null) { a.PoseBoat = null; continue; }
+                    if (a.PoseBoat != boat)
+                    {
+                        a.PoseBoat = boat;
+                        a.BoatToWorldPos = boat.TransformPoint;
+                        a.BoatToWorldRot = q => boat.rotation * q;
+                    }
+                    a.Net.ToWorldPos = a.BoatToWorldPos;
+                    a.Net.ToWorldRot = a.BoatToWorldRot;
+                }
+                else
+                {
+                    a.Net.ToWorldPos = RealToLocalPos;
+                    a.Net.ToWorldRot = IdentityRot;
+                }
+                ApplyPoseDetails(a, now - (long)a.Net.InterpDelayMs);
                 a.Net.Apply(a.Go.transform, now);
+                if (a.WaitingForFirstPose)
+                {
+                    a.WaitingForFirstPose = false;
+                    a.Go.SetActive(true);
+                }
+                if (a.Go.activeInHierarchy && a.PendingEmoteVoiceTick is long voiceTick)
+                {
+                    a.PendingEmoteVoiceTick = null;
+                    if (now - voiceTick < EmoteVoiceWindowMs)
+                    {
+                        EmoteAudio.PlayLandHoAt(a.Go.transform);
+                        a.EmoteVoicedTick = voiceTick;
+                    }
+                }
                 ApplyAvatarPolish(a);
             }
             RetryPendingNpcSkins();
+        }
+
+        private static void ApplyPoseDetails(RemoteAvatar avatar, long tick)
+        {
+            var snapshots = avatar.PoseDetails;
+            if (snapshots.Count == 0) return;
+            var from = snapshots[0];
+            var to = from;
+            for (int i = 1; i < snapshots.Count && tick > from.Tick; i++)
+            {
+                to = snapshots[i];
+                if (tick < to.Tick) break;
+                from = to;
+            }
+            float fraction = from == to ? 0f : Mathf.Clamp01((float)(tick - from.Tick) / (to.Tick - from.Tick));
+            var head = Quaternion.Slerp(from.HeadRot, to.HeadRot, fraction);
+            avatar.HeadWorldRot = avatar.PoseBoat != null ? avatar.PoseBoat.rotation * head : head;
+            avatar.Hands = from.Hands;
+            avatar.HandR = (from.Hands & to.Hands & PlayerStateMsg.HandRight) != 0
+                ? Vector3.Lerp(from.HandR, to.HandR, fraction) : from.HandR;
+            avatar.HandL = (from.Hands & to.Hands & PlayerStateMsg.HandLeft) != 0
+                ? Vector3.Lerp(from.HandL, to.HandL, fraction) : from.HandL;
+            if ((from.Hands & PlayerStateMsg.Lying) != 0)
+            {
+                avatar.LieHead = from.LieHead;
+                avatar.LieDir = from.LieDir;
+            }
         }
 
         /// <summary>
@@ -1533,7 +1582,8 @@ namespace SailwindCoop.Sync
             if (a.Head != null && !a.HeadDrivenByAnimator && !lying)
             {
                 Quaternion localHead = Quaternion.Inverse(a.Go.transform.rotation) * a.HeadWorldRot;
-                a.Head.localRotation = Quaternion.Slerp(a.Head.localRotation, localHead, 0.35f);
+                float headBlend = 1f - Mathf.Pow(0.65f, Time.deltaTime * 60f);
+                a.Head.localRotation = Quaternion.Slerp(a.Head.localRotation, localHead, headBlend);
             }
 
         }

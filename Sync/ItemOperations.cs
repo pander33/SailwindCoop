@@ -68,7 +68,8 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ulong, PendingItemResult> _receivedOperations = new Dictionary<ulong, PendingItemResult>();
         private readonly List<PendingItemResult> _unfinishedResults = new List<PendingItemResult>();
         internal void MarkOperationDestroy(ShipItem item) { if (item != null) _destroyingItems.Add(item); }
-        private readonly OperationLedger<ItemOperationResultMsg> _operationResults = new OperationLedger<ItemOperationResultMsg>();
+        private readonly HashSet<ulong> _completedOperationResults = new HashSet<ulong>();
+        private readonly OperationLedger<byte[]> _operationResults = new OperationLedger<byte[]>();
         private readonly Dictionary<uint, Dictionary<int, ShipItem>> _operationLocalCreated = new Dictionary<uint, Dictionary<int, ShipItem>>();
         private readonly Dictionary<ulong, ItemOperationRequestMsg> _waitingOperations = new Dictionary<ulong, ItemOperationRequestMsg>();
 
@@ -87,6 +88,26 @@ namespace SailwindCoop.Sync
                 if (e.Item != null && (_net.Role == Role.Host || _hostIds.Contains(e.InstanceId))) result[e.Item] = BuildState(e, _net.Clock.ServerTick);
             return result;
         }
+        internal Dictionary<ShipItem, ItemStateMsg> CaptureOperationParticipants(ShipItem first, ShipItem second)
+        {
+            var result = new Dictionary<ShipItem, ItemStateMsg>(2);
+            CaptureOperationParticipant(result, first);
+            if (second != first) CaptureOperationParticipant(result, second);
+            return result;
+        }
+
+        private void CaptureOperationParticipant(Dictionary<ShipItem, ItemStateMsg> into, ShipItem item)
+        {
+            if (item == null || !HasStableIdentity(item) || _destroyingItems.Contains(item)) return;
+            if (!_byItem.TryGetValue(item, out var entry) || entry.InstanceId != InstanceIdOf(item))
+            {
+                RefreshItems(force: true);
+                if (!_byItem.TryGetValue(item, out entry)) return;
+            }
+            if (_net.Role == Role.Host || _hostIds.Contains(entry.InstanceId))
+                into[item] = BuildState(entry, _net.Clock.ServerTick);
+        }
+
         internal ItemStateMsg CaptureOperationItem(ShipItem item)
         {
             ItemEntry e;
@@ -160,10 +181,13 @@ namespace SailwindCoop.Sync
         }
         private void ApplyOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer)
         {
-            RefreshItems(force: true);
             ulong key = ((ulong)msg.Actor << 32) | msg.OperationId;
             if (_operationResults.TryGet(msg.Actor, msg.OperationId, out var retained))
-            { if (peer != null) peer.Send(retained, LiteNetLib.DeliveryMethod.ReliableOrdered); return; }
+            {
+                if (peer != null && retained != null) peer.Send(retained, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                return;
+            }
+            RefreshItems(force: true);
             // Bind all existing targets before applying any effects; loading is a technical wait.
             foreach (var state in msg.Changed)
                 if (!_tombstones.Contains(state.InstanceId))
@@ -189,9 +213,7 @@ namespace SailwindCoop.Sync
             if ((msg.WorldEffects & 1) != 0 && Rainbow.instance == null)
             { WaitForOperation(msg, peer, key); return; }
             var result = new ItemOperationResultMsg { Actor = msg.Actor, OperationId = msg.OperationId };
-            ItemOperationResultMsg previous;
-            if (!_operationResults.TryBegin(msg.Actor, msg.OperationId, result, out previous))
-            { if (peer != null) peer.Send(previous, LiteNetLib.DeliveryMethod.ReliableOrdered); return; }
+            if (!_operationResults.TryBegin(msg.Actor, msg.OperationId, null, out _)) return;
             _waitingOperations.Remove(key);
             var changed = new List<ItemStateMsg>(); var created = new List<CreatedItemState>();
             var consumed = new List<int>(); var hull = new List<BoatDamageStateMsg>();
@@ -277,6 +299,11 @@ namespace SailwindCoop.Sync
                 result.Hull = hull.ToArray(); result.Changed = changed.ToArray(); result.Created = created.ToArray(); result.Consumed = consumed.ToArray();
                 _operationApplying = false;
             }
+            // Keep the exact reply without retaining the message and its object graph.
+            var reply = Protocol.Write(result);
+            var retainedReply = new byte[reply.Length];
+            Buffer.BlockCopy(reply.Data, 0, retainedReply, 0, reply.Length);
+            _operationResults.Replace(msg.Actor, msg.OperationId, retainedReply);
             _net.Broadcast(result, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("in operation #" + msg.OperationId + " actor=" + msg.Actor + " status=" + result.Status);
         }
@@ -327,6 +354,7 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client) return;
             if (msg.Status == ItemOperationBody.WaitingTarget) return;
             ulong key = ((ulong)msg.Actor << 32) | msg.OperationId;
+            if (_completedOperationResults.Contains(key)) return;
             if (!_receivedOperations.TryGetValue(key, out var pending))
             {
                 pending = new PendingItemResult { Message = msg };
@@ -433,8 +461,13 @@ namespace SailwindCoop.Sync
             finally
             {
                 progress.End(finished);
-                // The key stays as the duplicate filter; the payload is no longer needed.
-                if (finished) pending.Message = null;
+                if (finished)
+                {
+                    ulong key = ((ulong)msg.Actor << 32) | msg.OperationId;
+                    _completedOperationResults.Add(key);
+                    _receivedOperations.Remove(key);
+                    pending.Message = null;
+                }
             }
         }
         private bool ApplyResultItemState(ItemStateMsg state)
@@ -446,7 +479,7 @@ namespace SailwindCoop.Sync
             { entry.Gate.Cancel(state.Requester, state.RequestId, _net.MyNetId); return true; }
             if (entry.Gate.Pending && (state.Requester != _net.MyNetId || state.RequestId != entry.Gate.PendingRequest))
                 return unchecked((int)(entry.Gate.PendingRequest - state.RequestId)) > 0 && state.Requester == _net.MyNetId;
-            if (TryApplyItemState(state) != ItemApplyStatus.Applied) return false;
+            if (TryApplyItemState(state, operationResult: true) != ItemApplyStatus.Applied) return false;
             if (entry.Gate.Pending) return false;
             var details = state.Details;
             if (details != null && details.HasCookable && details.CookStoveId != 0)
@@ -479,8 +512,7 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client)
             {
                 TickDrain();
-                // Only results still waiting for a target; finished ones stay in _receivedOperations
-                // as the duplicate filter and are never walked again.
+                // Only results still waiting for a target need progress and a payload.
                 for (int i = _unfinishedResults.Count - 1; i >= 0; i--)
                 {
                     var result = _unfinishedResults[i];
@@ -497,7 +529,7 @@ namespace SailwindCoop.Sync
         private void ClearOperations()
         {
             _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _operationLocalCreated.Clear();
-            _receivedOperations.Clear(); _unfinishedResults.Clear(); _destroyingItems.Clear();
+            _receivedOperations.Clear(); _completedOperationResults.Clear(); _unfinishedResults.Clear(); _destroyingItems.Clear();
             ItemOperationCapture.Clear();
         }
     }
