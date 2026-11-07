@@ -33,6 +33,7 @@ namespace SailwindCoop.Sync
             // extraSetting just flipped, so this boat now belongs to the network set — drop the
             // cached enumeration before anything addresses a boat by index.
             BoatLocator.Invalidate();
+            if (sceneIndex >= 0) _ownership[sceneIndex] = true;
             if (_net.State != LinkState.Connected || sceneIndex < 0) return;
             _net.Broadcast(new BoatPurchaseMsg { SceneIndex = sceneIndex }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[ShipyardSync] out boat purchase sceneIndex=" + sceneIndex);
@@ -51,6 +52,18 @@ namespace SailwindCoop.Sync
                 }
                 var so = objects[msg.SceneIndex];
                 var boat = so != null ? so.GetComponent<PurchasableBoat>() : null;
+                if (!msg.Owned)
+                {
+                    if (_net.Role == Role.Host) return; // only the host's world gives a boat back
+                    // Only a real change: the join baseline lists every boat the host does not own.
+                    if (so == null || !so.extraSetting) return;
+                    Unown(so, boat);
+                    _ownership[msg.SceneIndex] = false;
+                    BoatLocator.Invalidate();
+                    Runtime.CoopBehaviour.Instance?.Boats?.ReleaseBoat(so.transform);
+                    Plugin.Logger.LogInfo("[ShipyardSync] in boat no longer owned sceneIndex=" + msg.SceneIndex);
+                    return;
+                }
                 if (boat != null)
                 {
                     boat.LoadAsPurchased();   // extraSetting = true + hide for-sale UI, no money charged
@@ -65,12 +78,66 @@ namespace SailwindCoop.Sync
 
                 // The boat set just grew — force a fresh enumeration before it is addressed by index.
                 BoatLocator.Invalidate();
+                _ownership[msg.SceneIndex] = true;
 
                 // Host relays a client's purchase to any other clients (2-player needs nothing more).
                 if (_net.Role == Role.Host)
                     _net.Broadcast(new BoatPurchaseMsg { SceneIndex = msg.SceneIndex }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShipyardSync] OnBoatPurchase: " + e.Message); }
+        }
+
+        // -----------------------------------------------------------------
+        // Ownership changed without PurchaseBoat. Other mods set SaveableObject.extraSetting
+        // themselves (Economy Overhaul's rentals, returns, seizures and buy-backs), so the host
+        // watches the flag of every purchasable boat and sends each change, both ways. Once a second:
+        // a mod that flips the flag only for the length of one call is never seen.
+        // -----------------------------------------------------------------
+
+        private readonly System.Collections.Generic.Dictionary<int, bool> _ownership = new System.Collections.Generic.Dictionary<int, bool>();
+        private float _ownershipTimer;
+        private bool _ownershipPrimed;
+
+        private void TickOwnership(float dt)
+        {
+            if (_net.Role != Role.Host || _net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading) return;
+            _ownershipTimer += dt;
+            if (_ownershipTimer < 1f) return;
+            _ownershipTimer = 0f;
+            var objects = SaveLoadManager.instance != null ? SaveLoadManager.instance.GetCurrentObjects() : null;
+            if (objects == null) return;
+            bool changed = false;
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var so = objects[i];
+                if (so == null || so.GetComponent<PurchasableBoat>() == null) continue;
+                bool owned = so.extraSetting;
+                if (_ownership.TryGetValue(i, out bool known) && known == owned) continue;
+                _ownership[i] = owned;
+                if (!_ownershipPrimed) continue; // the first pass only learns: clients loaded the same save
+                changed = true;
+                BoatLocator.Invalidate();
+                _net.Broadcast(new BoatPurchaseMsg { SceneIndex = i, Owned = owned }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                Plugin.Logger.LogInfo("[ShipyardSync] out ownership sceneIndex=" + i + " owned=" + owned);
+            }
+            _ownershipPrimed = true;
+            if (changed) Runtime.CoopBehaviour.Instance?.Boats?.RefreshOwnedBoats();
+        }
+
+        private void ClearOwnership() { _ownership.Clear(); _ownershipPrimed = false; _ownershipTimer = 0f; }
+
+        /// <summary>The boat back to the shipyard: not owned, its for-sale sign out again.</summary>
+        private static void Unown(SaveableObject so, PurchasableBoat boat)
+        {
+            if (so != null) so.extraSetting = false;
+            if (boat == null) return;
+            try
+            {
+                var ui = AccessTools.Field(typeof(PurchasableBoat), "purchaseUI")?.GetValue(boat) as UnityEngine.GameObject;
+                if (ui != null) ui.SetActive(true);
+                if (GameState.lastOwnedBoat == boat.transform) GameState.lastOwnedBoat = null;
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShipyardSync] for-sale sign: " + e.Message); }
         }
     }
 

@@ -297,6 +297,7 @@ namespace SailwindCoop.Sync
                 if (reported != null) ReportSpawnWait(reported);
             }
             if (_net.Role == Role.Client) RetryPendingItemStates();
+            if (_net.Role == Role.Client && _cargoAfterAuthor.Count != 0) SendCargoAfterAuthor();
             if (_net.Role == Role.Client && _pendingMissionGoods.Count != 0) RetryMissionGoods();
             TickUnsealedCrate();
             if (_rowingOar != null && Time.frameCount - _lastRowFrame > 1) FlushOarStroke();
@@ -4160,6 +4161,28 @@ namespace SailwindCoop.Sync
             Remember("out client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
         }
 
+        // Client: items another mod put straight into a cart (Economy Overhaul's purchase into a hired
+        // cart). Their cart membership can be sent only once the host has authored them and its id
+        // has landed here; until then OnLocalCargo has nothing to name. Dropped after 30 s.
+        private readonly Dictionary<ShipItem, float> _cargoAfterAuthor = new Dictionary<ShipItem, float>();
+
+        internal void QueueCargoAfterAuthor(ShipItem item)
+        {
+            if (item != null && _net.Role == Role.Client) _cargoAfterAuthor[item] = Time.unscaledTime + 30f;
+        }
+
+        private void SendCargoAfterAuthor()
+        {
+            float now = Time.unscaledTime;
+            foreach (var pair in new List<KeyValuePair<ShipItem, float>>(_cargoAfterAuthor))
+            {
+                var item = pair.Key;
+                bool ready = item != null && _byItem.TryGetValue(item, out var e) && _hostIds.Contains(e.InstanceId);
+                if (ready) OnLocalCargo(item);
+                if (ready || item == null || now > pair.Value) _cargoAfterAuthor.Remove(item);
+            }
+        }
+
         /// <summary>
         /// Client: a shared item was sold to a shopkeeper locally (own wallet credited by vanilla, item
         /// destroyed locally). Tell the host to destroy its authoritative copy so it despawns for everyone.
@@ -4301,6 +4324,7 @@ namespace SailwindCoop.Sync
             ItemComponents.Clear();
             _localClaimed.Clear();
             _pendingClientItems.Clear();
+            _cargoAfterAuthor.Clear();
             _baselineItems.Clear();
             _saveIdentity.Clear();
             _authoredResults.Clear();

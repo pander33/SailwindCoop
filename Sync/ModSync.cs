@@ -139,7 +139,7 @@ namespace SailwindCoop.Sync
             _hostMods = new ModEntry[0];
             _hostSettings = new ModSetting[0];
             _diffs = new List<ModDiff>();
-            _settingDiffs = new List<ModSettingDiff>();
+            _settingDiffs = new List<ModSettingDiff>(); _economyOnlyHere = false;
             _localOnly = new List<string>();
             if (!KeepsPhase) { _phase = Phase.Idle; _message = ""; }
         }
@@ -257,6 +257,10 @@ namespace SailwindCoop.Sync
                 _diffs = ModCatalog.Compare(mods, PluginsRoot, local);
                 _localOnly = ModCatalog.LocalOnly(mods, local, Excluded());
                 _settingDiffs = ModCatalog.CompareSettings(msg.Settings, ReadSettings("Client"));
+                _economyOnlyHere = HasPlugin(local, EconomyOverhaulCompat.Guid) && !HostHasPlugin(mods, EconomyOverhaulCompat.Guid);
+                if (_economyOnlyHere)
+                    Plugin.Logger.LogWarning("[Mods] role=Client Economy Overhaul is installed here but not on the host: " +
+                                             "it will treat the host's world as a first installation");
 
                 Count(out int missing, out int different);
                 Plugin.Logger.LogInfo("[Mods] role=Client host lists " + mods.Count + " mods: " + missing + " missing, " +
@@ -285,7 +289,7 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.LogError("[Mods] role=Client mod check failed, joining without it: " + e);
                 _phase = Phase.Idle;
                 _diffs = new List<ModDiff>();
-                _settingDiffs = new List<ModSettingDiff>();
+                _settingDiffs = new List<ModSettingDiff>(); _economyOnlyHere = false;
                 SendResult(ModSyncDecision.Proceed);
             }
         }
@@ -438,8 +442,31 @@ namespace SailwindCoop.Sync
         }
 #endif
 
+        private bool _economyOnlyHere;
+
+        private static bool HasPlugin(List<LoadedPlugin> plugins, string guid)
+        {
+            foreach (LoadedPlugin plugin in plugins)
+                if (string.Equals(plugin.Guid, guid, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static bool HostHasPlugin(List<ModEntry> mods, string guid)
+        {
+            foreach (ModEntry mod in mods)
+                foreach (ModPlugin plugin in mod.Plugins)
+                    if (plugin != null && string.Equals(plugin.Guid, guid, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
         private void AppendSettings(StringBuilder text)
         {
+            if (_economyOnlyHere)
+            {
+                if (text.Length > 0) text.Append('\n');
+                text.Append("Economy Overhaul is installed here but not on the host: it will treat the host's world as a " +
+                            "first installation (market stock cleared, a preparation before play). Disable it to play this world as the host has it.");
+            }
             if (_settingDiffs.Count == 0) return;
             if (text.Length > 0) text.Append('\n');
             text.Append("Settings that change the shared world differ from the host's (change them in BepInEx/config):");

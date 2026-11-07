@@ -326,6 +326,7 @@ namespace SailwindCoop.Sync
         }
         public void Tick(float dt)
         {
+            TickOwnership(dt);
             if (!Connected || !GameState.playing || GameState.currentlyLoading) return;
             // A missing hull may load later. Preserve its result until the native registry is ready.
             var refits = _refitWaiting.ToArray(); _refitWaiting.Clear();
@@ -354,6 +355,9 @@ namespace SailwindCoop.Sync
         public void SendBaseline(NetPeer peer)
         {
             if (_net.Role != Role.Host) return;
+            // Ownership changed since the save this client loaded (a rental between the save and now).
+            foreach (var pair in _ownership)
+                peer.Send(new BoatPurchaseMsg { SceneIndex = pair.Key, Owned = pair.Value }, DeliveryMethod.ReliableOrdered);
             foreach (var boat in BoatLocator.FindBoats())
             {
                 var hull = Bind(BoatLocator.IndexOf(boat)); if (hull == null) continue;
@@ -365,6 +369,7 @@ namespace SailwindCoop.Sync
         }
         public void Clear()
         {
+            ClearOwnership();
             foreach (var hull in _hulls.Values) if (hull.Editing && hull.Boat != null && GameState.playing && !GameState.currentlyLoading)
                 PatchGuard.Run(() => { hull.Custom.LoadData(Data(hull.Committed)); }, e => Report("preview cleanup", e));
             foreach (var hull in _hulls.Values) Thaw(hull);

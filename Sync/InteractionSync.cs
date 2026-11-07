@@ -510,6 +510,25 @@ namespace SailwindCoop.Sync
             if (context._push.Seconds >= 1f / PushHz) context.FlushPush();
         }
 
+        /// <summary>Client: a force another mod put on an owned boat's body itself (Economy Overhaul's
+        /// pole bracing and fending). On a client that body is a kinematic copy and the force does
+        /// nothing; it goes to the host like a dock push: the boat's own context, no button index.</summary>
+        internal void CaptureBodyPush(Rigidbody body, Vector3 force, Vector3 point)
+        {
+            if (_fleet == null || body == null || _net.Role != Role.Client || _net.State != LinkState.Connected ||
+                !GameState.playing || GameState.currentlyLoading || InteractionContext.Suppressed || force.sqrMagnitude == 0f) return;
+            foreach (var context in _fleet.Values)
+            {
+                if (context._boundBoat == null || BoatForceBody(context._boundBoat) != body) continue;
+                if (context._pushIndex != ushort.MaxValue) context.FlushPush();
+                context._pushIndex = ushort.MaxValue;
+                context._lastPushFixedTime = Time.fixedTime;
+                DeckForcePlayback.Accumulate(ref context._push, context._boundBoat, body, force, point, Time.fixedDeltaTime);
+                if (context._push.Seconds >= 1f / PushHz) context.FlushPush();
+                return;
+            }
+        }
+
         private void FlushPush()
         {
             if (_push.Seconds <= 0f) return;

@@ -47,6 +47,7 @@ namespace SailwindCoop.Net
                 case MsgType.ModFileRequest:
 #endif
                 case MsgType.WalletDelta:
+                case MsgType.EconomyDelta:
                 case MsgType.DiceRequest:
                     return MsgFlow.ToHost;
 
@@ -91,6 +92,8 @@ namespace SailwindCoop.Net
                 case MsgType.ModFileEnd:
 #endif
                 case MsgType.WalletState:
+                case MsgType.EconomyState:
+                case MsgType.FinancedCargo:
                 case MsgType.DiceState:
                 case MsgType.DiceResult:
                 case MsgType.DiceBaseline:

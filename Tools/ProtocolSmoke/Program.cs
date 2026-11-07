@@ -146,6 +146,15 @@ namespace ProtocolSmoke
                 new MoneyTransferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Currency = 3, Amount = 1250, Returned = true },
                 new WalletStateMsg { Shared = true, AckSeq = 0x01020304, Currency = new[] { 120, 0, -5, 99999 } },
                 new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
+                new FinancedCargoMsg { Enabled = true, InstanceIds = new[] { 1001, 927381, int.MaxValue } },
+                new EconomyStateMsg { AckSeq = 0x0B0C0D0E, HasFx = true, FxDay = 812,
+                    Rates = new[] { 0.221, 1.93, 0.498, 0.006 }, Basis = new[] { 0.22, 1.9, 0.5, 0.006 },
+                    Smooth = new[] { 0.2205, 1.91, 0.499, 0.006 }, Closes = new[] { 0.22, 1.9, 0.5, 0.219, 1.92, 0.51 },
+                    HasDemand = true, Events = new[] { new MarketEvent { Id = 17, Demand = 4, Producer = 12, Good = 9, StartDay = 800, Amount = 61.5f, Added = 12f } },
+                    Ports = new[] { new MarketPort { Port = 3, Bonus = 25f, Supply = new[] { 0f, -12.5f, 48f, 100f } },
+                                    new MarketPort { Port = 33, Bonus = float.NaN, Supply = new[] { 0f, 7f } } } },
+                new EconomyDeltaMsg { Seq = 0x01020305, Changes = new[] { new MarketChange { Port = 3, Good = 2, Delta = -10f }, new MarketChange { Port = 3, Good = 9, Delta = 1f } },
+                    Cargo = new[] { -0.0004, 0, 0, 0 }, Shops = new double[0], Rates = new[] { 0.0012, -0.003, 0, 0 } },
                 new ShopTakenMsg { PrefabIndex = 137, Pos = new UnityEngine.Vector3(218.3f, 5.7f, -356f) },
                 new ForageTakenMsg { Spawner = 41, Cooldown = 1834.5f },
                 new BeltStateMsg { NetId = 0x12345678, Prefabs = new[] { 110, 0, 57, 0, 233 }, Lit = 0x01 },
@@ -163,6 +172,14 @@ namespace ProtocolSmoke
                         new ModSetting { Guid = "com.nandbrew.towableboats", Section = "Settings", Key = "Small boats can tow", Value = "true" },
                         new ModSetting { Guid = "com.nandbrew.shipyardexpansion", Section = "Settings", Key = "Add lug sails", Value = "false" } } },
                 new ModSyncResultMsg { Decision = ModSyncDecision.Abort, Missing = 3, Different = 1 },
+                new MissionAcceptMsg { Mission = new MissionEntry { OriginPort = 4, DestinationPort = 17, GoodPrefabIndex = 210, GoodCount = 24,
+                    TotalPrice = 1830, InsuranceLevel = 0.5f, Distance = 212.5f, DueDay = 41, ModModifiers = 5, ModFlags = 3 } },
+                new MissionJournalMsg { Missions = new[] {
+                    new MissionEntry { MissionIndex = 0, OriginPort = 4, DestinationPort = 17, GoodPrefabIndex = 210, GoodCount = 24, TotalPrice = 1830,
+                        InsuranceLevel = 0.5f, Distance = 212.5f, DeliveredGoods = 6, DueDay = 41, ModModifiers = 9, ModFlags = 1 },
+                    new MissionEntry { MissionIndex = 4, OriginPort = 1, DestinationPort = 2, GoodPrefabIndex = 133, GoodCount = 3, TotalPrice = 90,
+                        Distance = 40f, DueDay = 12 } } },
+                new BoatPurchaseMsg { SceneIndex = 207, Owned = false },
                 new ModFileRequestMsg { Mod = 2, File = 511 },
                 new ModFileChunkMsg { Mod = 2, File = 511, Index = 77, Data = new byte[] { 1, 2, 3, 250 } },
                 new ModFileEndMsg { Mod = 2, File = 511, Ok = true }
@@ -279,6 +296,10 @@ namespace ProtocolSmoke
         /// array is allocated, not after reading stale pooled bytes.</summary>
         private static void TestOversizedCounts(List<string> failures)
         {
+            var financed = new NetDataWriter();
+            financed.Put(true); financed.Put(int.MaxValue);
+            if (Protocol.ReadBody(MsgType.FinancedCargo, new NetDataReader(financed.Data, 0, financed.Length)) != null)
+                failures.Add("FinancedCargoMsg: oversized id count accepted");
             var control = new NetDataWriter();
             control.Put((ushort)1); control.Put(0u); control.Put(0u); control.Put(0L); control.Put(false);
             control.Put(ushort.MaxValue);
@@ -403,7 +424,7 @@ namespace ProtocolSmoke
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
                 (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
-                  a is ModEntry || a is ModPlugin || a is ModListFile || a is ModSetting || a is DicePlayerData))
+                  a is ModEntry || a is ModPlugin || a is ModListFile || a is ModSetting || a is DicePlayerData || a is MarketPort))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

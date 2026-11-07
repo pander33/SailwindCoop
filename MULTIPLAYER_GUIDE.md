@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.8.0) uses **protocol 102**, requires Sailwind 0.40, and cannot connect to
+Every machine needs a build with the same protocol number. The current build (0.8.0) uses **protocol 105**, requires Sailwind 0.40, and cannot connect to
 earlier builds. A host on 0.4.3 or later accepts other versions of the mod that use the same protocol; a host on 0.4.2 or earlier requires the exact same version. Some features still await end-to-end in-game verification; the release notes list them.
 
 <!--full-->
@@ -430,6 +430,7 @@ have the same value. The joining player sees the ones that differ in the F8 **Mo
 | Shipyard Expansion | `[Settings] Link topmasts` | Ties a topsail's angle to the sail below |
 | Towable Boats | `[Settings] Small boats can tow` | Adds towing cleats to the cog, dhow and kakam |
 | Anchor Improvements | `[Options] Resize brig anchor` | Changes the brig's anchor windlass |
+| Economy Overhaul | `[Traders] Visible traders` | Hides the game's NPC ships and sails its own traders |
 
 Everything else in these mods, and the whole of NAND Tweaks and Sail Collision Fix, may differ
 between players.
@@ -450,6 +451,32 @@ Known behaviour with other mods:
   for guests.
 - A mod that fails while the game starts is not listed by the loader, so it is missing from the mod
   comparison. **Export report** (F8, Settings) lists such DLLs as `plugin.notLoaded`.
+
+### Economy Overhaul
+
+Economy Overhaul (1.1.5) keeps one economy and one set of loans for one player. In co-op the host
+owns them:
+
+- **Loans, ship rentals, repayments and bankruptcy are the host's.** A guest who tries one is told
+  so. The daily loan and rental processing runs only on the host, so a guest is never charged for
+  the host's loans. Financed cargo (bought on a loan) is the host's to open, use and sell. Leave it
+  to the host. The host shares the current list of financed cargo, including loans made after a
+  guest joins. Guests are refused opening, using or selling that cargo.
+- Ships the host rents, returns or loses to a lender change owner for everyone.
+- Goods a guest buys or sells through the trade book, also in bulk and through a hired cart, appear
+  or disappear for everyone.
+- Mission modifiers (Bulk, Pristine, Rush, Fragile) stay on a mission a guest accepts.
+- A guest's plank repair and pole bracing act on the host's ship.
+- **The host's markets are everyone's.** Stock and prices at every port, port capacity, demand
+  events and currency rates follow the host's game; a guest's own market simulation stays off while
+  connected. What a guest buys or sells, in the trade book, in shops or at the currency booth,
+  changes the shared markets. The shared wallet is therefore safe with the mod.
+- **Still per player:** the price reports of other ports in the trade book, the visible traders
+  (each game sails its own), cargo water damage and fragile damage. A guest may see a trader the
+  host does not, or a slightly different condition on the same crate.
+- Install it on every player or on none. With it on a guest only, it treats the host's world as a
+  first installation (market stock cleared, a preparation before play); the F8 Mods section warns
+  about this.
 
 ## Crew Status And Session Access
 

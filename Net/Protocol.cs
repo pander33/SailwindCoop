@@ -18,7 +18,11 @@ namespace SailwindCoop.Net
         // Expansion's sail data, dock identities use name ordinals, mooring points are no longer
         // shared deck buttons.
         // 102: InstrumentBody preserves fish simulation timers and filtered force on handoff.
-        public const int Version = 102;
+        // 103: Economy Overhaul: MissionEntry carries mission modifiers, BoatPurchase carries
+        // ownership both ways, DamageRequest gains RepairHull and RemoveOakum.
+        // 104: Economy Overhaul's markets shared: EconomyState (127) and EconomyDelta (128).
+        // 105: authoritative financed cargo ids; client finance guards precede action relays.
+        public const int Version = 105;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -135,6 +139,9 @@ namespace SailwindCoop.Net
                 case MsgType.MoneyOffer: return new MoneyOfferMsg();
                 case MsgType.WalletState: return new WalletStateMsg();
                 case MsgType.WalletDelta: return new WalletDeltaMsg();
+                case MsgType.EconomyState: return new EconomyStateMsg();
+                case MsgType.EconomyDelta: return new EconomyDeltaMsg();
+                case MsgType.FinancedCargo: return new FinancedCargoMsg();
                 case MsgType.ShopTaken: return new ShopTakenMsg();
                 case MsgType.ForageTaken: return new ForageTakenMsg();
                 case MsgType.BeltState: return new BeltStateMsg();

@@ -545,8 +545,9 @@ namespace SailwindCoop.Sync
 
         // UnsealCrate authors the contained items. On the client we don't author (phantoms); forward to the
         // host and skip vanilla. Host/offline runs vanilla normally.
-        private static bool PreUnseal(ShipItemCrate __instance)
+        private static bool PreUnseal(ShipItemCrate __instance, bool __runOriginal)
         {
+            if (!__runOriginal) return false;
             try
             {
                 var sync = ItemSync.Instance;

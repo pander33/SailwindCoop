@@ -162,6 +162,14 @@ namespace SailwindCoop.Sync
             if (!InWorld()) return;
 
             Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
+            // FindByIndex resolves unowned saveable hulls too. Ownership release must survive
+            // late datagrams from the old stream; a later purchase will admit fresh poses again.
+            if (boat != null)
+            {
+                var purchase = boat.GetComponentInParent<PurchasableBoat>();
+                var save = purchase != null ? purchase.GetComponent<SaveableObject>() : null;
+                if (save != null && !save.extraSetting) return;
+            }
             if (boat == null)
             {
                 if (!_warnedUnknown.Contains(msg.BoatIndex) && BoatLocator.IndicesAuthoritative)
@@ -364,7 +372,7 @@ namespace SailwindCoop.Sync
 
             // Includes boats hidden for distance: their pose is still valid.
             var boats = BoatLocator.FindBoats();
-            if (!BoatLocator.IndicesAuthoritative) return;
+            if (!BoatLocator.IndicesAuthoritative && _hostBoats.Count == 0) return;
 
             var seen = new HashSet<ushort>();
             for (int i = 0; i < boats.Count; i++)
@@ -411,6 +419,14 @@ namespace SailwindCoop.Sync
         // -----------------------------------------------------------------
         // Client slave / restore
         // -----------------------------------------------------------------
+
+        public void RefreshOwnedBoats()
+        {
+            if (_net.Role != Role.Host) return;
+            BoatLocator.Invalidate();
+            _refreshTimer = 1f;
+            RefreshHostBoats(0f);
+        }
 
         private ClientBoat EnsureClientBoat(ushort index, uint netId, Transform boat)
         {
@@ -651,6 +667,26 @@ namespace SailwindCoop.Sync
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[BoatSync] BoatPhysicsSwitcher.paused unavailable: " + e.Message);
+            }
+        }
+
+        /// <summary>Client: the boat under this saveable is no longer owned (another mod took it back),
+        /// so the host stops streaming it. Hand its body back to the game's physics, as on disconnect;
+        /// otherwise it stays a kinematic copy frozen at the host's last pose.</summary>
+        public void ReleaseBoat(Transform root)
+        {
+            if (root == null) return;
+            var gone = new List<ushort>();
+            foreach (var pair in _clientBoats)
+            {
+                var boat = pair.Value.Boat;
+                if (boat != null && (boat == root || boat.IsChildOf(root))) gone.Add(pair.Key);
+            }
+            foreach (ushort index in gone)
+            {
+                RestoreClientBoat(_clientBoats[index]);
+                _clientBoats.Remove(index);
+                Plugin.Logger.LogInfo("[BoatSync] Boat #" + index + " released: no longer owned");
             }
         }
 

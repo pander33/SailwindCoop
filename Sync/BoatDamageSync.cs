@@ -159,6 +159,11 @@ namespace SailwindCoop.Sync
                 _damage.waterLevel = Mathf.Max(0f, _damage.waterLevel - msg.Amount);
                 RememberRepair("in water -" + msg.Amount.ToString("0.000"));
             }
+            else if (msg.Action == DamageAction.RepairHull || msg.Action == DamageAction.RemoveOakum)
+            {
+                ApplyModRepair(_damage, msg);
+                RememberRepair("in " + msg.Action + " -" + msg.Amount.ToString("0.000"));
+            }
 
             BroadcastSnapshot();
         }
@@ -215,6 +220,17 @@ namespace SailwindCoop.Sync
             RefreshBoat(); if (_damage == null) return;
             if (msg.Action == DamageAction.AddOakum) _damage.oakum += msg.Amount;
             if (msg.Action == DamageAction.BailWater) _damage.waterLevel = Mathf.Max(0f, _damage.waterLevel - msg.Amount);
+            if (msg.Action == DamageAction.RepairHull || msg.Action == DamageAction.RemoveOakum) ApplyModRepair(_damage, msg);
+        }
+
+        /// <summary>A repair another mod made on a client (Economy Overhaul's planks, applied there by
+        /// writing the hull directly). The host repeats its result: less damage, oakum used, and oakum
+        /// never above what the remaining damage can hold, as that mod leaves it.</summary>
+        private static void ApplyModRepair(BoatDamage damage, DamageRequestMsg msg)
+        {
+            if (msg.Action == DamageAction.RepairHull) damage.hullDamage = Mathf.Max(0f, damage.hullDamage - msg.Amount);
+            else damage.oakum = Mathf.Max(0f, damage.oakum - msg.Amount);
+            damage.oakum = Mathf.Min(damage.oakum, damage.hullDamage * Mathf.Max(0f, damage.waterUnitsCapacity));
         }
         internal void ApplyOperationState(BoatDamageStateMsg msg)
         {

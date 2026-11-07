@@ -314,6 +314,8 @@ namespace SailwindCoop.Sync
             new ModSettingRule("Towable Boats", "com.nandbrew.towableboats", "Settings", "Small boats can tow", "needs a restart"),
             // Scales the brig's anchor windlass.
             new ModSettingRule("Anchor Improvements", "com.nandbrew.anchorimprovements", "Options", "Resize brig anchor", "needs a reload"),
+            // On: hides every game NPC boat (the ones the host streams) and sails its own traders.
+            new ModSettingRule("Economy Overhaul", "DogEggz.EconomyOverhaul", "Traders", "Visible traders", "takes effect at once"),
         };
 
         /// <summary>Settings whose host and local values both exist and differ. A setting present on

@@ -120,6 +120,9 @@ namespace SailwindCoop.Net
         BeltState = 124,        // player -> host -> others : what hangs in a player's five belt slots (visual only)
         PumpStroke = 125,       // operator -> host -> observers : actual pump motion since the previous batch
         OarStroke = 126,        // guest -> host : accumulated force and torque of actual rowing
+        EconomyState = 127,     // host -> client : Economy Overhaul markets, currencies and demand events (ReliableOrdered, on change)
+        EconomyDelta = 128,     // client -> host : what a client's trade did to markets and currencies
+        FinancedCargo = 129,    // host -> client : full set of cargo reserved for host finance
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1107,6 +1110,10 @@ namespace SailwindCoop.Net
     {
         AddOakum = 0,
         BailWater = 1,
+        /// <summary>Hull damage repaired outside the game's own repair (Economy Overhaul's planks). Protocol 103.</summary>
+        RepairHull = 2,
+        /// <summary>Oakum used up by such a repair. Protocol 103.</summary>
+        RemoveOakum = 3,
     }
 
     /// <summary>
@@ -2012,6 +2019,10 @@ namespace SailwindCoop.Net
         public float Distance;
         public int DeliveredGoods;
         public int DueDay;
+        /// <summary>Economy Overhaul's mission modifiers (its MissionModifier flags); 0 without that mod.</summary>
+        public int ModModifiers;
+        /// <summary>Bit 0: the Economy Overhaul fields are set. Bit 1: the offer came from the world tab.</summary>
+        public byte ModFlags;
     }
 
     /// <summary>Host → client: the full shared mission journal (read-only mirror). Slots not listed are
@@ -2032,6 +2043,7 @@ namespace SailwindCoop.Net
                 w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
                 w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
                 w.Put(m.Distance); w.Put(m.DeliveredGoods); w.Put(m.DueDay);
+                w.Put(m.ModModifiers); w.Put(m.ModFlags);
             }
         }
 
@@ -2053,6 +2065,8 @@ namespace SailwindCoop.Net
                     Distance = r.GetFloat(),
                     DeliveredGoods = r.GetInt(),
                     DueDay = r.GetInt(),
+                    ModModifiers = r.GetInt(),
+                    ModFlags = r.GetByte(),
                 };
             }
         }
@@ -2344,6 +2358,7 @@ namespace SailwindCoop.Net
             w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
             w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
             w.Put(m.Distance); w.Put(m.DueDay);
+            w.Put(m.ModModifiers); w.Put(m.ModFlags);
         }
 
         public void Deserialize(NetDataReader r)
@@ -2358,6 +2373,8 @@ namespace SailwindCoop.Net
                 InsuranceLevel = r.GetFloat(),
                 Distance = r.GetFloat(),
                 DueDay = r.GetInt(),
+                ModModifiers = r.GetInt(),
+                ModFlags = r.GetByte(),
             };
         }
     }
@@ -2404,11 +2421,13 @@ namespace SailwindCoop.Net
     public sealed class BoatPurchaseMsg : INetMessage
     {
         public int SceneIndex;
+        /// <summary>False: the boat is no longer owned (a mod's rental returned, a seizure). Protocol 103.</summary>
+        public bool Owned = true;
 
         public MsgType Type => MsgType.BoatPurchase;
 
-        public void Serialize(NetDataWriter w) { w.Put(SceneIndex); }
-        public void Deserialize(NetDataReader r) { SceneIndex = r.GetInt(); }
+        public void Serialize(NetDataWriter w) { w.Put(SceneIndex); w.Put(Owned); }
+        public void Deserialize(NetDataReader r) { SceneIndex = r.GetInt(); Owned = r.GetBool(); }
     }
 
     // ---------------------------------------------------------------------
@@ -2777,6 +2796,212 @@ namespace SailwindCoop.Net
                 for (int i = 0; i < len; i++) a[i] = r.GetFloat();
                 Sets[s] = a;
             }
+        }
+    }
+
+    /// <summary>One port's market in an <see cref="EconomyStateMsg"/>: the stock of every good and the
+    /// capacity bonus (NaN when the port has none).</summary>
+    public struct MarketPort
+    {
+        public short Port;
+        public float Bonus;
+        public float[] Supply;
+    }
+
+    /// <summary>One demand event of Economy Overhaul: a port short of a good another port makes.</summary>
+    public struct MarketEvent
+    {
+        public int Id;
+        public short Demand, Producer, Good;
+        public int StartDay;
+        public float Amount, Added;
+    }
+
+    /// <summary>
+    /// Host → one client: the host's markets, which with Economy Overhaul are the crew's markets. Holds
+    /// only what changed since the last state sent to that client, and everything now and then.
+    /// <see cref="AckSeq"/> is the last <see cref="EconomyDeltaMsg"/> of this client already counted.
+    /// </summary>
+    public sealed class EconomyStateMsg : INetMessage
+    {
+        public const int MaxPorts = 512, MaxGoods = 1024, MaxEvents = 64, MaxDoubles = 64;
+
+        public uint AckSeq;
+        public bool HasFx;
+        public int FxDay;
+        public double[] Rates = new double[0], Basis = new double[0], Smooth = new double[0], Closes = new double[0];
+        public bool HasDemand;
+        public MarketEvent[] Events = new MarketEvent[0];
+        public MarketPort[] Ports = new MarketPort[0];
+
+        public MsgType Type => MsgType.EconomyState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(AckSeq);
+            w.Put(HasFx);
+            if (HasFx)
+            {
+                w.Put(FxDay);
+                EconomyWire.PutDoubles(w, Rates);
+                EconomyWire.PutDoubles(w, Basis);
+                EconomyWire.PutDoubles(w, Smooth);
+                EconomyWire.PutDoubles(w, Closes);
+            }
+            w.Put(HasDemand);
+            if (HasDemand)
+            {
+                int events = Events != null ? System.Math.Min(Events.Length, MaxEvents) : 0;
+                w.Put((byte)events);
+                for (int i = 0; i < events; i++)
+                {
+                    var e = Events[i];
+                    w.Put(e.Id); w.Put(e.Demand); w.Put(e.Producer); w.Put(e.Good);
+                    w.Put(e.StartDay); w.Put(e.Amount); w.Put(e.Added);
+                }
+            }
+            int ports = Ports != null ? System.Math.Min(Ports.Length, MaxPorts) : 0;
+            w.Put((ushort)ports);
+            for (int i = 0; i < ports; i++)
+            {
+                var p = Ports[i];
+                w.Put(p.Port);
+                w.Put(p.Bonus);
+                int goods = p.Supply != null ? System.Math.Min(p.Supply.Length, MaxGoods) : 0;
+                w.Put((ushort)goods);
+                for (int g = 0; g < goods; g++) w.Put(p.Supply[g]);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            AckSeq = r.GetUInt();
+            HasFx = r.GetBool();
+            if (HasFx)
+            {
+                FxDay = r.GetInt();
+                Rates = EconomyWire.GetDoubles(r);
+                Basis = EconomyWire.GetDoubles(r);
+                Smooth = EconomyWire.GetDoubles(r);
+                Closes = EconomyWire.GetDoubles(r);
+            }
+            HasDemand = r.GetBool();
+            if (HasDemand)
+            {
+                int events = r.GetByte();
+                if (events > MaxEvents) throw new System.FormatException("demand event count " + events);
+                Events = new MarketEvent[events];
+                for (int i = 0; i < events; i++)
+                    Events[i] = new MarketEvent
+                    {
+                        Id = r.GetInt(), Demand = r.GetShort(), Producer = r.GetShort(), Good = r.GetShort(),
+                        StartDay = r.GetInt(), Amount = r.GetFloat(), Added = r.GetFloat(),
+                    };
+            }
+            int ports = r.GetUShort();
+            if (ports > MaxPorts) throw new System.FormatException("market port count " + ports);
+            Ports = new MarketPort[ports];
+            for (int i = 0; i < ports; i++)
+            {
+                var p = new MarketPort { Port = r.GetShort(), Bonus = r.GetFloat() };
+                int goods = r.GetUShort();
+                if (goods > MaxGoods) throw new System.FormatException("market good count " + goods);
+                p.Supply = new float[goods];
+                for (int g = 0; g < goods; g++) p.Supply[g] = r.GetFloat();
+                Ports[i] = p;
+            }
+        }
+    }
+
+    /// <summary>One good's stock change at one port, made by a client's own trade.</summary>
+    public struct MarketChange
+    {
+        public short Port, Good;
+        public float Delta;
+    }
+
+    /// <summary>
+    /// Client → host: what one of the client's trades did to the markets (stock per good) and to
+    /// Economy Overhaul's currencies: the pressure its goods and shop trades queued for the next
+    /// midnight, and a booth exchange's move of the live rates. Empty arrays when unchanged.
+    /// </summary>
+    public sealed class EconomyDeltaMsg : INetMessage
+    {
+        public const int MaxChanges = 4096;
+
+        public uint Seq;
+        public MarketChange[] Changes = new MarketChange[0];
+        public double[] Cargo = new double[0], Shops = new double[0], Rates = new double[0];
+
+        public MsgType Type => MsgType.EconomyDelta;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Seq);
+            int count = Changes != null ? System.Math.Min(Changes.Length, MaxChanges) : 0;
+            w.Put((ushort)count);
+            for (int i = 0; i < count; i++)
+            {
+                w.Put(Changes[i].Port);
+                w.Put(Changes[i].Good);
+                w.Put(Changes[i].Delta);
+            }
+            EconomyWire.PutDoubles(w, Cargo);
+            EconomyWire.PutDoubles(w, Shops);
+            EconomyWire.PutDoubles(w, Rates);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Seq = r.GetUInt();
+            int count = r.GetUShort();
+            if (count > MaxChanges) throw new System.FormatException("market change count " + count);
+            Changes = new MarketChange[count];
+            for (int i = 0; i < count; i++)
+                Changes[i] = new MarketChange { Port = r.GetShort(), Good = r.GetShort(), Delta = r.GetFloat() };
+            Cargo = EconomyWire.GetDoubles(r);
+            Shops = EconomyWire.GetDoubles(r);
+            Rates = EconomyWire.GetDoubles(r);
+        }
+    }
+
+    public sealed class FinancedCargoMsg : INetMessage
+    {
+        public bool Enabled;
+        public int[] InstanceIds = new int[0];
+        public MsgType Type => MsgType.FinancedCargo;
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Enabled);
+            w.Put(InstanceIds.Length);
+            foreach (int id in InstanceIds) w.Put(id);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            Enabled = r.GetBool();
+            int count = r.GetInt();
+            if (count < 0 || count > r.AvailableBytes / sizeof(int)) throw new System.FormatException("financed cargo count " + count);
+            InstanceIds = new int[count];
+            for (int i = 0; i < count; i++) InstanceIds[i] = r.GetInt();
+        }
+    }
+
+    internal static class EconomyWire
+    {
+        public static void PutDoubles(NetDataWriter w, double[] values)
+        {
+            int count = values != null ? System.Math.Min(values.Length, EconomyStateMsg.MaxDoubles) : 0;
+            w.Put((byte)count);
+            for (int i = 0; i < count; i++) w.Put(values[i]);
+        }
+
+        public static double[] GetDoubles(NetDataReader r)
+        {
+            int count = r.GetByte();
+            if (count > EconomyStateMsg.MaxDoubles) throw new System.FormatException("double count " + count);
+            var values = new double[count];
+            for (int i = 0; i < count; i++) values[i] = r.GetDouble();
+            return values;
         }
     }
 }

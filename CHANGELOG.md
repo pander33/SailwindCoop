@@ -4,9 +4,16 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 102.
+Everyone must update to wire protocol 105.
 
 ### Fixed
+
+- Economy Overhaul: guests cannot open, use or sell the host's financed cargo, including new loans
+  made after joining. Refused actions no longer charge the host or forgive a sale's unpaid debt.
+  The Kicia altar also refuses financed cargo on guests before sacrifice effects or consumption.
+- Market stock and currency rates reconcile immediately after a trade acknowledgement, including
+  replies with no changed values after compensating crew trades.
+- Returned or seized boats ignore late movement packets instead of becoming frozen copies again.
 
 - Passing or dropping a fishing rod preserves its latest fish, line state and simulation timers
   before the new owner starts simulating it.
@@ -22,6 +29,12 @@ Everyone must update to wire protocol 102.
   line is tied to the right cleat on a moving boat.
 - Anchor Improvements: an anchor thrown by a guest now flies for everyone instead of dropping at
   their feet.
+- Economy Overhaul: a guest no longer pays the host's loans or loses the host's ships to them; loans,
+  rentals and bankruptcy are the host's. Ships rented, returned or seized change owner for the whole
+  crew. Trade book purchases and sales of a guest, in bulk and through hired carts, reach everyone.
+  Mission modifiers survive a guest's accept, and a guest's plank repairs and pole bracing work.
+  Markets, prices, demand events and currency rates are the host's for the whole crew, and a guest's
+  trades change them, so the shared wallet can be used with the mod.
 
 - Bilge pump handles now show the operator's actual movement to the crew. Holding the handle still
   leaves it still, and guests drain water at the rate they actually pump.
@@ -41,8 +54,9 @@ Everyone must update to wire protocol 102.
 ### Added
 
 - The joining player is told when a setting of another mod that changes the shared world differs
-  from the host's (Shipyard Expansion, Towable Boats, Anchor Improvements), in the F8 Mods section
-  and the log. The join goes ahead.
+  from the host's (Shipyard Expansion, Towable Boats, Anchor Improvements, Economy Overhaul), in the
+  F8 Mods section and the log. The join goes ahead. A guest with Economy Overhaul joining a host
+  without it is warned that the mod will treat the world as a first installation.
 - Export report lists plugin DLLs that the loader did not start.
 - Liar's Dice for 2–5 players, selectable by the table owner in the lobby alongside Three Rounds.
   Start with five dice each, raise a bid or call a bluff, and lose one die when wrong; the last

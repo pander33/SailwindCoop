@@ -88,6 +88,14 @@ namespace SailwindCoop.Sync
                         DeliveredGoods = d.deliveredGoods,
                         DueDay = d.dueDay,
                     });
+                    if (EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world))
+                    {
+                        var withMod = list[list.Count - 1];
+                        withMod.ModModifiers = modifiers;
+                        withMod.ModFlags = (byte)(1 | (world ? 2 : 0));
+                        list[list.Count - 1] = withMod;
+                        sb.Append(modifiers).Append(world ? 'w' : 'p').Append(':');
+                    }
                     // Every sent field: a slot refilled between two ticks must not look unchanged.
                     sb.Append(d.missionIndex).Append(':').Append(d.originPort).Append(':').Append(d.destinationPort).Append(':')
                         .Append(d.goodPrefabIndex).Append(':').Append(d.goodCount).Append(':').Append(d.totalPrice).Append(':')
@@ -133,6 +141,7 @@ namespace SailwindCoop.Sync
                     }
                     catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] mission " + e.MissionIndex + ": " + ex.Message); }
                 }
+                EconomyOverhaulCompat.MirrorRecords(entries);
                 Plugin.Logger.LogInfo("[MissionSync] journal mirrored: " + entries.Length + " missions");
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] ApplyJournal: " + ex.Message); }
@@ -151,20 +160,24 @@ namespace SailwindCoop.Sync
             SaveMissionData d;
             try { d = mission.PrepareSaveData(); }
             catch (Exception e) { Plugin.Logger.LogWarning("[MissionSync] PrepareSaveData: " + e.Message); return false; }
-            _net.Broadcast(new MissionAcceptMsg
+            var entry = new MissionEntry
             {
-                Mission = new MissionEntry
-                {
-                    OriginPort = d.originPort,
-                    DestinationPort = d.destinationPort,
-                    GoodPrefabIndex = d.goodPrefabIndex,
-                    GoodCount = d.goodCount,
-                    TotalPrice = d.totalPrice,
-                    InsuranceLevel = d.insuranceLevel,
-                    Distance = d.distance,
-                    DueDay = d.dueDay,
-                },
-            }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                OriginPort = d.originPort,
+                DestinationPort = d.destinationPort,
+                GoodPrefabIndex = d.goodPrefabIndex,
+                GoodCount = d.goodCount,
+                TotalPrice = d.totalPrice,
+                InsuranceLevel = d.insuranceLevel,
+                Distance = d.distance,
+                DueDay = d.dueDay,
+            };
+            // Economy Overhaul rolls modifiers per offer object on this machine; the host builds a new one.
+            if (EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world))
+            {
+                entry.ModModifiers = modifiers;
+                entry.ModFlags = (byte)(1 | (world ? 2 : 0));
+            }
+            _net.Broadcast(new MissionAcceptMsg { Mission = entry }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[MissionSync] out accept dest=" + d.destinationPort + " good=" + d.goodPrefabIndex);
             return true;
         }
@@ -188,6 +201,7 @@ namespace SailwindCoop.Sync
                 var data = new SaveMissionData(-1, e.OriginPort, e.DestinationPort, e.GoodPrefabIndex,
                     e.GoodCount, e.TotalPrice, e.InsuranceLevel, e.Distance, 0, e.DueDay);
                 var mission = new Mission(data);
+                if ((e.ModFlags & 1) != 0) EconomyOverhaulCompat.WriteOffer(mission, e.ModModifiers, (e.ModFlags & 2) != 0);
                 PlayerMissions.AcceptMission(mission);   // host vanilla: assigns slot, spawns goods, reduces demand
                 Plugin.Logger.LogInfo("[MissionSync] in accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
             }

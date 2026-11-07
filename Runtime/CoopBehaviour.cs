@@ -42,6 +42,8 @@ namespace SailwindCoop.Runtime
         public SleepSync Sleep { get; private set; }
         public MissionSync Missions { get; private set; }
         public WalletSync Wallet { get; private set; }
+        public MarketSync Markets { get; private set; }
+        public FinancedCargoSync FinancedCargo { get; private set; }
         public DiceSync Dice { get; private set; }
         public PlayerKnockdown Knockdown { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
@@ -154,6 +156,16 @@ namespace SailwindCoop.Runtime
             LastNotice = "";
         }
 
+        // Patch sets that name another mod's types. Awake may run while the loader is still starting
+        // plugins, so a mod loaded after this one is not there yet; Start runs once every plugin has.
+        private void Start()
+        {
+            if (_harmony == null) return;
+            System.Action<string> patchFault = text => Plugin.Logger.LogError("[Coop] role=initializing " + text);
+            if (EconomyOverhaulCompat.Present)
+                PatchHealth.Install("Economy Overhaul", () => EconomyOverhaulCompat.Apply(_harmony), patchFault);
+        }
+
         private void Awake()
         {
             Instance = this;
@@ -232,6 +244,8 @@ namespace SailwindCoop.Runtime
             Sleep = new SleepSync(Net);
             Missions = new MissionSync(Net);
             Wallet = new WalletSync(Net);
+            Markets = new MarketSync(Net);
+            FinancedCargo = new FinancedCargoSync(Net);
             Shipyard = new ShipyardSync(Net);
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
@@ -460,6 +474,8 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Sleep.Tick", () => Sleep.Tick(Time.unscaledDeltaTime)),
                 new SyncStep("Missions.Tick", () => Missions.Tick(_dt)),
                 new SyncStep("Wallet.Tick", () => Wallet.Tick()),
+                new SyncStep("Markets.Tick", () => Markets.Tick()),
+                new SyncStep("FinancedCargo.Tick", () => FinancedCargo.Tick()),
                 new SyncStep("Controls.Tick", () => Controls.Tick(SendDt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
                 new SyncStep("Anchor.Tick", () => Anchor.Tick(SendDt)),
@@ -889,6 +905,15 @@ namespace SailwindCoop.Runtime
                 case MsgType.WalletDelta:
                     Wallet.OnWalletDelta((WalletDeltaMsg)msg, fromPeer);
                     break;
+                case MsgType.EconomyState:
+                    Markets.OnEconomyState((EconomyStateMsg)msg);
+                    break;
+                case MsgType.FinancedCargo:
+                    FinancedCargo.Receive((FinancedCargoMsg)msg);
+                    break;
+                case MsgType.EconomyDelta:
+                    Markets.OnEconomyDelta((EconomyDeltaMsg)msg, fromPeer);
+                    break;
                 case MsgType.ShopTaken:
                     Shop.OnShopTaken((ShopTakenMsg)msg, fromPeer);
                     break;
@@ -956,6 +981,7 @@ namespace SailwindCoop.Runtime
                         if (((ClientWorldLoadedMsg)msg).Ok && netId != 0)
                         {
                             Shipyard.SendBaseline(fromPeer);
+                            FinancedCargo.SendBaseline(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
@@ -1239,6 +1265,8 @@ namespace SailwindCoop.Runtime
             Shipyard?.Clear();
             Missions?.Clear();
             Wallet?.Clear();
+            Markets?.Clear();
+            FinancedCargo?.Clear();
             Sleep?.Clear();
             Shop?.Clear();
             WindTotem?.Clear();
@@ -1836,6 +1864,8 @@ namespace SailwindCoop.Runtime
             Shipyard.Clear();
             Missions.Clear();
             Wallet.Clear();
+            Markets.Clear();
+            FinancedCargo.Clear();
             Sleep.Clear();
             OriginCatchUp.ForgetHostOffset();
             Shop.Clear();
