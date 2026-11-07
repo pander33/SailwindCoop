@@ -609,6 +609,8 @@ internal static class Program
                 samples.Clear(); Assert(samples.Count == 0, "disconnect retained samples");
             });
             PlayerPlaybackTests.Run(Test, Assert);
+            SupportHistoryTests.Run(Test, Assert);
+            HandoffProductionTests.Run(Test, Assert, GameAssemblyPath());
             Test("pump visual smooths packet bursts and plays exactly the received rotation", () => {
                 var motion = new PumpVisualMotion();
                 double oldRemaining = 0, oldChange = 0, newChange = 0, total = 0;

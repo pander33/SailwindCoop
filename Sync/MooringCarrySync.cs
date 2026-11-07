@@ -21,7 +21,7 @@ namespace SailwindCoop.Sync
             internal int PreviousLayer;
             internal CoordFrame Frame;
             internal MooringCarryRequestMsg RemoteHeldPose;
-            internal readonly NetTransform Pose = new NetTransform();
+            internal readonly SupportPoseBuffer Pose = new SupportPoseBuffer();
             internal readonly ItemStateGate Gate = new ItemStateGate();
             internal readonly ItemRequestOrder Order = new ItemRequestOrder();
         }
@@ -228,10 +228,8 @@ namespace SailwindCoop.Sync
         }
         private void BufferCarry(Carry carry, long tick, CoordFrame frame, Vector3 pos, Quaternion rot, Vector3 vel)
         {
-            if (carry.Frame != frame) carry.Pose.Clear(); carry.Frame = frame;
-            carry.Pose.ToWorldPos = frame == CoordFrame.Boat ? (Func<Vector3, Vector3>)(p => _boundBoat.TransformPoint(p)) : CoordSpace.RealToLocal;
-            carry.Pose.ToWorldRot = frame == CoordFrame.Boat ? (Func<Quaternion, Quaternion>)(r => _boundBoat.rotation * r) : r => r;
-            carry.Pose.Push(tick, pos, rot, vel);
+            carry.Frame = frame;
+            carry.Pose.Push(tick, frame, _boatId, pos, rot, vel);
         }
         private static void SlaveCarry(Carry carry)
         {

@@ -43,6 +43,7 @@ namespace SailwindCoop.Sync
         /// <summary>Buffered snapshot count. A consumer that must not act on a single (possibly
         /// stale/first) sample can wait for two before trusting the stream.</summary>
         public int SampleCount => _buf.Count;
+        internal long OldestTick => _buf.Count == 0 ? long.MaxValue : _buf[0].Tick;
 
         /// <summary>
         /// Converts a buffered position/rotation into world space at apply time. Swappable

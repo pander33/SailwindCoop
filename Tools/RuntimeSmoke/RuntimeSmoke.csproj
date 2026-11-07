@@ -37,6 +37,7 @@
     <Compile Include="..\..\Sync\ChangeStream.cs" Link="ChangeStream.cs" />
     <Compile Include="..\..\Sync\ChunkAccumulator.cs" Link="ChunkAccumulator.cs" />
     <Compile Include="..\..\Sync\SnapshotBuffer.cs" Link="SnapshotBuffer.cs" />
+    <Compile Include="..\..\Sync\SupportHistory.cs" Link="SupportHistory.cs" />
     <Compile Include="..\..\Sync\PlayerPlaybackClock.cs" Link="PlayerPlaybackClock.cs" />
     <Compile Include="..\..\Sync\PoseSupportOrder.cs" Link="PoseSupportOrder.cs" />
     <Compile Include="..\..\Sync\InstrumentRevisionQueue.cs" Link="InstrumentRevisionQueue.cs" />

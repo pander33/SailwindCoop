@@ -24,6 +24,8 @@ namespace SailwindCoop.Sync
             public Animator Animator;
             public AvatarPoseDriver PoseDriver;
             public readonly List<PoseSegment> Poses = new List<PoseSegment>();
+            public readonly SupportHistory<PlayerStateMsg> History = new SupportHistory<PlayerStateMsg>(m => m.Tick,
+                (a, b) => a.Frame == b.Frame && (a.Frame != CoordFrame.Boat || a.BoatIndex == b.BoatIndex));
             public PoseSegment RenderedPose;
             public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
             public int PlaybackFrame = -1;
@@ -92,13 +94,6 @@ namespace SailwindCoop.Sync
                 LastTick = System.Math.Max(LastTick, msg.Tick);
                 Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
                 Details.Push(msg);
-            }
-
-            public void Prepend(PlayerStateMsg msg)
-            {
-                if (!Net.TryPrepend(msg.Tick, msg.Pos, msg.Rot, msg.Vel)) return;
-                Details.TryPrepend(msg);
-                Start = msg.Tick;
             }
 
             public bool Resolve()
@@ -1041,6 +1036,8 @@ namespace SailwindCoop.Sync
             }
             long localNow = _net.Clock.LocalTick;
             a.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
+            if (!a.History.Push(msg)) return;
+            if (a.History.Restarted) a.Poses.Clear();
             if (a.Poses.Count == 0 || !a.Poses[a.Poses.Count - 1].Matches(msg))
             {
                 a.Poses.Add(new PoseSegment(msg));
@@ -1063,24 +1060,31 @@ namespace SailwindCoop.Sync
 
         private static void InsertReorderedPose(RemoteAvatar avatar, PlayerStateMsg msg)
         {
-            int index = avatar.Poses.Count - 1;
-            while (index >= 0 && msg.Tick < avatar.Poses[index].Start) index--;
-            var previous = index >= 0 ? avatar.Poses[index] : null;
-            if (previous != null && previous.Matches(msg))
+            if (!avatar.History.Push(msg)) return;
+            for (int i = avatar.Poses.Count - 1; i >= 0; i--)
             {
-                if (msg.Tick != previous.Start) previous.Push(msg);
-                return;
+                var existing = avatar.Poses[i];
+                if (msg.Tick < existing.Start) continue;
+                if (existing.Matches(msg) && msg.Tick >= existing.Net.OldestTick) { existing.Push(msg); return; }
+                break;
             }
-            if (index + 1 >= avatar.Poses.Count) return;
-            var next = avatar.Poses[index + 1];
-            long playedTick = avatar.PlaybackFrame >= 0 ? avatar.PlaybackTick : long.MinValue;
-            if (!PoseSupportOrder.CanPrepend(msg.Tick, playedTick, previous?.LastTick ?? long.MinValue, next.Start)) return;
-            if (next.Matches(msg)) next.Prepend(msg);
-            else if (avatar.Poses.Count < 32)
+            var old = avatar.Poses.ToArray();
+            avatar.Poses.Clear();
+            for (int start = 0; start < avatar.History.Count;)
             {
-                var intermediate = new PoseSegment(msg);
-                intermediate.Push(msg);
-                avatar.Poses.Insert(index + 1, intermediate);
+                int end = avatar.History.EndOfRun(start);
+                var first = avatar.History[start]; var last = avatar.History[end];
+                PoseSegment segment = null;
+                foreach (var previous in old)
+                    if (previous.Start == first.Tick && previous.LastTick == last.Tick && previous.Matches(first) &&
+                        (msg.Tick < first.Tick || msg.Tick > last.Tick)) { segment = previous; break; }
+                if (segment == null)
+                {
+                    segment = new PoseSegment(first);
+                    for (int i = start; i <= end; i++) segment.Push(avatar.History[i]);
+                }
+                avatar.Poses.Add(segment);
+                start = end + 1;
             }
         }
 
@@ -1102,8 +1106,10 @@ namespace SailwindCoop.Sync
                 var pose = a.Poses[index];
                 if (!pose.Resolve()) continue;
                 if (index != 0) a.Poses.RemoveRange(0, index);
-                if (a.RenderedPose != pose) a.HasAnimSnapshot = false;
+                if (a.RenderedPose == null || a.RenderedPose.Frame != pose.Frame ||
+                    (pose.Frame == CoordFrame.Boat && a.RenderedPose.BoatIndex != pose.BoatIndex)) a.HasAnimSnapshot = false;
                 a.RenderedPose = pose;
+                a.History.Prune(renderTick);
                 ApplyPoseDetails(a, pose, renderTick);
                 // The two positions are in different supports. Bridge only nearby samples,
                 // after projecting both through the decks already placed this frame.
@@ -1157,6 +1163,14 @@ namespace SailwindCoop.Sync
                 pose.ApplyAt(target, tick);
             else
                 pose.Apply(target, serverNow);
+        }
+
+        internal static void ApplyCarriedPose(SupportPoseBuffer pose, Transform target, uint holder, long localNow, long serverNow)
+        {
+            var players = CoopBehaviour.Instance?.Players;
+            if (holder != 0 && players != null && players.TryGetRenderTick(holder, localNow, serverNow, out long tick))
+                pose.ApplyAt(target, tick);
+            else pose.Apply(target, serverNow);
         }
 
         private void ApplyPoseDetails(RemoteAvatar avatar, PoseSegment pose, long tick)

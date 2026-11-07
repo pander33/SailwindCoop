@@ -15,12 +15,14 @@ namespace SailwindCoop.Net
         public int FishPrefab;
         public bool FishDead, Splash, TensionSound;
         public float FishEnergy, FishTension;
+        public float FishTimer, FishPullForce, FishSnapTimer;
         protected void Write(NetDataWriter w)
         {
             w.Put(InstanceId); w.Put(PrefabIndex); w.Put(RequestId); w.Put(ParentRevision); w.Put(Tick); w.Put(Final); w.Put(Kinematic); w.Put(Thrown); w.Put(Throwing);
             w.PutVector3(RealPos); w.PutQuaternion(Rot); w.PutVector3(Velocity); w.PutVector3(RotatorPos); w.PutQuaternion(RotatorRot);
             w.Put(Limit); w.Put(TargetLength); w.Put(Bend); w.Put(ReelVolume); w.Put(FishPrefab); w.Put(FishDead); w.Put(Splash); w.Put(TensionSound); w.Put(FishEnergy); w.Put(FishTension);
             w.Put(BodyActive); w.Put(StaticBobberActive);
+            w.Put(FishTimer); w.Put(FishPullForce); w.Put(FishSnapTimer);
         }
         protected void Read(NetDataReader r)
         {
@@ -28,6 +30,7 @@ namespace SailwindCoop.Net
             RealPos = r.GetVector3(); Rot = r.GetQuaternion(); Velocity = r.GetVector3(); RotatorPos = r.GetVector3(); RotatorRot = r.GetQuaternion();
             Limit = r.GetFloat(); TargetLength = r.GetFloat(); Bend = r.GetFloat(); ReelVolume = r.GetFloat(); FishPrefab = r.GetInt(); FishDead = r.GetBool(); Splash = r.GetBool(); TensionSound = r.GetBool(); FishEnergy = r.GetFloat(); FishTension = r.GetFloat();
             BodyActive = r.GetBool(); StaticBobberActive = r.GetBool();
+            FishTimer = r.GetFloat(); FishPullForce = r.GetFloat(); FishSnapTimer = r.GetFloat();
         }
     }
     public sealed class InstrumentRequestMsg : InstrumentBody, INetMessage

@@ -33,7 +33,9 @@ namespace SailwindCoop.Sync
             public uint NetId;
             public ShipItem Item;
             public NetTransform Net = new NetTransform { SmoothUnderruns = true };
-            public List<HeldFramePose> HeldFrames;
+            private SupportPoseBuffer _heldPose;
+            public SupportPoseBuffer HeldPose => _heldPose ?? (_heldPose = new SupportPoseBuffer());
+            public void ClearHeldPose() => _heldPose?.Clear();
             public PlayerPlaybackClock FreePlayback;
             /// <summary>Host: the last pose sample of the client holding this item, as it came. The
             /// host shows the item from <see cref="Net"/> (delayed like the holder's avatar), but
@@ -68,12 +70,6 @@ namespace SailwindCoop.Sync
             public bool LampResolved;
             /// <summary>Client: the last report of this item from the local hand (SendHolderReport).</summary>
             public uint HolderReport;
-        }
-
-        private struct HeldFramePose
-        {
-            public NetTransform Net;
-            public long LastTick, ChangeTick;
         }
 
         /// <summary>
@@ -450,24 +446,10 @@ namespace SailwindCoop.Sync
         {
             var target = e.Item.transform;
             var coop = Runtime.CoopBehaviour.Instance;
-            var players = coop?.Players;
-            if (e.HolderNetId != 0 && players != null &&
-                players.TryGetRenderTick(e.HolderNetId, localNow, serverNow, out long heldTick))
+            if (e.HolderNetId != 0)
             {
-                var frames = e.HeldFrames;
-                if (frames != null)
-                {
-                    while (frames.Count > 0 && frames[0].ChangeTick <= heldTick) frames.RemoveAt(0);
-                    if (frames.Count > 0)
-                    {
-                        var current = frames[0];
-                        var next = frames.Count > 1 ? frames[1].Net : e.Net;
-                        if (!current.Net.TryApplyTransition(target, next, current.LastTick, current.ChangeTick, heldTick))
-                            current.Net.ApplyAt(target, heldTick);
-                        return;
-                    }
-                }
-                e.Net.ApplyAt(target, heldTick);
+                e.HeldPose.InterpDelayMs = e.Net.InterpDelayMs;
+                PlayerSync.ApplyCarriedPose(e.HeldPose, target, e.HolderNetId, localNow, serverNow);
                 return;
             }
             var boats = coop?.Boats;
@@ -478,18 +460,10 @@ namespace SailwindCoop.Sync
             else e.Net.Apply(target, serverNow);
         }
 
-        private static void PreserveHeldFrame(ItemEntry entry, long lastTick, long changeTick)
-        {
-            entry.HeldFrames ??= new List<HeldFramePose>();
-            if (entry.HeldFrames.Count == 32) entry.HeldFrames.RemoveAt(0);
-            entry.HeldFrames.Add(new HeldFramePose { Net = entry.Net, LastTick = lastTick, ChangeTick = changeTick });
-            entry.Net = new NetTransform { SmoothUnderruns = true, InterpDelayMs = entry.Net.InterpDelayMs };
-        }
-
         private static void ResetItemPose(ItemEntry e)
         {
             e.Net.Clear();
-            e.HeldFrames?.Clear();
+            e.ClearHeldPose();
             e.FreePlayback = null;
         }
 
@@ -501,13 +475,14 @@ namespace SailwindCoop.Sync
             var last = e.HeldSample;
             if (last == null || !e.Net.HasData || last.Frame != msg.Frame || last.BoatIndex != msg.BoatIndex)
             {
-                if (last != null && e.Net.HasData) PreserveHeldFrame(e, last.Tick, msg.Tick);
-                else ResetItemPose(e);
+                if (last == null) ResetItemPose(e);
+                else e.Net.Clear();
                 ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
                 if (msg.Frame == CoordFrame.Boat) EnsureBoatParentState(e.Item, msg.BoatIndex);
                 else EnsureWorldParentState(e.Item);
             }
             e.HeldSample = msg;
+            e.HeldPose.Push(msg.Tick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
             e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
         }
 
@@ -820,7 +795,11 @@ namespace SailwindCoop.Sync
 
             bool continuous = pose || msg.Action == ItemAction.AltHeld;
             if (pose ? !e.Requests.AcceptPose(actor, msg.RequestId, msg.Tick) :
-                !e.Requests.Accept(actor, msg.RequestId, continuous)) return;
+                !e.Requests.Accept(actor, msg.RequestId, continuous))
+            {
+                if (pose) ReceiveHistoricalHeldPose(e, msg, actor);
+                return;
+            }
             if (!continuous) ClearClientHeldPose(e);
             if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (msg.Action == ItemAction.Consume)
@@ -1147,8 +1126,15 @@ namespace SailwindCoop.Sync
                 return WaitForItemState(msg, "item identity");
             if (e.PrefabIndex != msg.PrefabIndex) return WaitForItemState(msg, "prefab mismatch");
             var accepted = e.Gate.Copy();
-            if (!accepted.Receive(msg.Revision, msg.SampleTick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
+            long gateTick = e.RemotePose != null && SameHeldAttachment(e.RemotePose, msg)
+                ? Math.Max(msg.SampleTick, e.RemotePose.SampleTick) : msg.SampleTick;
+            if (!accepted.Receive(msg.Revision, gateTick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
+            {
+                if (!e.Gate.Pending && msg.Revision == e.Gate.Version && e.RemotePose != null &&
+                    msg.SampleTick < e.RemotePose.SampleTick && SameHeldAttachment(e.RemotePose, msg) && !LocalHand(e.Item))
+                    e.HeldPose.Push(msg.SampleTick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
                 return ItemApplyStatus.Applied;
+            }
             bool locallyHeld = msg.HolderNetId == _net.MyNetId && HeldItem() == e.Item;
             if (!operationResult && !semantic && !locallyHeld && msg.HolderNetId != _net.MyNetId &&
                 e.AppliedLocalRequest == e.LastLocalRequest && !ItemComponents.HasPendingBinding(e.Item) &&
@@ -1204,6 +1190,11 @@ namespace SailwindCoop.Sync
         private void PushRemoteItemPose(ItemEntry e, ItemStateMsg msg)
         {
             var previous = e.RemotePose;
+            if (previous != null && msg.SampleTick < previous.SampleTick && SameHeldAttachment(previous, msg))
+            {
+                e.HeldPose.Push(msg.SampleTick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
+                return;
+            }
             bool frameChanged = previous == null || previous.Frame != msg.Frame ||
                 (msg.Frame == CoordFrame.Boat && previous.BoatIndex != msg.BoatIndex);
             bool attachmentChanged = previous == null || previous.HolderNetId != msg.HolderNetId ||
@@ -1214,8 +1205,8 @@ namespace SailwindCoop.Sync
                 previous.Details?.CookSlot != msg.Details?.CookSlot ||
                 previous.Details?.FuelStoveId != msg.Details?.FuelStoveId ||
                 previous.Details?.FuelInserted != msg.Details?.FuelInserted;
-            if (!attachmentChanged && frameChanged && msg.HolderNetId != 0 && e.Net.HasData && msg.SampleTick > previous.SampleTick)
-                PreserveHeldFrame(e, previous.SampleTick, msg.SampleTick);
+            if (!attachmentChanged && frameChanged && msg.HolderNetId != 0)
+                e.Net.Clear();
             else if (frameChanged || attachmentChanged) ResetItemPose(e);
             if (frameChanged) ConfigureNetFrame(e, msg.Frame, msg.BoatIndex);
             if (msg.HolderNetId == 0 && msg.Frame == CoordFrame.World &&
@@ -1226,7 +1217,31 @@ namespace SailwindCoop.Sync
                 e.FreePlayback.Observe(msg.SampleTick, localNow + (long)_net.Clock.OffsetMs, localNow);
             }
             e.RemotePose = msg;
+            if (msg.HolderNetId != 0) e.HeldPose.Push(msg.SampleTick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
             e.Net.Push(msg.SampleTick, msg.Pos, msg.Rot, msg.Vel);
+        }
+
+        private static bool SameHeldAttachment(ItemStateMsg a, ItemStateMsg b)
+            => a.HolderNetId != 0 && a.HolderNetId == b.HolderNetId && a.Requester == b.Requester && a.RequestId == b.RequestId &&
+               a.InventorySlot == b.InventorySlot && a.CrateId == b.CrateId && a.CargoPort == b.CargoPort &&
+               a.Attached == b.Attached && a.Nailed == b.Nailed &&
+               a.Details?.CookStoveId == b.Details?.CookStoveId && a.Details?.CookSlot == b.Details?.CookSlot &&
+               a.Details?.FuelStoveId == b.Details?.FuelStoveId && a.Details?.FuelInserted == b.Details?.FuelInserted;
+
+        private void ReceiveHistoricalHeldPose(ItemEntry e, ItemRequestMsg msg, uint actor)
+        {
+            var latest = e.HeldSample;
+            if (latest == null || e.HolderNetId != actor || latest.RequestId != msg.RequestId ||
+                msg.Tick >= latest.Tick || !e.Requests.Accept(actor, msg.RequestId, true)) return;
+            // Another peer may still need a sample this host has already played.
+            // Local playout decides only whether to display it, not whether to relay it.
+            e.HeldPose.Push(msg.Tick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);
+            // Preserve current semantic fields and the newest source pose. Only the outgoing
+            // sample uses the historical coordinates; never temporarily overwrite HeldSample.
+            var state = BuildState(e, _net.Clock.ServerTick);
+            state.PoseTick = msg.Tick; state.Frame = msg.Frame; state.BoatIndex = msg.BoatIndex;
+            state.Pos = msg.Pos; state.Rot = msg.Rot; state.Vel = msg.Vel;
+            _net.Broadcast(state, _net.ReceivingUnreliable ? LiteNetLib.DeliveryMethod.Unreliable : LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
 
 #if DEBUG

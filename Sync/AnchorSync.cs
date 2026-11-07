@@ -20,7 +20,7 @@ namespace SailwindCoop.Sync
         private readonly Anchor _anchor;
         private readonly Rigidbody _body;
         private readonly CapsuleCollider _collider;
-        private readonly NetTransform _slave = new NetTransform();
+        private readonly SupportPoseBuffer _slave = new SupportPoseBuffer();
         private readonly AnchorStateGate _gate = new AnchorStateGate();
         private static readonly FieldInfo SetField = typeof(Anchor).GetField("set", BindingFlags.Instance | BindingFlags.NonPublic);
         private uint _holder, _nextRequest, _revision;
@@ -321,11 +321,9 @@ namespace SailwindCoop.Sync
         {
             if (!_haveFrame || _frame != frame)
             {
-                _slave.Clear(); _frame = frame; _haveFrame = true;
-                _slave.ToWorldPos = frame == CoordFrame.Boat ? (Func<Vector3, Vector3>)(p => _boat.TransformPoint(p)) : CoordSpace.RealToLocal;
-                _slave.ToWorldRot = frame == CoordFrame.Boat ? (Func<Quaternion, Quaternion>)(r => _boat.rotation * r) : r => r;
+                _frame = frame; _haveFrame = true;
             }
-            _slave.Push(tick, pos, rot, vel);
+            _slave.Push(tick, frame, _boatId, pos, rot, vel);
         }
 
         public void ApplyRemote()

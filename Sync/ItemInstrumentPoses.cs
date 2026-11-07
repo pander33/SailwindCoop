@@ -57,6 +57,23 @@ namespace SailwindCoop.Sync
             return (_net.Role == Role.Client && _hostIds.Contains(entry.InstanceId)) ||
                 (_net.Role == Role.Host && entry.HolderNetId != 0 && entry.HolderNetId != _net.MyNetId);
         }
+        // Native callbacks can run between a root action and the next 15 Hz send pass.
+        // Complete authority transfer before letting them simulate the child.
+        internal bool SuppressInstrumentSimulation(ShipItem item)
+        {
+            bool remote = RemoteInstrument(item);
+            if (_net.State == LinkState.Connected && HasInstrument(item) && _byItem.TryGetValue(item, out var entry))
+            {
+                var child = BindInstrument(entry);
+                if (child != null)
+                {
+                    if (remote) SlaveInstrument(child);
+                    else if (child.Slaved) RestoreInstrument(child, child.Latest);
+                    if (child.Slaved) return true;
+                }
+            }
+            return remote;
+        }
         private static void SlaveInstrument(Instrument child)
         {
             if (child.Slaved) return;
@@ -70,16 +87,21 @@ namespace SailwindCoop.Sync
             if (!child.Slaved) return;
             if (child.Body != null)
             {
-                if (handoff != null && !handoff.Kinematic && handoff.BodyActive && child.Joint != null && CoordSpace.Ready)
+                if (handoff != null)
                 {
-                    // A pickup can happen before the latest pose is rendered. Resume with its
-                    // line length too, or a still-stowed line immediately locks the body again.
+                    if (child.Joint == null || !CoordSpace.Ready) return;
+                    if (child.Item is ShipItemFishingRod rod)
+                    {
+                        if (ItemComponents.Read<FishingRodFish>(rod, "fish") == null) return;
+                        if (handoff.FishPrefab > 0)
+                        {
+                            var prefabs = PrefabsDirectory.instance?.directory;
+                            if (prefabs == null || handoff.FishPrefab >= prefabs.Length || prefabs[handoff.FishPrefab] == null) return;
+                        }
+                    }
                     child.Pose.ApplyAt(child.Joint.transform, handoff.Tick);
-                    var limit = child.Joint.linearLimit;
-                    limit.limit = handoff.Limit;
-                    child.Joint.linearLimit = limit;
-                    ItemComponents.Set(child.Item, "currentTargetLength", handoff.TargetLength);
-                    if (child.Item is ShipItemChipLog) ItemComponents.Set(child.Item, "thrown", handoff.Thrown);
+                    ApplyInstrumentFields(child, handoff, handoff, 0f);
+                    ResumeFishSimulation(child, handoff);
                 }
                 child.Body.isKinematic = handoff?.Kinematic ?? child.OriginalKinematic;
                 child.Body.interpolation = child.OriginalInterpolation;
@@ -89,6 +111,17 @@ namespace SailwindCoop.Sync
             child.Slaved = false;
             ClearInstrumentSamples(child);
             child.Pending.Clear();
+        }
+        private static void ResumeFishSimulation(Instrument child, InstrumentBody state)
+        {
+            if (!(child.Item is ShipItemFishingRod rod)) return;
+            var fish = ItemComponents.Read<FishingRodFish>(rod, "fish");
+            if (fish == null) return;
+            ItemComponents.Set(fish, "lastLineLength", state.Limit);
+            ItemComponents.Set(fish, "fishTimer", state.FishTimer);
+            ItemComponents.Set(fish, "pullForce", state.FishPullForce);
+            ItemComponents.Set(fish, "snapTimer", state.FishSnapTimer);
+            child.Rotator.ApplyAt(ItemComponents.Read<Transform>(fish, "rodRotator"), state.Tick);
         }
         private void CaptureInstrument(ItemEntry entry, Instrument child, InstrumentBody msg)
         {
@@ -110,6 +143,9 @@ namespace SailwindCoop.Sync
                     msg.FishPrefab = fish.currentFish != null ? fish.currentFish.GetComponent<SaveablePrefab>()?.prefabIndex ?? 0 : 0;
                     msg.FishDead = fish.fishDead; msg.FishEnergy = ItemComponents.Read<float>(fish, "fishEnergy");
                     msg.FishTension = ItemComponents.Read<float>(fish, "currentTargetTension");
+                    msg.FishTimer = ItemComponents.Read<float>(fish, "fishTimer");
+                    msg.FishPullForce = ItemComponents.Read<float>(fish, "pullForce");
+                    msg.FishSnapTimer = ItemComponents.Read<float>(fish, "snapTimer");
                     msg.Splash = fish.GetComponent<ParticleSystem>()?.emission.enabled ?? false;
                     msg.TensionSound = ItemComponents.Read<AudioSource>(fish, "tensionAudio")?.isPlaying ?? false;
                     var rotator = ItemComponents.Read<Transform>(fish, "rodRotator");
@@ -155,6 +191,7 @@ namespace SailwindCoop.Sync
                a.Splash != b.Splash || a.TensionSound != b.TensionSound ||
                !a.Limit.Equals(b.Limit) || !a.TargetLength.Equals(b.TargetLength) || !a.Bend.Equals(b.Bend) || !a.ReelVolume.Equals(b.ReelVolume) ||
                !a.FishEnergy.Equals(b.FishEnergy) || !a.FishTension.Equals(b.FishTension) ||
+               !a.FishTimer.Equals(b.FishTimer) || !a.FishPullForce.Equals(b.FishPullForce) || !a.FishSnapTimer.Equals(b.FishSnapTimer) ||
                (a.RealPos - b.RealPos).sqrMagnitude > 1e-4f || (a.RotatorPos - b.RotatorPos).sqrMagnitude > 1e-6f ||
                (a.Velocity - b.Velocity).sqrMagnitude > 1e-4f ||
                Quaternion.Angle(a.Rot, b.Rot) > 0.1f || Quaternion.Angle(a.RotatorRot, b.RotatorRot) > 0.1f;
@@ -213,6 +250,7 @@ namespace SailwindCoop.Sync
                 if (_waitingInstruments.TryGetValue(entry.InstanceId, out var waiting)) { ReceiveInstrument(entry, child, waiting); _waitingInstruments.Remove(entry.InstanceId); }
                 bool remote = RemoteInstrument(child.Item);
                 if (remote) SlaveInstrument(child); else RestoreInstrument(child, child.Latest);
+                if (!remote && child.Slaved) continue; // A binding wait must not publish the stale local simulation.
                 if (_net.Role == Role.Host)
                 {
                     if (!remote) SendInstrument(entry, child, false, periodic: true);
@@ -275,7 +313,7 @@ namespace SailwindCoop.Sync
             if (!entry.InstrumentEpoch.Accept(msg.ParentRevision, parentRevision, actor, msg.RequestId)) return;
             if (!child.Requests.AcceptPose(actor, msg.RequestId, msg.Tick)) return;
             bool remote = RemoteInstrument(child.Item);
-            if (remote) SlaveInstrument(child); else RestoreInstrument(child);
+            if (remote) SlaveInstrument(child); else RestoreInstrument(child, child.Latest);
             // Keep the original capture time so the same sample can play with the owner's root pose.
             var state = new InstrumentStateMsg { Final = msg.Final, ParentRevision = parentRevision, Revision = ++child.Revision };
             CopyInstrument(msg, state);
@@ -284,6 +322,7 @@ namespace SailwindCoop.Sync
             {
                 child.Pose.ApplyAt(child.Joint.transform, state.Tick);
                 ApplyInstrumentFields(child, state, state, 0f);
+                ResumeFishSimulation(child, state);
                 child.Body.isKinematic = msg.Kinematic;
                 if (!msg.Kinematic) child.Body.velocity = msg.Velocity;
             }
@@ -296,6 +335,7 @@ namespace SailwindCoop.Sync
             target.RealPos = source.RealPos; target.Rot = source.Rot; target.Velocity = source.Velocity; target.Limit = source.Limit; target.TargetLength = source.TargetLength;
             target.Bend = source.Bend; target.ReelVolume = source.ReelVolume; target.RotatorPos = source.RotatorPos; target.RotatorRot = source.RotatorRot;
             target.FishPrefab = source.FishPrefab; target.FishDead = source.FishDead; target.Splash = source.Splash; target.TensionSound = source.TensionSound;
+            target.FishTimer = source.FishTimer; target.FishPullForce = source.FishPullForce; target.FishSnapTimer = source.FishSnapTimer;
             target.FishEnergy = source.FishEnergy; target.FishTension = source.FishTension;
             target.BodyActive = source.BodyActive; target.StaticBobberActive = source.StaticBobberActive;
         }
@@ -408,13 +448,13 @@ namespace SailwindCoop.Sync
         // Every frame per instrument and per fish: a plain try/catch, not PatchGuard (no closure per call).
         private static bool PreSimulation(ShipItem __instance)
         {
-            try { return !(ItemSync.Instance?.RemoteInstrument(__instance) ?? false); }
-            catch (Exception e) { Report(e); return true; }
+            try { return !(ItemSync.Instance?.SuppressInstrumentSimulation(__instance) ?? false); }
+            catch (Exception e) { Report(e); return false; }
         }
         private static bool PreFish(FishingRodFish __instance)
         {
-            try { return !(ItemSync.Instance?.RemoteInstrument(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")) ?? false); }
-            catch (Exception e) { Report(e); return true; }
+            try { return !(ItemSync.Instance?.SuppressInstrumentSimulation(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")) ?? false); }
+            catch (Exception e) { Report(e); return false; }
         }
         private static void PostInput(ShipItem __instance) => PatchGuard.Run(() => { if (InteractionContext.HasInput && !InteractionContext.Suppressed) ItemSync.Instance?.InstrumentFinal(__instance); }, Report);
         private static void PreDrop(GoPointer __instance, out ShipItem __state)

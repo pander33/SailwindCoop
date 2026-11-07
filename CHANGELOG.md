@@ -4,9 +4,17 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 101.
+Everyone must update to wire protocol 102.
 
 ### Fixed
+
+- Passing or dropping a fishing rod preserves its latest fish, line state and simulation timers
+  before the new owner starts simulating it.
+- Reordered player and held-item poses preserve short visits to another deck, including a return
+  to the original support. Carried anchors and mooring parts retain their previous support until
+  the carrier's playback reaches the crossing.
+- A stalled pose history resumes from fresh snapshots instead of blocking movement. Historical
+  held poses reach other observers even when the host has already played them.
 
 - Shipyard Expansion: sail angle, jib flip and sail texture now follow a refit to the whole crew,
   and a guest's refit no longer leaves the host's save with the previous sails' settings.
