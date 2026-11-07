@@ -1,7 +1,10 @@
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
+using SailwindCoop.Net;
 using SailwindCoop.Runtime;
+using UnityEngine;
 
 namespace SailwindCoop.Sync
 {
@@ -74,6 +77,14 @@ namespace SailwindCoop.Sync
                     ControlsSync.Instance?.NotifyLocalWinchChanged(__instance);
             }, Report);
         private struct WheelState { internal bool Captured, Locked, Held; internal float Input; }
+        private sealed class WheelPresentation
+        {
+            internal Quaternion LocalRotation;
+            internal float ReturnStarted = -1f;
+        }
+        private const float WheelReturnSeconds = 0.18f;
+        private static readonly ConditionalWeakTable<GPButtonSteeringWheel, WheelPresentation> WheelViews =
+            new ConditionalWeakTable<GPButtonSteeringWheel, WheelPresentation>();
         private static void PreLock(GPButtonSteeringWheel __instance, out WheelState __state)
         {
             var state = new WheelState();
@@ -102,8 +113,47 @@ namespace SailwindCoop.Sync
                 if (__state.Captured && __state.Held && __instance != null &&
                     !__state.Input.Equals(__instance.currentInput) && !InteractionContext.Suppressed)
                     ControlsSync.Instance?.NotifyWheelInput(__instance);
+                if (__instance != null && !InteractionContext.Suppressed)
+                    PresentWheel(__instance);
             }
             catch (Exception e) { Report(e); }
+        }
+        private static void PresentWheel(GPButtonSteeringWheel wheel)
+        {
+            var net = CoopBehaviour.Instance?.Net;
+            if (net?.Role != Role.Client || net.State != LinkState.Connected)
+            {
+                WheelViews.Remove(wheel);
+                return;
+            }
+
+            // Desktop input already updates the commanded angle this frame. Only the
+            // visible wheel follows it locally. The host still simulates the rudder.
+            bool steering = ItemComponents.Read<GoPointer>(wheel, "stickyClickedBy") != null ||
+                (Settings.steeringWithMouse && wheel.IsCliked());
+            bool returning = WheelViews.TryGetValue(wheel, out var view);
+            if (!steering && !returning) return;
+            if (ControlsSync.Grabbed(ItemComponents.Read<TouchRotateHandle>(wheel, "rotHandle")))
+            {
+                WheelViews.Remove(wheel);
+                return;
+            }
+            if (steering)
+            {
+                view = WheelViews.GetValue(wheel, _ => new WheelPresentation());
+                view.LocalRotation = Quaternion.Euler(wheel.currentInput, 0f, 0f);
+                view.ReturnStarted = -1f;
+                wheel.transform.localRotation = view.LocalRotation;
+            }
+            else
+            {
+                float now = Time.unscaledTime;
+                if (view.ReturnStarted < 0f) view.ReturnStarted = now;
+                float progress = (now - view.ReturnStarted) / WheelReturnSeconds;
+                if (progress >= 1f) WheelViews.Remove(wheel);
+                else wheel.transform.localRotation = Quaternion.Slerp(view.LocalRotation, wheel.transform.localRotation,
+                    Mathf.SmoothStep(0f, 1f, progress));
+            }
         }
         private static void PostTouchWheel(GPButtonSteeringWheel __instance, float rotation)
             => PatchGuard.Run(() => {

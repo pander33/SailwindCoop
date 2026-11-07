@@ -66,9 +66,12 @@ namespace SailwindCoop.Sync
         /// resulting LOCAL-space pose into <paramref name="t"/>. No-op until data exists.
         /// </summary>
         public void Apply(Transform t, long serverTickNow)
+            => ApplyAt(t, serverTickNow - (long)InterpDelayMs);
+
+        internal void ApplyAt(Transform t, long renderTick)
         {
             if (t == null) return;
-            if (!Sample(serverTickNow, out Vector3 pos, out Quaternion rot, out _)) return;
+            if (!SampleAt(renderTick, out Vector3 pos, out Quaternion rot, out _)) return;
             t.position = pos;
             t.rotation = rot;
         }
@@ -79,11 +82,12 @@ namespace SailwindCoop.Sync
         /// the origin only translates, so it is the same in local space. False until data exists.
         /// </summary>
         public bool Sample(long serverTickNow, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
+            => SampleAt(serverTickNow - (long)InterpDelayMs, out pos, out rot, out realVel);
+
+        private bool SampleAt(long renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
         {
             pos = Vector3.zero; rot = Quaternion.identity; realVel = Vector3.zero;
             if (_buf.Count == 0) return false;
-
-            long renderTick = serverTickNow - (long)InterpDelayMs;
 
             // Before the oldest sample: snap to oldest.
             if (renderTick <= _buf[0].Tick)

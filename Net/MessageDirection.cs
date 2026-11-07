@@ -19,7 +19,6 @@ namespace SailwindCoop.Net
                 case MsgType.ControlRequest:
                 case MsgType.SteerRequest:
                 case MsgType.MooringRequest:
-                case MsgType.HoldRequest:
                 case MsgType.DamageRequest:
                 case MsgType.PushRequest:
                 case MsgType.LightRequest:
@@ -112,6 +111,7 @@ namespace SailwindCoop.Net
                 case MsgType.ShopTaken:
                 case MsgType.ForageTaken:
                 case MsgType.BeltState:
+                case MsgType.PumpStroke:
                     return MsgFlow.Both;
 
                 default:

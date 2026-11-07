@@ -40,7 +40,7 @@ namespace SailwindCoop.Net
         ControlRequest = 51,   // client -> host : "I adjusted rope #i to this length"
         SteerRequest = 52,     // client -> host : "I turned wheel #i to this input"
         MooringRequest = 53,   // client -> host : "I unmoored rope #i"
-        HoldRequest = 54,      // client -> host : "I started/stopped holding button #i"
+        // 54 was HoldRequest (pump hold); reserved since protocol 98.
         DamageRequest = 55,    // client -> host : "I repaired/bailed the boat damage state"
         PushRequest = 56,      // client -> host : "I pushed a boat/sail/dock collider this frame"
         LightState = 57,       // host -> client : shared lantern/light state
@@ -118,6 +118,7 @@ namespace SailwindCoop.Net
         DiceJournal = 122,      // host -> client : summary of completed dice matches for reading
         ForageTaken = 123,      // taker -> host -> others : the item of this forage spot was picked up
         BeltState = 124,        // player -> host -> others : what hangs in a player's five belt slots (visual only)
+        PumpStroke = 125,       // operator -> host -> observers : actual pump motion since the previous batch
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -649,6 +650,7 @@ namespace SailwindCoop.Net
 
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash, RequestId;
+        public long Tick;
         public bool Held;
         public CoordFrame Frame;
         public Vector3 Pos, Vel;
@@ -658,12 +660,12 @@ namespace SailwindCoop.Net
         public void Serialize(NetDataWriter w)
         {
             w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation); w.Put(RequestId); w.Put(Held); w.Put((byte)Frame);
-            w.PutVector3(Pos); w.PutQuaternion(Rot); w.PutVector3(Vel); w.Put(RopeLength);
+            w.Put(Tick); w.PutVector3(Pos); w.PutQuaternion(Rot); w.PutVector3(Vel); w.Put(RopeLength);
         }
         public void Deserialize(NetDataReader r)
         {
             BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); RequestId = r.GetUInt(); Held = r.GetBool(); Frame = (CoordFrame)r.GetByte();
-            Pos = r.GetVector3(); Rot = r.GetQuaternion(); Vel = r.GetVector3(); RopeLength = r.GetFloat();
+            Tick = r.GetLong(); Pos = r.GetVector3(); Rot = r.GetQuaternion(); Vel = r.GetVector3(); RopeLength = r.GetFloat();
         }
     }
 
@@ -1076,35 +1078,27 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r) { BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt(); Index = r.GetUShort(); Open = r.GetBool(); }
     }
 
-    /// <summary>A client's held-button transition/renewal (currently BilgePump).</summary>
-    public sealed class HoldRequestMsg : INetMessage, IBoatLayoutMessage
+    public sealed class PumpStrokeMsg : INetMessage, IBoatLayoutMessage
     {
+        public ushort BoatIndex;
         public uint Generation;
+        public ushort PumpIndex;
+        public float Rotation;
+        public float Effort;
+
         ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
         uint IBoatLayoutMessage.LayoutGeneration { get => Generation; set => Generation = value; }
-
-        public ushort BoatIndex = ushort.MaxValue;
-        public uint LayoutHash;
-        public ushort Index;
-        public InteractKind Kind;
-        public bool Down;
-
-        public MsgType Type => MsgType.HoldRequest;
+        public MsgType Type => MsgType.PumpStroke;
 
         public void Serialize(NetDataWriter w)
         {
-            w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
-            w.Put(Index);
-            w.Put((byte)Kind);
-            w.Put(Down);
+            w.Put(BoatIndex); w.Put(Generation); w.Put(PumpIndex); w.Put(Rotation); w.Put(Effort);
         }
 
         public void Deserialize(NetDataReader r)
         {
-            BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
-            Index = r.GetUShort();
-            Kind = (InteractKind)r.GetByte();
-            Down = r.GetBool();
+            BoatIndex = r.GetUShort(); Generation = r.GetUInt(); PumpIndex = r.GetUShort();
+            Rotation = r.GetFloat(); Effort = r.GetFloat();
         }
     }
 
@@ -1262,6 +1256,8 @@ namespace SailwindCoop.Net
         public int InstanceId;
         public int PrefabIndex;
         public long Tick;
+        public long PoseTick = long.MinValue; // original holder timestamp when the host relays a pose
+        public long SampleTick => PoseTick == long.MinValue ? Tick : PoseTick;
         public CoordFrame Frame;
         public ushort BoatIndex;
         public Vector3 Pos;
@@ -1300,6 +1296,7 @@ namespace SailwindCoop.Net
             w.Put(InstanceId);
             w.Put(PrefabIndex);
             w.Put(Tick);
+            w.Put(PoseTick);
             w.Put((byte)Frame);
             w.Put(BoatIndex);
             w.PutVector3(Pos);
@@ -1332,6 +1329,7 @@ namespace SailwindCoop.Net
             InstanceId = r.GetInt();
             PrefabIndex = r.GetInt();
             Tick = r.GetLong();
+            PoseTick = r.GetLong();
             Frame = (CoordFrame)r.GetByte();
             BoatIndex = r.GetUShort();
             Pos = r.GetVector3();

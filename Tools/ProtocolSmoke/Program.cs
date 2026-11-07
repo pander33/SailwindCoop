@@ -93,7 +93,11 @@ namespace ProtocolSmoke
                         if (msg is SpawnObjectMsg spawn) { spawn.IsSnapshot = boat != 511; spawn.IsBaselineItem = boat == 511; }
                         if (msg is AnchorRequestMsg anchorRequest) { anchorRequest.Held = boat != 511; anchorRequest.Frame = boat == 511 ? CoordFrame.World : CoordFrame.Boat; }
                         if (msg is AnchorStateMsg anchorState) anchorState.Set = boat != 511;
-                        if (msg is ItemStateMsg itemState) itemState.Amount = boat == 511 ? 0f : 1f;
+                        if (msg is ItemStateMsg itemState)
+                        {
+                            itemState.Amount = boat == 511 ? 0f : 1f;
+                            itemState.PoseTick = boat == 511 ? long.MinValue : itemState.Tick - 143;
+                        }
                         if (msg is ItemRequestMsg itemRequest) { itemRequest.Action = ItemAction.State; itemRequest.Amount = boat == 511 ? 0f : 1f; }
                         if (msg is DirtStateMsg dirt) { dirt.Chunk = 1; dirt.Chunks = 2; }
                         if (msg is ChartStateMsg chart) { chart.Chunk = 1; chart.Chunks = 2; }
@@ -144,6 +148,7 @@ namespace ProtocolSmoke
                 new ShopTakenMsg { PrefabIndex = 137, Pos = new UnityEngine.Vector3(218.3f, 5.7f, -356f) },
                 new ForageTakenMsg { Spawner = 41, Cooldown = 1834.5f },
                 new BeltStateMsg { NetId = 0x12345678, Prefabs = new[] { 110, 0, 57, 0, 233 }, Lit = 0x01 },
+                new PumpStrokeMsg { BoatIndex = 30, Generation = 7, PumpIndex = 2, Rotation = 42.5f, Effort = 1.25f },
                 new MoneyOfferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Kind = MoneyOfferKind.Take, Currency = 2, Amount = 75 },
                 new ModManifestMsg { FilesOffered = true, Mods = new[] {
                     new ModEntry { Folder = "SeaLifeMod", Complete = true,

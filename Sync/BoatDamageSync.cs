@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using SailwindCoop.Net;
@@ -10,9 +9,7 @@ namespace SailwindCoop.Sync
     /// Host-authoritative damage/flooding sync for the current boat.
     ///
     /// The local game still owns its normal simulation on the host. Clients receive scalar
-    /// snapshots and write them onto their local <c>BoatDamage</c>. Remote bilge-pump use is
-    /// special: a client's <c>BilgePump.OnActivate/OnUnactivate</c> pair becomes a held request;
-    /// the host drains its authoritative <c>BoatDamage.waterLevel</c> while that request is down.
+    /// snapshots and write them onto their local <c>BoatDamage</c>.
     /// </summary>
     public sealed class BoatDamageSync
     {
@@ -28,19 +25,13 @@ namespace SailwindCoop.Sync
         private BoatDamage _damage;
         private BilgePump[] _pumps = System.Array.Empty<BilgePump>();
 
-        // actor NetId -> pump indexes currently held by that actor
-        private readonly Dictionary<uint, HashSet<ushort>> _heldPumpsByActor = new Dictionary<uint, HashSet<ushort>>();
-        private readonly Dictionary<uint, float> _pumpSeen = new Dictionary<uint, float>();
+        private readonly BilgePumpSync _pumpSync;
 
         private float _sendTimer;
         private uint _revision;
         private readonly ItemStateGate _stateGate = new ItemStateGate();
-        private string _lastPump = "—";
-        private long _lastPumpTick;
         private string _lastRepair = "—";
         private long _lastRepairTick;
-
-        private const float PumpInput = 50f; // BilgePump's own LimitInput() max; remote hold means active pumping.
 
         public float SnapshotHz = 4f;
 
@@ -48,6 +39,7 @@ namespace SailwindCoop.Sync
         {
             _net = net;
             Instance = this;
+            _pumpSync = new BilgePumpSync(net);
             _fleet = new BoatContexts<BoatDamageSync>((boat, id) => new BoatDamageSync(net, boat, id), c => c.Clear(),
                 boat => BoatLayout.Stamp(boat.GetComponentsInChildren<BoatDamage>(true), boat.GetComponentsInChildren<BilgePump>(true)));
         }
@@ -65,13 +57,6 @@ namespace SailwindCoop.Sync
 
                 if (_fleet != null) return _fleet.Describe(c => "boat " + c._boatId + ": " + c.DamageText);
                 if (_damage == null) return "no BoatDamage";
-                string pump = "—";
-                if (_lastPumpTick != 0)
-                {
-                    long age = _net.Clock.ServerTick - _lastPumpTick;
-                    if (age < 0) age = 0;
-                    pump = _lastPump + " " + age + "ms";
-                }
                 string repair = "—";
                 if (_lastRepairTick != 0)
                 {
@@ -82,62 +67,30 @@ namespace SailwindCoop.Sync
                 return "water=" + _damage.waterLevel.ToString("0.000") +
                        " hull=" + _damage.hullDamage.ToString("0.000") +
                        " oakum=" + _damage.oakum.ToString("0.0") +
-                       " pump " + ActivePumpCount() + "/" + _pumps.Length +
-                       " · " + pump + " · " + repair;
+                       " pumps=" + _pumps.Length + " · " + repair;
             }
         }
 
         public void Tick(float dt)
         {
-            if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
+            if (_fleet != null)
+            {
+                _pumpSync.Tick(dt);
+                foreach (var c in _fleet.Values) c.Tick(dt);
+                return;
+            }
             if (_net.State != LinkState.Connected) return;
             RefreshBoat();
 
-            if (_net.Role == Role.Host)
-            {
-                ApplyRemotePumps(dt);
-                SendSnapshot(dt);
-            }
+            if (_net.Role == Role.Host) SendSnapshot(dt);
             else if (_net.Role == Role.Client) AskResync();
         }
 
-        /// <summary>Host: update one remote actor's held-pump state from a HoldRequest.</summary>
-        public void SetRemotePump(ushort boatId, BilgePump pump, bool down, uint actorNetId)
-        {
-            if (_fleet != null) { _fleet.Get(boatId)?.SetRemotePump(boatId, pump, down, actorNetId); return; }
-            if (_net.Role != Role.Host) return;
-            RefreshBoat();
-            int found = System.Array.IndexOf(_pumps, pump);
-            if (found < 0 || actorNetId == 0) return;
-            ushort index = (ushort)found;
-            if (index >= _pumps.Length)
-            {
-                Plugin.Logger.LogWarning("[BoatDamageSync] Pump request #" + index + ": boat only has " + _pumps.Length);
-                return;
-            }
+        internal void RecordPumpStroke(BilgePump pump, float input)
+            => _pumpSync?.Record(pump, input);
 
-            if (!_heldPumpsByActor.TryGetValue(actorNetId, out var set))
-            {
-                set = new HashSet<ushort>();
-                _heldPumpsByActor[actorNetId] = set;
-            }
-
-            bool changed = down ? set.Add(index) : set.Remove(index);
-            _pumpSeen[actorNetId] = Time.unscaledTime;
-            if (set.Count == 0) _heldPumpsByActor.Remove(actorNetId);
-
-            if (!changed) return;
-            RememberPump((down ? "in down" : "in up") + " #" + index + " p" + actorNetId);
-            Plugin.Logger.LogInfo("[BoatDamageSync] Pump #" + index + " from player " + actorNetId + ": " + (down ? "held" : "released"));
-        }
-
-        public void ClearRemoteActor(uint actorNetId)
-        {
-            if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actorNetId); return; }
-            _pumpSeen.Remove(actorNetId);
-            if (_heldPumpsByActor.Remove(actorNetId))
-                Plugin.Logger.LogInfo("[BoatDamageSync] Cleared pump holds for player " + actorNetId);
-        }
+        public void OnPumpStroke(PumpStrokeMsg msg, LiteNetLib.NetPeer peer)
+            => _pumpSync?.Receive(msg, peer);
 
         public void OnDamageState(BoatDamageStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
@@ -280,58 +233,12 @@ namespace SailwindCoop.Sync
             _net.Broadcast(state, reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
 
-        private void ApplyRemotePumps(float dt)
-        {
-            var expired = new List<uint>();
-            foreach (var actor in _heldPumpsByActor.Keys)
-                if (!_pumpSeen.TryGetValue(actor, out var seen) || Time.unscaledTime - seen > 1f) expired.Add(actor);
-            foreach (uint actor in expired) ClearRemoteActor(actor);
-            if (_damage == null || _damage.sunk || _heldPumpsByActor.Count == 0) return;
-
-            bool any = false;
-            for (int i = 0; i < _pumps.Length; i++)
-            {
-                if (!IsPumpHeld((ushort)i)) continue;
-                var pump = _pumps[i];
-                if (pump == null || pump.damage == null) continue;
-
-                float before = pump.damage.waterLevel;
-                pump.damage.waterLevel = Mathf.Clamp01(pump.damage.waterLevel - dt * PumpInput * pump.drainRate);
-                RotatePumpVisual(pump, dt);
-                any = any || pump.damage.waterLevel != before;
-            }
-        }
-
-        private static void RotatePumpVisual(BilgePump pump, float dt)
-        {
-            if (pump == null) return;
-            float mult = pump.damage != null && pump.damage.waterLevel > 0f ? 0.75f : 2.25f;
-            pump.transform.Rotate(Vector3.forward, PumpInput * dt * 1.4f * pump.rotationSpeed * mult, Space.Self);
-        }
-
-        private bool IsPumpHeld(ushort index)
-        {
-            foreach (var set in _heldPumpsByActor.Values)
-                if (set.Contains(index)) return true;
-            return false;
-        }
-
-        private int ActivePumpCount()
-        {
-            int n = 0;
-            for (int i = 0; i < _pumps.Length; i++)
-                if (IsPumpHeld((ushort)i)) n++;
-            return n;
-        }
-
         private void RefreshBoat()
         {
             Transform boat = _boundBoat;
             if (boat == _cachedBoat) return;
 
             _cachedBoat = boat;
-            _heldPumpsByActor.Clear();
-            _pumpSeen.Clear();
             _sendTimer = 0f;
 
             if (boat == null)
@@ -351,33 +258,27 @@ namespace SailwindCoop.Sync
                                   ", pumps=" + _pumps.Length + " ('" + boat.name + "')");
         }
 
-        private void RememberPump(string text)
-        {
-            _lastPump = text;
-            _lastPumpTick = _net.Clock.ServerTick;
-        }
-
         private void RememberRepair(string text)
         {
             _lastRepair = text;
             _lastRepairTick = _net.Clock.ServerTick;
         }
 
-        public void InvalidateHull(ushort id) => _fleet?.Invalidate(id);
+        public void InvalidateHull(ushort id)
+        {
+            _pumpSync?.Invalidate(id);
+            _fleet?.Invalidate(id);
+        }
 
         public void Clear()
         {
-            if (_fleet != null) { _fleet.Clear(); return; }
+            if (_fleet != null) { _pumpSync.Clear(); _fleet.Clear(); return; }
             _cachedBoat = null;
             _damage = null;
             _stateGate.Clear();
             _revision = 0;
             _pumps = System.Array.Empty<BilgePump>();
-            _heldPumpsByActor.Clear();
-            _pumpSeen.Clear();
             _sendTimer = 0f;
-            _lastPump = "—";
-            _lastPumpTick = 0L;
             _lastRepair = "—";
             _lastRepairTick = 0L;
         }
@@ -404,14 +305,21 @@ namespace SailwindCoop.Sync
             bool overflow = TryPatch(harmony, typeof(BoatDamage), "Overflow", new[] { typeof(float) }, nameof(PreClientOverflow), null);
             bool update = TryPatch(harmony, typeof(BoatDamage), "Update", System.Type.EmptyTypes, nameof(PreClientUpdate), nameof(PostClientUpdate));
             bool daily = TryPatch(harmony, typeof(BoatDamage), "DailyDamage", System.Type.EmptyTypes, nameof(PreClientDailyDamage), null);
+            bool pump = TryPatch(harmony, typeof(BilgePump), "ApplyRotation", System.Type.EmptyTypes, null, nameof(PostPumpRotation));
 
             Plugin.Logger.LogInfo("[BoatDamagePatches] Damage patches: HullOakum=" + hull +
                                   ", WaterBail=" + water + ", OakumAlt=" + oakumAlt +
                                   ", ClientImpact=" + impact + ", ClientOverflow=" + overflow +
-                                  ", ClientUpdate=" + update + ", ClientDailyDamage=" + daily);
+                                  ", ClientUpdate=" + update + ", ClientDailyDamage=" + daily + ", PumpRotation=" + pump);
             SailwindCoop.Runtime.PatchHealth.Report("Damage", (hull ? 1 : 0) + (water ? 1 : 0) + (oakumAlt ? 1 : 0) +
                                                               (impact ? 1 : 0) + (overflow ? 1 : 0) +
-                                                              (update ? 1 : 0) + (daily ? 1 : 0), 7);
+                                                              (update ? 1 : 0) + (daily ? 1 : 0) + (pump ? 1 : 0), 8);
+        }
+
+        private static void PostPumpRotation(BilgePump __instance, float ___currentInput)
+        {
+            try { BoatDamageSync.Instance?.RecordPumpStroke(__instance, ___currentInput); }
+            catch (System.Exception e) { WarnPatch("[BoatDamagePatches] Pump rotation: " + e.Message); }
         }
 
         private struct ClientWater
@@ -495,7 +403,8 @@ namespace SailwindCoop.Sync
                     WarnPatch("[BoatDamagePatches] Not found " + type.Name + "." + method);
                     return false;
                 }
-                var prefix = new HarmonyMethod(typeof(BoatDamagePatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));
+                var prefix = prefixName == null ? null
+                    : new HarmonyMethod(typeof(BoatDamagePatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));
                 var postfix = postfixName == null ? null
                     : new HarmonyMethod(typeof(BoatDamagePatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
                 harmony.Patch(mi, prefix: prefix, postfix: postfix);

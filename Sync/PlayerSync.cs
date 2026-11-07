@@ -24,6 +24,9 @@ namespace SailwindCoop.Sync
             public Animator Animator;
             public AvatarPoseDriver PoseDriver;
             public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
+            public int PlaybackFrame = -1;
+            public long PlaybackTick;
             public Quaternion HeadWorldRot = Quaternion.identity;
             public bool HeadDrivenByAnimator;
             public float AnimSpeed;
@@ -985,7 +988,6 @@ namespace SailwindCoop.Sync
                 if (a.Go != null) a.Go.SetActive(false);
                 _remotes[msg.NetId] = a;
             }
-            a.Net.InterpDelayMs = InterpDelayMs;
             bool frameChanged = !a.HasPoseFrame || a.LastPoseFrame != msg.Frame ||
                 (msg.Frame == CoordFrame.Boat && a.LastPoseBoatIndex != msg.BoatIndex);
             if (a.HasPoseFrame && msg.Tick <= a.LastPoseTick)
@@ -1002,12 +1004,15 @@ namespace SailwindCoop.Sync
                 BoatAuthority.Instance?.Record(msg, fromPeer);
                 _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
             }
+            long localNow = _net.Clock.LocalTick;
+            a.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
             if (frameChanged)
             {
                 a.Net.Clear();
                 a.PoseDetails.Clear();
                 a.PoseFrameStartTick = a.HasPoseFrame ? msg.Tick : long.MinValue;
                 a.PoseBoat = null;
+                a.HasAnimSnapshot = false;
             }
             a.LastPoseTick = msg.Tick;
             a.LastPoseFrame = msg.Frame;
@@ -1016,7 +1021,6 @@ namespace SailwindCoop.Sync
 
             a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
             a.PoseDetails.Push(msg);
-            UpdateAnimatorTargets(a, msg);
             a.StateAt = Time.unscaledTime;
 
             var emote = (EmoteId)msg.Emote;
@@ -1033,10 +1037,12 @@ namespace SailwindCoop.Sync
         public void ApplyRemotes()
         {
             if (!CoordSpace.Ready) return;
-            long now = _net.Clock.ServerTick;
+            long localNow = _net.Clock.LocalTick;
+            long now = localNow + (long)_net.Clock.OffsetMs;
             foreach (var a in _remotes.Values)
             {
                 if (a.Go == null) continue;
+                long renderTick = RenderTick(a, localNow, now);
                 if (a.LastPoseFrame == CoordFrame.Boat)
                 {
                     var boat = BoatLocator.FindByIndex(a.LastPoseBoatIndex);
@@ -1055,8 +1061,8 @@ namespace SailwindCoop.Sync
                     a.Net.ToWorldPos = RealToLocalPos;
                     a.Net.ToWorldRot = IdentityRot;
                 }
-                ApplyPoseDetails(a, now - (long)a.Net.InterpDelayMs);
-                a.Net.Apply(a.Go.transform, now);
+                ApplyPoseDetails(a, renderTick);
+                a.Net.ApplyAt(a.Go.transform, renderTick);
                 if (a.WaitingForFirstPose)
                 {
                     a.WaitingForFirstPose = false;
@@ -1076,7 +1082,36 @@ namespace SailwindCoop.Sync
             RetryPendingNpcSkins();
         }
 
-        private static void ApplyPoseDetails(RemoteAvatar avatar, long tick)
+        internal bool TryGetRenderTick(uint netId, long localNow, long serverNow, out long tick)
+        {
+            tick = 0;
+            if (!_remotes.TryGetValue(netId, out var avatar) || !avatar.HasPoseFrame || avatar.Go == null)
+                return false;
+            tick = RenderTick(avatar, localNow, serverNow);
+            return true;
+        }
+
+        private long RenderTick(RemoteAvatar avatar, long localNow, long serverNow)
+        {
+            int frame = Time.frameCount;
+            if (avatar.PlaybackFrame != frame)
+            {
+                avatar.PlaybackTick = avatar.Playback.Advance(serverNow, localNow, InterpDelayMs);
+                avatar.PlaybackFrame = frame;
+            }
+            return avatar.PlaybackTick;
+        }
+
+        internal static void ApplyCarriedPose(NetTransform pose, Transform target, uint holder, long localNow, long serverNow)
+        {
+            var players = CoopBehaviour.Instance?.Players;
+            if (holder != 0 && players != null && players.TryGetRenderTick(holder, localNow, serverNow, out long tick))
+                pose.ApplyAt(target, tick);
+            else
+                pose.Apply(target, serverNow);
+        }
+
+        private void ApplyPoseDetails(RemoteAvatar avatar, long tick)
         {
             var snapshots = avatar.PoseDetails;
             if (snapshots.Count == 0) return;
@@ -1089,6 +1124,8 @@ namespace SailwindCoop.Sync
                 from = to;
             }
             float fraction = from == to ? 0f : Mathf.Clamp01((float)(tick - from.Tick) / (to.Tick - from.Tick));
+            if (!avatar.HasAnimSnapshot || from.Tick > avatar.LastAnimTick)
+                UpdateAnimatorTargets(avatar, from);
             var head = Quaternion.Slerp(from.HeadRot, to.HeadRot, fraction);
             avatar.HeadWorldRot = avatar.PoseBoat != null ? avatar.PoseBoat.rotation * head : head;
             avatar.Hands = from.Hands;

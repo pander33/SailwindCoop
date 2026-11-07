@@ -37,6 +37,8 @@
     <Compile Include="..\..\Sync\ChangeStream.cs" Link="ChangeStream.cs" />
     <Compile Include="..\..\Sync\ChunkAccumulator.cs" Link="ChunkAccumulator.cs" />
     <Compile Include="..\..\Sync\SnapshotBuffer.cs" Link="SnapshotBuffer.cs" />
+    <Compile Include="..\..\Sync\PlayerPlaybackClock.cs" Link="PlayerPlaybackClock.cs" />
+    <Compile Include="..\..\Sync\PumpVisualMotion.cs" Link="PumpVisualMotion.cs" />
     <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />
     <Compile Include="..\..\Runtime\StartupText.cs" Link="StartupText.cs" />

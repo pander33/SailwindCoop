@@ -394,6 +394,8 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
             ItemComponents.RetryBindings();
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
 
             foreach (var e in _items)
             {
@@ -411,7 +413,7 @@ namespace SailwindCoop.Sync
                 bool held = e.HolderNetId != 0;
                 PrepareForRemotePose(e.Item, held);   // layer 2 while in a hand, else 0
                 SetPuppet(e.Item, true);
-                e.Net.Apply(e.Item.transform, _net.Clock.ServerTick);
+                PlayerSync.ApplyCarriedPose(e.Net, e.Item.transform, e.HolderNetId, localNow, serverNow);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
         }
@@ -424,12 +426,14 @@ namespace SailwindCoop.Sync
         private void ApplyClientHeldOnHost()
         {
             if (!CoordSpace.Ready || Time.timeScale <= 0.0001f) return;
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
             foreach (var e in _items)
             {
                 if (e.Item == null || e.HeldSample == null || !e.Net.HasData) continue;
                 if (e.HolderNetId == 0 || e.HolderNetId == _net.MyNetId) continue;
                 if (InStove(e)) continue;
-                e.Net.Apply(e.Item.transform, _net.Clock.ServerTick);
+                PlayerSync.ApplyCarriedPose(e.Net, e.Item.transform, e.HolderNetId, localNow, serverNow);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
         }
@@ -1068,6 +1072,8 @@ namespace SailwindCoop.Sync
                     EnterFreeDynamic(e.Item, msg.Frame, msg.Vel, "host drop #" + e.Index);
             }
             var state = BuildState(e, _net.Clock.ServerTick);
+            if (msg.Action != ItemAction.Pose && state.HolderNetId == actor)
+                state.PoseTick = msg.Tick;
             // On drop, BuildState's velocity is derived from the position history and spikes because the
             // transform just teleported to the drop point — use the client's real rigidbody velocity
             // instead, or the dropped item would be flung off the ship on every receiver.
@@ -1090,7 +1096,7 @@ namespace SailwindCoop.Sync
                 return WaitForItemState(msg, "item identity");
             if (e.PrefabIndex != msg.PrefabIndex) return WaitForItemState(msg, "prefab mismatch");
             var accepted = e.Gate.Copy();
-            if (!accepted.Receive(msg.Revision, msg.Tick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
+            if (!accepted.Receive(msg.Revision, msg.SampleTick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
                 return ItemApplyStatus.Applied;
             bool locallyHeld = msg.HolderNetId == _net.MyNetId && HeldItem() == e.Item;
             if (!operationResult && !semantic && !locallyHeld && msg.HolderNetId != _net.MyNetId &&
@@ -1163,7 +1169,7 @@ namespace SailwindCoop.Sync
                 e.Net.Clear();
             }
             e.RemotePose = msg;
-            e.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+            e.Net.Push(msg.SampleTick, msg.Pos, msg.Rot, msg.Vel);
         }
 
 #if DEBUG
@@ -1196,7 +1202,8 @@ namespace SailwindCoop.Sync
             ItemStateMsg previous;
             if (!_pendingStates.TryGetValue(msg.InstanceId, out previous) ||
                 unchecked((int)(msg.Revision - previous.Revision)) > 0 ||
-                (msg.Revision == previous.Revision && msg.Tick > previous.Tick))
+                (msg.Revision == previous.Revision &&
+                    (msg.SampleTick > previous.SampleTick || (msg.SampleTick == previous.SampleTick && msg.Tick > previous.Tick))))
                 _pendingStates[msg.InstanceId] = msg;
         }
 
@@ -1900,6 +1907,7 @@ namespace SailwindCoop.Sync
             var held = e.HeldSample;
             if (held != null && e.HolderNetId != 0 && e.HolderNetId != _net.MyNetId)
             { frame = held.Frame; boatIndex = held.BoatIndex; pos = held.Pos; rot = held.Rot; vel = held.Vel; }
+            else held = null;
             uint holder = e.HolderNetId != 0 ? e.HolderNetId : (LocalHand(e.Item) ? _net.MyNetId : 0);
             int inventorySlot = PersonalInventorySlotOf(e.Item);
             if (inventorySlot < 0) inventorySlot = e.InventorySlot;
@@ -1914,6 +1922,7 @@ namespace SailwindCoop.Sync
                 InstanceId = e.InstanceId,
                 PrefabIndex = e.PrefabIndex,
                 Tick = tick,
+                PoseTick = held?.Tick ?? long.MinValue,
                 Frame = frame,
                 BoatIndex = boatIndex,
                 Pos = pos,

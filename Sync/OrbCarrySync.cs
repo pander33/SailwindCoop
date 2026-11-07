@@ -19,6 +19,7 @@ namespace SailwindCoop.Sync
             internal OrbStateMsg SentState;
             internal readonly ChangeStream RequestStream = new ChangeStream();
             internal OrbBody SentRequest;
+            internal OrbRequestMsg RemoteHeldPose;
             internal string Id, Parent;
             internal uint Holder, Revision, Request, AckActor, AckRequest;
             internal bool Slaved;
@@ -84,6 +85,7 @@ namespace SailwindCoop.Sync
             if (InteractionContext.Suppressed || _net.State != LinkState.Connected || !CoordSpace.Ready) return;
             var carry = BindOrb(orb); if (carry == null) return;
             RestoreOrb(carry); carry.Holder = held ? _net.MyNetId : 0; carry.Pose.Clear(); carry.ParentPose.Clear(); carry.Quiet = false;
+            carry.RemoteHeldPose = null;
             orb.gameObject.layer = held ? 2 : carry.OriginalLayer;
             if (_net.Role == Role.Client) SendOrbRequest(carry, held ? OrbAction.Pickup : OrbAction.Drop);
             else if (_net.Role == Role.Host) SendOrbState(carry, true);
@@ -95,6 +97,12 @@ namespace SailwindCoop.Sync
             body.Held = Local(carry.Orb) || carry.Holder != 0;
             body.RealPos = CoordSpace.LocalToReal(carry.Orb.transform.position); body.Rot = carry.Orb.transform.rotation;
             body.ParentReal = CoordSpace.LocalToReal(carry.Orb.totem.position); body.ParentRot = carry.Orb.totem.rotation;
+            if (!Local(carry.Orb) && carry.Holder != 0 && carry.RemoteHeldPose is OrbRequestMsg pose)
+            {
+                body.Tick = pose.Tick;
+                body.RealPos = pose.RealPos; body.Rot = pose.Rot;
+                body.ParentReal = pose.ParentReal; body.ParentRot = pose.ParentRot;
+            }
         }
         private void SendOrbRequest(Carry carry, OrbAction action)
         {
@@ -145,14 +153,17 @@ namespace SailwindCoop.Sync
                 { var carry = FindBound(pair.Key, pair.Value.ParentId); if (carry != null) { ReceiveOrb(carry, pair.Value); _waitingOrbs.Remove(pair.Key); } }
             }
             bool send = _orbTimer >= 1f / 15f; if (send) _orbTimer = 0;
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
             foreach (var carry in _orbs.Values)
             {
                 if (carry.Orb == null || carry.Orb.totem == null) continue;
                 if (Local(carry.Orb)) RestoreOrb(carry);
                 else if (!carry.Gate.Pending && carry.Pose.HasData && (_net.Role == Role.Client || carry.Holder != 0))
                 {
-                    SlaveOrb(carry); carry.Pose.Apply(carry.Orb.transform, _net.Clock.ServerTick);
-                    carry.ParentPose.Apply(carry.Orb.totem, _net.Clock.ServerTick);
+                    SlaveOrb(carry);
+                    PlayerSync.ApplyCarriedPose(carry.Pose, carry.Orb.transform, carry.Holder, localNow, serverNow);
+                    PlayerSync.ApplyCarriedPose(carry.ParentPose, carry.Orb.totem, carry.Holder, localNow, serverNow);
                     OrbVisual(carry);
                 }
                 if (!send) continue;
@@ -168,14 +179,20 @@ namespace SailwindCoop.Sync
             if (carry == null)
             { peer.Send(new OrbStateMsg { OrbId = msg.OrbId, ParentId = msg.ParentId, Missing = true, Requester = actor, RequestId = msg.RequestId }, DeliveryMethod.ReliableOrdered); return; }
             if (msg.Action == OrbAction.Baseline) { SendOrbState(carry, true); return; }
-            if (!carry.Order.Accept(actor, msg.RequestId, msg.Action == OrbAction.Pose)) return;
+            if (msg.Action == OrbAction.Pose ? !carry.Order.AcceptPose(actor, msg.RequestId, msg.Tick) :
+                !carry.Order.Accept(actor, msg.RequestId, false)) return;
             uint previous = carry.Holder; carry.Holder = msg.Held ? actor : 0;
+            carry.RemoteHeldPose = msg.Held ? msg : null;
             if (msg.Action != OrbAction.Pose) { carry.AckActor = actor; carry.AckRequest = msg.RequestId; carry.Pose.Clear(); carry.ParentPose.Clear(); }
-            BufferOrb(carry, msg, _net.Clock.ServerTick);
+            BufferOrb(carry, msg, msg.Tick);
             if (!Local(carry.Orb))
             {
-                SlaveOrb(carry); carry.Pose.Apply(carry.Orb.transform, _net.Clock.ServerTick);
-                carry.ParentPose.Apply(carry.Orb.totem, _net.Clock.ServerTick);
+                SlaveOrb(carry);
+                if (msg.Action != OrbAction.Pose)
+                {
+                    carry.Pose.ApplyAt(carry.Orb.transform, msg.Tick);
+                    carry.ParentPose.ApplyAt(carry.Orb.totem, msg.Tick);
+                }
                 OrbVisual(carry);
                 if (!msg.Held) { RestoreOrb(carry); carry.Orb.OnDrop(); }
             }

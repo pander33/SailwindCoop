@@ -608,6 +608,32 @@ internal static class Program
                 samples.Push(Tuple.Create(400L, "D")); Assert(samples.Count == 3 && samples[0].Item1 == 200, "buffer capacity not enforced");
                 samples.Clear(); Assert(samples.Count == 0, "disconnect retained samples");
             });
+            PlayerPlaybackTests.Run(Test, Assert);
+            Test("pump visual smooths packet bursts and plays exactly the received rotation", () => {
+                var motion = new PumpVisualMotion();
+                double oldRemaining = 0, oldChange = 0, newChange = 0, total = 0;
+                float lastStep = 0, lastOldStep = 0;
+                const float dt = 0.01f;
+                for (int i = 0; i < 400; i++)
+                {
+                    if (i < 300 && i % 10 == 0) { motion.Add(30f); oldRemaining += 30; }
+                    float step = motion.Advance(dt);
+                    float oldStep = (float)(oldRemaining * (1 - Math.Exp(-dt / 0.05)));
+                    oldRemaining -= oldStep;
+                    total += step;
+                    if (i >= 30 && i < 300)
+                    {
+                        oldChange += Math.Abs(oldStep - lastOldStep);
+                        newChange += Math.Abs(step - lastStep);
+                    }
+                    Assert(step >= 0, "pump reversed while playing positive rotation");
+                    lastStep = step;
+                    lastOldStep = oldStep;
+                }
+                Assert(newChange < oldChange / 2, "burst speed changes were not reduced");
+                Assert(Math.Abs(total - 900) < 0.01 && motion.Advance(dt) == 0f,
+                    "pump changed total rotation or kept rotating after playback ended");
+            });
             Test("child pose cannot cross its parent's drop epoch or older semantic revision", () => {
                 var parent = new ItemStateGate(); var child = new ItemStateGate(); var order = new ItemRequestOrder(); bool semantic, pose;
                 parent.Receive(3, 100, 0, 0, 10, out semantic, out pose); parent.Begin(9);

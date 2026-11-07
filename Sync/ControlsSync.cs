@@ -47,8 +47,8 @@ namespace SailwindCoop.Sync
         private Node[] _nodes = System.Array.Empty<Node>();
 
         // Steering wheels on the boat. The rudder each one drives is a HingeJoint, so it's in
-        // _nodes and follows the host through the normal rotation sync — the client's wheel visual
-        // rides that. We don't drive the rudder locally; we only forward the wheel input (below).
+        // _nodes and follows the host through the normal rotation sync. A guest holding the
+        // wheel gets immediate visual feedback from InputScopePatches.
         private GPButtonSteeringWheel[] _wheels = System.Array.Empty<GPButtonSteeringWheel>();
 
         // Steering forward (client -> host): the boat steers off the old Rudder, where the wheel's
@@ -324,7 +324,7 @@ namespace SailwindCoop.Sync
 
             // Steering: forward the wheel's input to the host while the local player turns it.
             // We do NOT drive the rudder locally — the host steers authoritatively and its rudder
-            // angle comes back through the node-rotation sync below, which turns the client's wheel.
+            // angle comes back through the node-rotation sync below.
             GoPointerButton heldBtn = HeldButton();
             ForwardSteering(dt, heldBtn);
 

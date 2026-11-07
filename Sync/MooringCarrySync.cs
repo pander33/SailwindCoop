@@ -20,6 +20,7 @@ namespace SailwindCoop.Sync
             internal readonly ChangeStream Stream = new ChangeStream();
             internal int PreviousLayer;
             internal CoordFrame Frame;
+            internal MooringCarryRequestMsg RemoteHeldPose;
             internal readonly NetTransform Pose = new NetTransform();
             internal readonly ItemStateGate Gate = new ItemStateGate();
             internal readonly ItemRequestOrder Order = new ItemRequestOrder();
@@ -57,6 +58,7 @@ namespace SailwindCoop.Sync
             { foreach (var c in _fleet.Values) if (c.LocateCarry(item, out var unused)) { c.NotifyCarry(item, held); return; } return; }
             if (!LocateCarry(item, out var carry)) return;
             RestoreCarry(carry); carry.Holder = held ? _net.MyNetId : 0; carry.Pose.Clear();
+            carry.RemoteHeldPose = null;
             if (item is MooringRopeLengthAdjuster adjuster) carry.FromDock = ItemComponents.Read<bool>(adjuster, "pickedUpFromMooring");
             if (_net.Role == Role.Client) SendCarryRequest(carry, held ? MooringCarryAction.Pickup : MooringCarryAction.Drop);
             else if (_net.Role == Role.Host) SendCarryState(carry, true);
@@ -78,6 +80,11 @@ namespace SailwindCoop.Sync
             msg.Rot = onDeck ? Quaternion.Inverse(_boundBoat.rotation) * carry.Item.transform.rotation : carry.Item.transform.rotation;
             msg.HolderNetId = local ? _net.MyNetId : carry.Holder; msg.Held = msg.HolderNetId != 0;
             msg.FromDock = carry.FromDock; msg.LinkPending = _dockRequests.ContainsKey(carry.Index);
+            if (!local && msg.Held && carry.RemoteHeldPose is MooringCarryRequestMsg pose)
+            {
+                msg.Tick = pose.Tick; msg.Frame = pose.Frame;
+                msg.Pos = pose.Pos; msg.Rot = pose.Rot; msg.Vel = pose.Vel;
+            }
         }
         private void SendCarryRequest(Carry carry, MooringCarryAction action)
         {
@@ -126,6 +133,8 @@ namespace SailwindCoop.Sync
         {
             if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || !CoordSpace.Ready || _bm?.ropes == null) return;
             _carryTimer += dt; bool send = _carryTimer >= 1f / 12f; if (send) _carryTimer = 0;
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
             for (ushort i = 0; i < _bm.ropes.Length; i++) for (byte part = 0; part < 2; part++)
             {
                 var carry = CarryFor(i, part); if (carry == null || carry.Item == null) continue;
@@ -133,7 +142,11 @@ namespace SailwindCoop.Sync
                 else if (!carry.Gate.Pending && carry.Pose.HasData && (_net.Role == Role.Client || carry.Holder != 0))
                 {
                     // MoorTo owns the dock endpoint; a held/returning adjuster remains independent.
-                    if (part == 1 || !_bm.ropes[i].IsMoored()) { SlaveCarry(carry); carry.Pose.Apply(carry.Item.transform, _net.Clock.ServerTick); }
+                    if (part == 1 || !_bm.ropes[i].IsMoored())
+                    {
+                        SlaveCarry(carry);
+                        PlayerSync.ApplyCarriedPose(carry.Pose, carry.Item.transform, carry.Holder, localNow, serverNow);
+                    }
                 }
                 if (!send) continue;
                 if (_net.Role == Role.Host) StreamCarry(carry);
@@ -150,14 +163,17 @@ namespace SailwindCoop.Sync
                 return;
             }
             var carry = CarryFor(msg.Index, msg.Part); uint actor = _net.PlayerNetIdForPeer(peer);
-            if (carry?.Item == null || actor == 0 || !carry.Order.Accept(actor, msg.RequestId, msg.Action == MooringCarryAction.Pose)) return;
+            if (carry?.Item == null || actor == 0) return;
+            if (msg.Action == MooringCarryAction.Pose ? !carry.Order.AcceptPose(actor, msg.RequestId, msg.Tick) :
+                !carry.Order.Accept(actor, msg.RequestId, false)) return;
             uint previous = carry.Holder;
             bool previousFromDock = carry.FromDock;
             if (msg.Action == MooringCarryAction.Pickup && msg.Part == 0 && _dockRequests.TryGetValue(msg.Index, out var waiting))
             { _dockRequests.Remove(msg.Index); SendMissingObject(waiting.Request, waiting.Actor); }
             carry.Holder = msg.Held ? actor : 0; carry.FromDock = msg.FromDock;
+            carry.RemoteHeldPose = msg.Held ? msg : null;
             if (msg.Action != MooringCarryAction.Pose) { carry.Pose.Clear(); carry.AckActor = actor; carry.AckRequest = msg.RequestId; }
-            BufferCarry(carry, _net.Clock.ServerTick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
+            BufferCarry(carry, msg.Tick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
             if (carry.Item.held == null)
             {
                 using (InteractionContext.Begin(InteractionSource.RemoteApply))
@@ -167,8 +183,8 @@ namespace SailwindCoop.Sync
                     // MoorTo owns the dock endpoint (as in TickCarry). A client's throw sends Moor before
                     // the drop, so the drop finds the end already on the post; its pose is the hand's,
                     // and putting it there left the knot hanging above the post on the host only.
-                    if (msg.Part == 1 || !_bm.ropes[msg.Index].IsMoored())
-                        carry.Pose.Apply(carry.Item.transform, _net.Clock.ServerTick);
+                    if (msg.Action != MooringCarryAction.Pose && (msg.Part == 1 || !_bm.ropes[msg.Index].IsMoored()))
+                        carry.Pose.ApplyAt(carry.Item.transform, msg.Tick);
                     // A drop runs the game's own return sequence, which reads the rope attachment and
                     // resets the visual itself when it ends. Resetting the visual first clears that
                     // attachment: the sequence then throws on its first step and the part stays where

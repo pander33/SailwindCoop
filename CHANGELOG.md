@@ -4,7 +4,16 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update: wire protocol 97 cannot connect to protocol 96 builds.
+Everyone must update to wire protocol 99.
+
+### Fixed
+
+- Bilge pump handles now show the operator's actual movement to the crew. Holding the handle still
+  leaves it still, and guests drain water at the rate they actually pump.
+- Guests see a deck hatch start moving as soon as they click. The host still confirms the hatch
+  state and its walk collider.
+- Held items use the same playback time as their remote carrier. The host forwards the original
+  sample time to keep hands and carried objects together.
 
 ### Added
 

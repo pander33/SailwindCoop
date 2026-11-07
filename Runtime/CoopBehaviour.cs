@@ -341,7 +341,6 @@ namespace SailwindCoop.Runtime
                 Anchor.ClearRemoteActor(netId);
                 Mooring.ClearRemoteActor(netId);
                 WindTotem.ClearRemoteActor(netId);
-                Damage.ClearRemoteActor(netId);
                 Sleep.ClearRemoteActor(netId);
                 Wallet.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
@@ -403,7 +402,7 @@ namespace SailwindCoop.Runtime
         private float _dt;
         // While the host's world stands still after a teleport or a recovery, the streams whose
         // host tick only counts time to the next send keep counting, so their state goes out
-        // inside the hold. Damage is not one of them: its tick also runs the pumps.
+        // inside the hold. Damage is not one of them: its tick also animates the pumps.
         private float SendDt => Pause.Settling ? Time.unscaledDeltaTime : _dt;
         private float _rosterTimer;
         private CoopNotifications _notifications;
@@ -775,8 +774,8 @@ namespace SailwindCoop.Runtime
                 case MsgType.HatchSnapshot:
                     Interactions.OnHatchSnapshot((HatchSnapshotMsg)msg, fromPeer);
                     break;
-                case MsgType.HoldRequest:
-                    Interactions.OnHoldRequest((HoldRequestMsg)msg, fromPeer);
+                case MsgType.PumpStroke:
+                    Damage.OnPumpStroke((PumpStrokeMsg)msg, fromPeer);
                     break;
                 case MsgType.DamageRequest:
                     Damage.OnDamageRequest((DamageRequestMsg)msg, fromPeer);

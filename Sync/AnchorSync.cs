@@ -108,6 +108,7 @@ namespace SailwindCoop.Sync
             if (!Connected || anchor != _anchor || !LocalHeld) return;
             RestoreSlaved();
             _holder = _net.MyNetId;
+            _remoteHeldPose = null;
             _slave.Clear(); _haveFrame = false; _haveLast = false;
             MirrorSet(false);
             if (_body != null) { _body.isKinematic = true; _body.drag = _anchor.anchorDrag; }
@@ -122,6 +123,7 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { ForAnchor(anchor)?.NotifyDrop(anchor); return; }
             if (!Connected || anchor != _anchor) return;
             _holder = 0;
+            _remoteHeldPose = null;
             _slave.Clear(); _haveFrame = false; _haveLast = false;
             if (_collider != null) _collider.isTrigger = false;
             if (_net.Role == Role.Client) { SendRequest(false, true); EnsureSlaved(false); }
@@ -176,6 +178,7 @@ namespace SailwindCoop.Sync
             var message = new AnchorRequestMsg
             {
                 BoatIndex = _boatId, LayoutHash = _layoutHash, RequestId = request, Held = held,
+                Tick = _net.Clock.ServerTick,
                 Frame = onDeck ? CoordFrame.Boat : CoordFrame.World,
                 Pos = onDeck ? _boat.InverseTransformPoint(_anchor.transform.position) : CoordSpace.LocalToReal(_anchor.transform.position),
                 Rot = onDeck ? Quaternion.Inverse(_boat.rotation) * _anchor.transform.rotation : _anchor.transform.rotation,
@@ -189,6 +192,7 @@ namespace SailwindCoop.Sync
             _net.Broadcast(message, DeliveryMethod.ReliableOrdered);
         }
         private AnchorRequestMsg _sentRequest;
+        private AnchorRequestMsg _remoteHeldPose;
 
         public void OnAnchorRequest(AnchorRequestMsg msg, NetPeer peer)
         {
@@ -203,18 +207,19 @@ namespace SailwindCoop.Sync
             uint actor = _net.PlayerNetIdForPeer(peer);
             bool handChanged = _holder != (msg.Held ? actor : 0);
             _holder = msg.Held ? actor : 0;
+            _remoteHeldPose = msg.Held ? msg : null;
             _rope.currentLength = msg.RopeLength;
             MirrorSet(false);
             if (_body != null) _body.drag = _anchor.anchorDrag;
             if (handChanged || !msg.Held) { _slave.Clear(); _haveFrame = false; _haveLast = false; }
-            Buffer(_net.Clock.ServerTick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
+            Buffer(msg.Tick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
             if (!LocalHeld)
             {
                 EnsureSlaved(msg.Held);
-                if (msg.Held) _slave.Apply(_anchor.transform, _net.Clock.ServerTick);
+                if (msg.Held && handChanged) _slave.ApplyAt(_anchor.transform, msg.Tick);
                 if (!msg.Held)
                 {
-                    _slave.Apply(_anchor.transform, _net.Clock.ServerTick);
+                    _slave.ApplyAt(_anchor.transform, msg.Tick);
                     RestoreSlaved();
                     if (_body != null) { _body.isKinematic = false; _body.velocity = msg.Frame == CoordFrame.Boat ? _boat.TransformDirection(msg.Vel) : msg.Vel; }
                 }
@@ -234,6 +239,17 @@ namespace SailwindCoop.Sync
         {
             long tick = _net.Clock.ServerTick;
             uint holder = LocalHeld ? _net.MyNetId : _holder;
+            if (holder != 0 && holder != _net.MyNetId && _remoteHeldPose != null)
+            {
+                var pose = _remoteHeldPose;
+                return new AnchorStateMsg
+                {
+                    BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = pose.Tick,
+                    Frame = pose.Frame, Pos = pose.Pos, Rot = pose.Rot, Vel = pose.Vel,
+                    Set = _anchor.IsSet(), HolderNetId = holder, RopeLength = _rope.currentLength,
+                    Revision = _revision = SessionCounters.NextRevision(),
+                };
+            }
             bool world = holder != 0
                 ? (LocalHeld ? GameState.currentBoat != _boat : _frame != CoordFrame.Boat)
                 : _anchor.IsSet() || _rope.currentLength * _rope.maxLength > DeployedLength;
@@ -315,7 +331,8 @@ namespace SailwindCoop.Sync
             if (!Connected || LocalHeld || _gate.HasPending || _anchor == null || !_slave.HasData || Time.timeScale <= 0.0001f) return;
             if (_net.Role == Role.Host && _holder == 0) return;
             EnsureSlaved(_holder != 0);
-            _slave.Apply(_anchor.transform, _net.Clock.ServerTick);
+            long localNow = _net.Clock.LocalTick;
+            PlayerSync.ApplyCarriedPose(_slave, _anchor.transform, _holder, localNow, localNow + (long)_net.Clock.OffsetMs);
         }
 
         private void EnsureSlaved(bool held)
@@ -343,7 +360,7 @@ namespace SailwindCoop.Sync
         {
             if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actor); return; }
             if (_net.Role != Role.Host || actor == 0 || _holder != actor) return;
-            _holder = 0; RestoreSlaved(); _haveLast = false;
+            _holder = 0; _remoteHeldPose = null; RestoreSlaved(); _haveLast = false;
             if (_body != null) _body.isKinematic = _anchor.IsSet();
             if (Connected && _anchor != null) SendState(reliable: true);
         }

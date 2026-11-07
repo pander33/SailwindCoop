@@ -35,6 +35,7 @@ namespace SailwindCoop.Sync
         private readonly ushort _boatId = BoatLocator.NoBoat;
         private uint _layoutHash;
         private readonly BoatContexts<InteractionSync> _fleet;
+        private readonly HatchPreview _hatchPreview;
 
         private readonly CoopNet _net;
 
@@ -55,8 +56,6 @@ namespace SailwindCoop.Sync
         private bool _replaying;          // guard so the host's replay doesn't re-forward
         private GoPointer _gp;
         private FieldInfo _fClicked;
-        private FieldInfo _fSticky;
-        private BilgePump _lastLocalPump;
         private FieldInfo _fHeldItem;
         private float _pushTimer;
         private float _pushAccumDt;
@@ -92,6 +91,7 @@ namespace SailwindCoop.Sync
         {
             _net = net;
             Instance = this;
+            _hatchPreview = new HatchPreview();
             _fleet = new BoatContexts<InteractionSync>((boat, id) => new InteractionSync(net, boat, id), c => c.Clear(),
                 boat => BoatLayout.Stamp(SharedButtons(boat)));
         }
@@ -114,7 +114,7 @@ namespace SailwindCoop.Sync
             if (self._fleet != null)
                 foreach (var context in self._fleet.Existing) if (context._replaying) return false;
             if (self._net.Role != Role.Client || self._net.State != LinkState.Connected) return false;
-            // Discrete hatches await the host's accepted replay instead of predicting a toggle.
+            // The real hatch awaits the host; the click postfix starts a visual preview.
             // Harmony still runs the postfix when this prefix skips the original method.
             // A hatch outside the owned fleet has no host replay, so it stays a local toggle.
             if (btn is GPButtonTrapdoor) return self.ForButton(btn) != null;
@@ -149,6 +149,7 @@ namespace SailwindCoop.Sync
                     ApplyQueuedHatches(c);
                     c.Tick(dt);
                 }
+                _hatchPreview.Tick();
                 return;
             }
             if (_net.State != LinkState.Connected) return;
@@ -159,24 +160,9 @@ namespace SailwindCoop.Sync
                 SendInitialHatches();
                 _sentInitialHatches = true;
             }
-            _holdRenew += dt;
-            if (_holdRenew >= 0.25f)
-            {
-                _holdRenew = 0f;
-                var held = ClickedButton(includeSticky: true);
-                var localPump = held as BilgePump;
-                if (localPump != null && !_index.ContainsKey(localPump)) localPump = null;
-                if (_lastLocalPump != null && _lastLocalPump != localPump)
-                    NotifyLocalHold(_lastLocalPump, InteractKind.Activate, false);
-                _lastLocalPump = localPump;
-                if (held is BilgePump && _index.ContainsKey(held)) NotifyLocalHold(held, InteractKind.Activate, true);
-            }
             ForwardPushRequests(dt);
         }
 
-        private float _holdRenew;
-        private readonly Dictionary<GoPointerButton, bool> _localHoldDown = new Dictionary<GoPointerButton, bool>();
-        private readonly Dictionary<string, bool> _remoteHoldDown = new Dictionary<string, bool>();
         private static GoPointerButton[] SharedButtons(Transform boat)
         {
             var list = new List<GoPointerButton>();
@@ -243,39 +229,13 @@ namespace SailwindCoop.Sync
                 // the empty pointer overload during the same click; don't send it twice.
                 if (kind != InteractKind.ActivateNoArg) return;
                 if (_net.Role == Role.Host) { SendHatchState(hatch, idx); return; }
+                try { if (!Instance._hatchPreview.Begin(hatch)) return; }
+                catch (Exception e) { Plugin.Logger.LogWarning("[HatchPreview] " + e.Message); }
             }
 
             _net.Broadcast(new ControlEventMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("out " + kind + " #" + idx + " '" + ButtonLabel(btn) + "'");
-        }
-
-        /// <summary>
-        /// Forward held-button transitions. This is intentionally narrower than the generic
-        /// click relay: only known held mechanics are sent, and the host applies domain logic
-        /// instead of replaying <c>OnActivate</c> with its own pointer.
-        /// </summary>
-        public void NotifyLocalHold(GoPointerButton btn, InteractKind kind, bool down)
-        {
-            if (InteractionContext.Suppressed) return;
-            if (_fleet != null)
-            {
-                ForButton(btn)?.NotifyLocalHold(btn, kind, down); return;
-            }
-            if (_replaying) return;
-            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
-            if (btn == null || !HasHeldChannel(btn, kind)) return;
-            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;
-
-            RefreshButtons();
-            if (!_index.TryGetValue(btn, out int idx)) return;
-
-            _net.Broadcast(new HoldRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx, Kind = kind, Down = down },
-                           LiteNetLib.DeliveryMethod.ReliableOrdered);
-            bool previous;
-            if (!_localHoldDown.TryGetValue(btn, out previous) || previous != down)
-                Remember("out hold " + (down ? "down" : "up") + " #" + idx + " '" + ButtonLabel(btn) + "'");
-            _localHoldDown[btn] = down;
         }
 
         // -----------------------------------------------------------------
@@ -416,7 +376,11 @@ namespace SailwindCoop.Sync
             if (!_hatchTargets.TryGetValue(hatch, out var target))
                 _hatchTargets[hatch] = target = new DeferredToggle();
             target.Target = open;
-            if (interaction) Remember("in hatch #" + index + " open=" + open);
+            if (interaction)
+            {
+                Instance._hatchPreview.Receive(hatch, open);
+                Remember("in hatch #" + index + " open=" + open);
+            }
         }
 
         private void ApplyHatchTargets()
@@ -432,40 +396,6 @@ namespace SailwindCoop.Sync
             }
             finally { _replaying = false; }
             foreach (var hatch in done) _hatchTargets.Remove(hatch);
-        }
-
-        /// <summary>Host: apply a client's held interaction request through the owning sync domain.</summary>
-        public void OnHoldRequest(HoldRequestMsg msg, LiteNetLib.NetPeer fromPeer)
-        {
-            if (_fleet != null)
-            {
-                if (!GameState.playing || GameState.currentlyLoading) return;
-                if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(fromPeer) == 0) return;
-                var c = _fleet.Get(msg.BoatIndex);
-                if (c != null && BoatLayout.Matches(msg.BoatIndex, msg.LayoutHash, c._layoutHash, "InteractionSync")) c.OnHoldRequest(msg, fromPeer);
-                return;
-            }
-            if (_net.Role != Role.Host) return;
-            RefreshButtons();
-
-            int i = msg.Index;
-            if (i < 0 || i >= _buttons.Length) return;
-            var btn = _buttons[i];
-            if (btn == null) return;
-            if (InteractionPolicy.Classify(btn) != InteractPolicy.Shared) return;
-            if (!HasHeldChannel(btn, msg.Kind)) return;
-
-            uint actor = _net.PlayerNetIdForPeer(fromPeer);
-            if (actor == 0) return;
-            if (btn is BilgePump)
-            {
-                BoatDamageSync.Instance?.SetRemotePump(_boatId, (BilgePump)btn, msg.Down, actor);
-                string key = actor + ":" + i;
-                bool previous;
-                if (!_remoteHoldDown.TryGetValue(key, out previous) || previous != msg.Down)
-                    Remember("in hold " + (msg.Down ? "down" : "up") + " #" + i + " '" + ButtonLabel(btn) + "'");
-                _remoteHoldDown[key] = msg.Down;
-            }
         }
 
         /// <summary>Host: apply one continuous push sample to the authoritative rigidbody.</summary>
@@ -528,11 +458,6 @@ namespace SailwindCoop.Sync
                 || btn is PickupableItem;
         }
 
-        private static bool HasHeldChannel(GoPointerButton btn, InteractKind kind)
-        {
-            return kind == InteractKind.Activate && btn is BilgePump;
-        }
-
         private void ForwardPushRequests(float dt)
         {
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
@@ -592,18 +517,12 @@ namespace SailwindCoop.Sync
             RememberPush("out #" + idx + " '" + ButtonLabel(btn) + "'");
         }
 
-        private GoPointerButton ClickedButton(bool includeSticky = false)
+        private GoPointerButton ClickedButton()
         {
             try
             {
                 if (_gp == null) _gp = UnityEngine.Object.FindObjectOfType<GoPointer>();
                 if (_gp == null) return null;
-                if (includeSticky)
-                {
-                    if (_fSticky == null) _fSticky = typeof(GoPointer).GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var sticky = _fSticky?.GetValue(_gp) as GoPointerButton;
-                    if (sticky != null) return sticky;
-                }
                 if (_fClicked == null)
                     _fClicked = typeof(GoPointer).GetField("clickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
                 return _fClicked != null ? _fClicked.GetValue(_gp) as GoPointerButton : null;
@@ -753,7 +672,9 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
-            if (_fleet != null) { _fleet.Clear(); _pendingHatches.Clear(); return; }
+            if (_fleet != null) { _fleet.Clear(); _pendingHatches.Clear(); _hatchPreview.Clear(); return; }
+            foreach (var button in _buttons)
+                if (button is GPButtonTrapdoor hatch) Instance._hatchPreview.Remove(hatch);
             _cachedBoat = null;
             _buttons = Array.Empty<GoPointerButton>();
             _index.Clear();
@@ -763,8 +684,6 @@ namespace SailwindCoop.Sync
             _replaying = false;
             _gp = null;
             _fClicked = null;
-            _fSticky = null;
-            _lastLocalPump = null;
             _pushTimer = 0f;
             _pushAccumDt = 0f;
             _lastPush = "—";
@@ -788,7 +707,6 @@ namespace SailwindCoop.Sync
             PatchAll(harmony, hooks, "OnActivate", nameof(PostActivateNoArg), Type.EmptyTypes);
             PatchAll(harmony, hooks, "OnActivate", nameof(PostActivate));
             PatchAll(harmony, hooks, "OnAltActivate", nameof(PostAltActivate));
-            PatchAll(harmony, hooks, "OnUnactivate", nameof(PostUnactivate), withBlockPrefix: false);
             // No-arg host-only handlers run BEFORE the empty pointer overload in GoPointer.
             // Prefix only: this entry must not invent an extra interaction event.
             foreach (var input in InteractionActionCatalog.HostOnlyInputs)
@@ -813,11 +731,11 @@ namespace SailwindCoop.Sync
         }
 
         private static void PatchAll(Harmony harmony, PatchHookCatalog hooks, string gameMethod,
-            string postfixName, Type[] args = null, bool withBlockPrefix = true)
+            string postfixName, Type[] args = null)
         {
             if (args == null) args = new[] { typeof(GoPointer) };
             var postfix = Callback(postfixName);
-            var prefix = withBlockPrefix ? Callback(nameof(PreBlock)) : null;
+            var prefix = Callback(nameof(PreBlock));
             foreach (var type in typeof(GoPointerButton).Assembly.GetTypes())
             {
                 if (!typeof(GoPointerButton).IsAssignableFrom(type)) continue;
@@ -844,20 +762,12 @@ namespace SailwindCoop.Sync
                 e => ReportPatch(0, nameof(PostActivateNoArg), __instance, e));
 
         private static void PostActivate(GoPointerButton __instance)
-        {
-            PatchGuard.Run(() => {
-                InteractionSync.Instance?.NotifyLocalHold(__instance, InteractKind.Activate, down: true);
-                InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.Activate);
-            }, e => ReportPatch(1, nameof(PostActivate), __instance, e));
-        }
+            => PatchGuard.Run(() => InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.Activate),
+                e => ReportPatch(1, nameof(PostActivate), __instance, e));
 
         private static void PostAltActivate(GoPointerButton __instance)
             => PatchGuard.Run(() => InteractionSync.Instance?.NotifyLocalInteract(__instance, InteractKind.AltActivate),
                 e => ReportPatch(2, nameof(PostAltActivate), __instance, e));
-
-        private static void PostUnactivate(GoPointerButton __instance)
-            => PatchGuard.Run(() => InteractionSync.Instance?.NotifyLocalHold(__instance, InteractKind.Activate, down: false),
-                e => ReportPatch(3, nameof(PostUnactivate), __instance, e));
 
         /// <summary>Block HOST-ONLY actions on the client: returning false skips the original handler.</summary>
         private static bool PreBlock(GoPointerButton __instance)
