@@ -119,6 +119,7 @@ namespace SailwindCoop.Net
         ForageTaken = 123,      // taker -> host -> others : the item of this forage spot was picked up
         BeltState = 124,        // player -> host -> others : what hangs in a player's five belt slots (visual only)
         PumpStroke = 125,       // operator -> host -> observers : actual pump motion since the previous batch
+        OarStroke = 126,        // guest -> host : accumulated force and torque of actual rowing
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1146,7 +1147,7 @@ namespace SailwindCoop.Net
     /// same force vector Sailwind would apply locally while the push collider is clicked;
     /// the host applies it to the authoritative rigidbody at the real-space contact point.
     /// </summary>
-    public sealed class PushRequestMsg : INetMessage, IBoatLayoutMessage
+    public abstract class DeckForceRequest : INetMessage, IBoatLayoutMessage
     {
         public uint Generation;
         ushort IBoatLayoutMessage.LayoutBoat => BoatIndex;
@@ -1154,30 +1155,42 @@ namespace SailwindCoop.Net
 
         public ushort BoatIndex = ushort.MaxValue;
         public uint LayoutHash;
-        public ushort Index;
-        public Vector3 RealPos;
-        public Vector3 Force;
-        public float DeltaTime;
-
-        public MsgType Type => MsgType.PushRequest;
+        public Vector3 LinearImpulse, AngularImpulse; // in hull axes, about the target body's center of mass
+        public float Seconds;
+        public abstract MsgType Type { get; }
 
         public void Serialize(NetDataWriter w)
         {
             w.Put(BoatIndex); w.Put(LayoutHash); if (Generation == 0) Generation = BoatGenerationBook.Session.Get(BoatIndex); w.Put(Generation);
-            w.Put(Index);
-            w.PutVector3(RealPos);
-            w.PutVector3(Force);
-            w.Put(DeltaTime);
+            w.PutVector3(LinearImpulse); w.PutVector3(AngularImpulse); w.Put(Seconds);
+            WriteTarget(w);
         }
 
         public void Deserialize(NetDataReader r)
         {
             BoatIndex = r.GetUShort(); LayoutHash = r.GetUInt(); Generation = r.GetUInt();
-            Index = r.GetUShort();
-            RealPos = r.GetVector3();
-            Force = r.GetVector3();
-            DeltaTime = r.GetFloat();
+            LinearImpulse = r.GetVector3(); AngularImpulse = r.GetVector3(); Seconds = r.GetFloat();
+            ReadTarget(r);
         }
+
+        protected abstract void WriteTarget(NetDataWriter w);
+        protected abstract void ReadTarget(NetDataReader r);
+    }
+
+    public sealed class PushRequestMsg : DeckForceRequest
+    {
+        public ushort Index;
+        public override MsgType Type => MsgType.PushRequest;
+        protected override void WriteTarget(NetDataWriter w) => w.Put(Index);
+        protected override void ReadTarget(NetDataReader r) => Index = r.GetUShort();
+    }
+
+    public sealed class OarStrokeMsg : DeckForceRequest
+    {
+        public int InstanceId, PrefabIndex;
+        public override MsgType Type => MsgType.OarStroke;
+        protected override void WriteTarget(NetDataWriter w) { w.Put(InstanceId); w.Put(PrefabIndex); }
+        protected override void ReadTarget(NetDataReader r) { InstanceId = r.GetInt(); PrefabIndex = r.GetInt(); }
     }
 
     /// <summary>Shared lantern/light state, indexed by stable scene hierarchy order.</summary>

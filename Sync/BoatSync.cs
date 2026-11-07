@@ -28,6 +28,8 @@ namespace SailwindCoop.Sync
             public ushort Index;
             public Transform Boat;
             public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
+            public long RenderTick;
             /// <summary>The boat's body: on the hull itself or, as in game 0.39, on the hull's parent
             /// (the object with <c>BoatProbes</c> and <c>BoatDamage</c>). This is what is placed — the
             /// hull rides on it — so the body, its colliders and the hull never part.</summary>
@@ -173,7 +175,8 @@ namespace SailwindCoop.Sync
             }
 
             var cb = EnsureClientBoat(msg.BoatIndex, msg.NetId, boat);
-            cb.Net.InterpDelayMs = InterpDelayMs;
+            long localNow = _net.Clock.LocalTick;
+            cb.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
             cb.Net.Push(msg.Tick, msg.RealPos, msg.Rot, msg.RealVel);
         }
 
@@ -183,9 +186,12 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
 
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
             foreach (var cb in _clientBoats.Values)
             {
                 if (cb.Boat == null || !cb.Net.HasData || ShipyardSync.Suspended(cb.Index)) continue;
+                cb.RenderTick = cb.Playback.Advance(serverNow, localNow, InterpDelayMs);
 
                 // Not slaved yet: keep buffering under vanilla physics until the stream is trustworthy,
                 // then take over in one controlled step (see EngageSlave).
@@ -200,6 +206,14 @@ namespace SailwindCoop.Sync
             }
         }
 
+        internal bool TryGetRenderTick(ushort boat, out long tick)
+        {
+            if (_clientBoats.TryGetValue(boat, out var cb) && cb.Engaged && cb.Boat != null)
+            { tick = cb.RenderTick; return true; }
+            tick = 0;
+            return false;
+        }
+
         /// <summary>
         /// Put the boat where the host's stream says its hull is. The stream carries the HULL's pose,
         /// but the body may sit on the hull's parent (game 0.39), so the body is placed such that the
@@ -208,7 +222,7 @@ namespace SailwindCoop.Sync
         /// </summary>
         private void Place(ClientBoat cb)
         {
-            if (!cb.Net.Sample(_net.Clock.ServerTick, out Vector3 hullPos, out Quaternion hullRot, out Vector3 vel))
+            if (!cb.Net.SampleAt(cb.RenderTick, out Vector3 hullPos, out Quaternion hullRot, out Vector3 vel))
                 return;
 
             if (cb.Rb == null)

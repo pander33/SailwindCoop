@@ -33,6 +33,12 @@ namespace SailwindCoop.Sync
             public Transform T;     // the moving transform whose local rotation we sync
             public Rigidbody Rb;    // its rigidbody (null = visual-only, e.g. a winch crank)
         }
+        private struct SavedBody
+        {
+            public Rigidbody Body;
+            public bool Kinematic;
+            public RigidbodyInterpolation Interpolation;
+        }
 
         private readonly Transform _boundBoat;
         private readonly ushort _boatId = BoatLocator.NoBoat;
@@ -65,16 +71,16 @@ namespace SailwindCoop.Sync
         private Rudder _rudderOld;
 
         // Client: the host's node rotations by host tick + which rigidbodies we forced kinematic.
-        // Played back InterpDelayMs behind the host clock, like NetTransform plays the boat, instead
-        // of chasing the last packet: an exponential chase at 12 Hz showed every packet as a step.
+        // Follows the hull timeline, with bounded catch-up if hinge packets arrive separately.
         private struct RotSnapshot { public long Tick; public Quaternion[] Rots; }
         private readonly List<RotSnapshot> _rotBuf = new List<RotSnapshot>();
-        private const int MaxRotSnapshots = 16;
+        private readonly HingePlayback _hingePlayback = new HingePlayback();
+        private const int MaxRotSnapshots = 32;
         /// <summary>How far behind the host clock the client plays node rotations (ms).</summary>
         public float InterpDelayMs = 100f;
         private Quaternion[] _targetRots = System.Array.Empty<Quaternion>();
         private bool _haveTargets;
-        private readonly List<KeyValuePair<Rigidbody, bool>> _kinematicSaved = new List<KeyValuePair<Rigidbody, bool>>();
+        private readonly List<SavedBody> _kinematicSaved = new List<SavedBody>();
 
         // Per-rope capture and acknowledged input; held/pending protection has no timeout.
         private float[] _hostLen = System.Array.Empty<float>();
@@ -199,7 +205,7 @@ namespace SailwindCoop.Sync
             float interval = 1f / Mathf.Max(1f, StateHz);
             _sendTimer += dt;
             if (_sendTimer < interval) return;
-            _sendTimer = 0f;
+            _sendTimer %= interval;
 
             SendState(null, false, periodic: true);
         }
@@ -333,7 +339,12 @@ namespace SailwindCoop.Sync
 
             // Every moving hinge (booms + rudder) follows the host's value — including the rudder
             // of a wheel the local player is holding, so they see the real steering result.
-            if (!PickRotations(_net.Clock.ServerTick - (long)InterpDelayMs, out Quaternion[] from, out Quaternion[] to, out float alpha))
+            long localNow = _net.Clock.LocalTick;
+            long renderTick = localNow + (long)_net.Clock.OffsetMs - (long)InterpDelayMs;
+            var boats = Runtime.CoopBehaviour.Instance?.Boats;
+            if (boats != null && boats.TryGetRenderTick(_boatId, out long hullTick)) renderTick = hullTick;
+            renderTick = _hingePlayback.Advance(renderTick, _rotBuf[_rotBuf.Count - 1].Tick, localNow);
+            if (!PickRotations(renderTick, out Quaternion[] from, out Quaternion[] to, out float alpha))
                 return;
             for (int i = 0; i < _nodes.Length; i++)
             {
@@ -350,15 +361,30 @@ namespace SailwindCoop.Sync
                 var last = _rotBuf[_rotBuf.Count - 1];
                 if (tick < last.Tick) return;
                 if (tick == last.Tick) { _rotBuf[_rotBuf.Count - 1] = new RotSnapshot { Tick = tick, Rots = rots }; return; }
-                // The host is silent while nothing moves. The first packet after a pause would
-                // otherwise be interpolated from the last one before it, seconds back, and the
-                // motion would start with a jump: it starts from where the node stood, one step back.
+                // After an idle interval, start from the resting angle one step back. A gap in
+                // an active stream may instead be loss; interpolate across that whole gap.
                 long step = (long)(1000f / Mathf.Max(1f, StateHz));
-                if (tick - last.Tick > 3 * step)
-                    _rotBuf.Add(new RotSnapshot { Tick = tick - step, Rots = last.Rots });
+                long gap = tick - last.Tick;
+                bool resting = gap > 3 * step && WasResting();
+                if (resting || gap > 1000)
+                {
+                    long restEnd = tick - (resting ? step : System.Math.Max(step, 150));
+                    _rotBuf.Add(new RotSnapshot { Tick = restEnd, Rots = last.Rots });
+                    _hingePlayback.MarkRest(last.Tick, restEnd);
+                }
             }
             _rotBuf.Add(new RotSnapshot { Tick = tick, Rots = rots });
             while (_rotBuf.Count > MaxRotSnapshots) _rotBuf.RemoveAt(0);
+        }
+
+        private bool WasResting()
+        {
+            if (_rotBuf.Count < 2) return false;
+            var previous = _rotBuf[_rotBuf.Count - 2].Rots;
+            var latest = _rotBuf[_rotBuf.Count - 1].Rots;
+            for (int i = 0; i < latest.Length; i++)
+                if (Quaternion.Angle(previous[i], latest[i]) > 0.05f) return false;
+            return true;
         }
 
         /// <summary>The two snapshots around <paramref name="renderTick"/>; before the first or after
@@ -576,6 +602,7 @@ namespace SailwindCoop.Sync
             _cachedBoat = boat;
             _haveTargets = false;
             _rotBuf.Clear();
+            _hingePlayback.Clear();
             _warnedMismatch.Clear();
             _gp = null;
             _fSticky = null;
@@ -646,9 +673,10 @@ namespace SailwindCoop.Sync
             foreach (var n in _nodes)
             {
                 if (n.Rb == null) continue;
-                _kinematicSaved.Add(new KeyValuePair<Rigidbody, bool>(n.Rb, n.Rb.isKinematic));
+                if (!_heldBodies.Add(n.Rb)) continue;
+                _kinematicSaved.Add(new SavedBody { Body = n.Rb, Kinematic = n.Rb.isKinematic, Interpolation = n.Rb.interpolation });
                 n.Rb.isKinematic = true;
-                _heldBodies.Add(n.Rb);
+                n.Rb.interpolation = RigidbodyInterpolation.None;
             }
         }
 
@@ -660,10 +688,12 @@ namespace SailwindCoop.Sync
 
         private void RestoreKinematic()
         {
-            foreach (var kv in _kinematicSaved)
+            foreach (var saved in _kinematicSaved)
             {
-                _heldBodies.Remove(kv.Key);
-                if (kv.Key != null) kv.Key.isKinematic = kv.Value;
+                _heldBodies.Remove(saved.Body);
+                if (saved.Body == null) continue;
+                saved.Body.isKinematic = saved.Kinematic;
+                saved.Body.interpolation = saved.Interpolation;
             }
             _kinematicSaved.Clear();
         }
@@ -727,6 +757,7 @@ namespace SailwindCoop.Sync
             ResetControlTracks();
             _haveTargets = false;
             _rotBuf.Clear();
+            _hingePlayback.Clear();
             _sendTimer = 0f;
             _reqTimer = 0f;
             _lastReqIndex = -1;

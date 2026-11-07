@@ -645,6 +645,28 @@ internal static class Program
                 Assert(child.Receive(5, 100, 0, 0, 10, out semantic, out pose), "child final baseline rejected");
                 Assert(!child.Receive(4, 110, 0, 0, 10, out semantic, out pose), "later tick admitted older child state");
                 Assert(child.Receive(6, 100, 0, 0, 10, out semantic, out pose), "same-tick final child rejected");
+                var childSamples = new ItemRequestOrder();
+                Assert(childSamples.AcceptPose(10, 9, 200) && !childSamples.AcceptPose(10, 9, 190),
+                    "a reordered instrument sample would rewind the host relay");
+                Assert(childSamples.AcceptPose(10, 9, 200) && childSamples.AcceptPose(11, 9, 170),
+                    "instrument finals or other actors must keep independent ordering");
+            });
+            Test("installed rowing and push controls expose exactly one native force application", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    foreach (string type in new[] { "GPButtonBoatPushCol", "DockPushCol", "GPButtonSailPusher", "ShipItemOar" })
+                    {
+                        string name = type == "ShipItemOar" ? "OnAltHeld" : "ExtraFixedUpdate";
+                        var method = types[type].Methods.Single(m => m.Name == name && m.Parameters.Count == 0);
+                        var calls = method.Body.Instructions.Select(i => i.Operand).OfType<MethodReference>()
+                            .Where(m => m.DeclaringType.FullName == "UnityEngine.Rigidbody" && m.Name == "AddForceAtPosition").ToArray();
+                        Assert(calls.Length == 1, "actual force call changed: " + type);
+                        string signature = string.Join(",", calls[0].Parameters.Select(p => p.ParameterType.Name));
+                        Assert(signature == "Vector3,Vector3" || signature == "Vector3,Vector3,ForceMode", "unsupported force call: " + type);
+                    }
+                    Assert(types["ShipItemOar"].Fields.Any(f => f.Name == "isRowing" && f.FieldType.Name == "Boolean"), "actual rowing flag changed");
+                }
             });
             Test("installed rod and chip-log have separately bound bobbers and passive visual methods", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))

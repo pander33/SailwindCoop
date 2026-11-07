@@ -58,6 +58,7 @@ namespace ProtocolSmoke
             TestDirection(failures);
             TestOversizedCounts(failures);
             TestRosterVersions(failures);
+            TestDeckForceBatches(failures);
 
             int populated = 0, truncated = 0;
             CheckPopulatedMessage(new HelloMsg { ProtocolVersion = Protocol.Version, PlayerGuid = Guid.NewGuid().ToString("N"), PlayerName = "Dice guest", SelectedAvatar = "avatar.bundle" }, failures, ref populated, ref truncated);
@@ -212,6 +213,31 @@ namespace ProtocolSmoke
                 return value;
             }
             throw new Exception("no sample for " + type.Name);
+        }
+
+        private static void TestDeckForceBatches(List<string> failures)
+        {
+            var timeline = new SailwindCoop.Sync.DeckForceTimeline();
+            // Three delayed batches arrive together. The last contains a short release tail.
+            foreach (int frames in new[] { 4, 4, 1 })
+            {
+                var batch = new SailwindCoop.Sync.DeckForceBatch();
+                for (int i = 0; i < frames; i++)
+                    batch.Add(new UnityEngine.Vector3(10f, 0f, 0f), new UnityEngine.Vector3(0f, 2f, 0f), 0.02f);
+                timeline.Enqueue(batch);
+            }
+            float linear = 0f, torque = 0f;
+            int steps = 0;
+            while (!timeline.Empty && steps < 20)
+            {
+                timeline.Advance(0.02f, out var force, out var moment);
+                if (force.x > 0.401f) failures.Add("Deck force: one physics step applied more than twice the nominal impulse");
+                linear += force.x;
+                torque += moment.z;
+                steps++;
+            }
+            if (!timeline.Empty || steps < 5 || Math.Abs(linear - 1.8f) > 0.0001f || Math.Abs(torque + 3.6f) > 0.0001f)
+                failures.Add("Deck force: burst playback did not preserve the force, torque and release tail");
         }
 
         private static void TestDirection(List<string> failures)

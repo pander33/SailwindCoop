@@ -2,17 +2,19 @@ using System;
 
 namespace SailwindCoop.Sync
 {
-    /// <summary>One playout clock per remote player, including streams relayed by the host.</summary>
+    /// <summary>Monotonic playout for a snapshot stream, including streams relayed by the host.</summary>
     internal sealed class PlayerPlaybackClock
     {
         private const double ReserveMs = 25;
-        private const double InitialReserveMs = 75;
         private const double MaxAutomaticDelayMs = 900;
         private const long StreamBreakMs = 1000;
         private const double ReleaseMsPerMs = 0.025;
         private long _latestTick, _lastArrival, _lastFrame;
         private double _observedDelay, _renderTick;
         private bool _hasSample, _started;
+        private readonly double _initialReserveMs;
+
+        internal PlayerPlaybackClock(double initialReserveMs = 75) => _initialReserveMs = initialReserveMs;
 
         internal void Observe(long tick, long serverNow, long localNow)
         {
@@ -22,7 +24,7 @@ namespace SailwindCoop.Sync
             long silence = localNow - _lastArrival;
             if (!_hasSample || silence >= StreamBreakMs || tick - _latestTick >= StreamBreakMs)
             {
-                _observedDelay = ClampDelay(age + InitialReserveMs);
+                _observedDelay = ClampDelay(age + _initialReserveMs);
             }
             else
             {
@@ -39,6 +41,19 @@ namespace SailwindCoop.Sync
         internal long Advance(long serverNow, long localNow, float minimumDelay)
         {
             double target = serverNow - Math.Max(minimumDelay, _observedDelay);
+            return AdvanceTowards(target, localNow);
+        }
+
+        internal void Reset(bool preservePosition = false)
+        {
+            _hasSample = false;
+            _observedDelay = 0;
+            if (!preservePosition) _started = false;
+        }
+
+        // Keep one continuous timeline even when the source (or its avatar clock) changes.
+        internal long AdvanceTowards(double target, long localNow)
+        {
             if (!_started)
             {
                 _renderTick = target;

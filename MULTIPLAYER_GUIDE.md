@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.8.0) uses **protocol 99**, requires Sailwind 0.40, and cannot connect to
+Every machine needs a build with the same protocol number. The current build (0.8.0) uses **protocol 100**, requires Sailwind 0.40, and cannot connect to
 earlier builds. A host on 0.4.3 or later accepts other versions of the mod that use the same protocol; a host on 0.4.2 or earlier requires the exact same version. Some features still await end-to-end in-game verification; the release notes list them.
 
 <!--full-->

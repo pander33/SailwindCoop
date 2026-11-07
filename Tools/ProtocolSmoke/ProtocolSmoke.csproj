@@ -31,6 +31,7 @@
     <Compile Include="..\..\Net\MessageDirection.cs" Link="Net\MessageDirection.cs" />
     <Compile Include="..\..\Net\NetRegistry.cs" Link="Net\NetRegistry.cs" />
     <Compile Include="..\..\Sync\SleepTransitionState.cs" Link="Sync\SleepTransitionState.cs" />
+    <Compile Include="..\..\Sync\DeckForceTimeline.cs" Link="Sync\DeckForceTimeline.cs" />
   </ItemGroup>
 
   <ItemGroup>

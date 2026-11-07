@@ -4,7 +4,7 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 99.
+Everyone must update to wire protocol 100.
 
 ### Fixed
 
@@ -14,6 +14,14 @@ Everyone must update to wire protocol 99.
   state and its walk collider.
 - Held items use the same playback time as their remote carrier. The host forwards the original
   sample time to keep hands and carried objects together.
+- Ship movement, rudders and booms use adaptive playback on guests. The crew and their held items
+  change support at the recorded time when stepping between the deck and shore.
+- Fishing rods and chip logs synchronize from join. Bobbers and lines follow the original sample
+  time and older packets cannot rewind a newer sample.
+- Instrument playback stays continuous when ownership changes. A delayed drop state cannot
+  overwrite a later pickup, and reordered player poses preserve brief intermediate deck crossings.
+- The host spreads a guest's rowing and pushing over physics steps, preserving the effort and
+  torque of short strokes and holding the point of application relative to the hull.
 
 ### Added
 

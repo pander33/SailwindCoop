@@ -261,7 +261,7 @@ namespace SailwindCoop.Sync
             try
             {
                 if (!OarIsRowing(__instance)) return;
-                ItemSync.Instance?.NotifyAltHeld(__instance);
+                ItemSync.Instance?.CaptureOarStroke(__instance);
             }
             catch (Exception e) { WarnPatch("[ItemPatches] PostOarAltHeld: " + e.Message); }
         }

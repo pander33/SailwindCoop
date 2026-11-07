@@ -17,12 +17,20 @@ namespace SailwindCoop.Sync
             internal ConfigurableJoint Joint;
             internal Rigidbody Body;
             internal bool Slaved, OriginalKinematic;
+            internal RigidbodyInterpolation OriginalInterpolation;
             internal uint Revision;
             internal readonly ChangeStream Stream = new ChangeStream();
             internal InstrumentBody Sent;
             internal InstrumentStateMsg Latest;
+            internal uint SampleHolder;
+            internal bool Resend;
             internal readonly ItemStateGate Gate = new ItemStateGate();
-            internal readonly NetTransform Pose = new NetTransform(), Rotator = new NetTransform();
+            internal readonly ItemRequestOrder Requests = new ItemRequestOrder();
+            internal readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock(90);
+            internal readonly NetTransform Pose = new NetTransform { SmoothUnderruns = true };
+            internal readonly NetTransform Rotator = new NetTransform { SmoothUnderruns = true };
+            internal readonly SnapshotBuffer<InstrumentStateMsg> Visuals = new SnapshotBuffer<InstrumentStateMsg>(m => m.Tick, 32);
+            internal readonly InstrumentRevisionQueue<InstrumentStateMsg> Pending = new InstrumentRevisionQueue<InstrumentStateMsg>(m => m.ParentRevision);
         }
         private readonly Dictionary<int, Instrument> _instruments = new Dictionary<int, Instrument>();
         private readonly Dictionary<int, InstrumentStateMsg> _waitingInstruments = new Dictionary<int, InstrumentStateMsg>();
@@ -32,13 +40,13 @@ namespace SailwindCoop.Sync
         private Instrument BindInstrument(ItemEntry entry)
         {
             if (entry?.Item == null || !HasInstrument(entry.Item) || (_net.Role == Role.Client && !_hostIds.Contains(entry.InstanceId))) return null;
-            if (_instruments.TryGetValue(entry.InstanceId, out var previous) && previous.Item == entry.Item) return previous;
+            if (_instruments.TryGetValue(entry.InstanceId, out var previous) && previous.Item == entry.Item &&
+                previous.Joint != null && previous.Body != null) return previous;
             if (previous != null) RestoreInstrument(previous);
             var joint = ItemComponents.Read<ConfigurableJoint>(entry.Item, "bobberJoint");
             var body = ItemComponents.Read<Rigidbody>(entry.Item, "bobberBody");
             if (joint == null || body == null) return null; // OnLoad has not bound the child's real-world body yet.
             var child = new Instrument { Item = entry.Item, Joint = joint, Body = body };
-            child.Pose.InterpDelayMs = child.Rotator.InterpDelayMs = _net.Role == Role.Host ? 0 : 100;
             child.Rotator.ToWorldPos = p => child.Item.transform.TransformPoint(p);
             child.Rotator.ToWorldRot = r => child.Item.transform.rotation * r;
             _instruments[entry.InstanceId] = child; return child;
@@ -53,14 +61,34 @@ namespace SailwindCoop.Sync
         {
             if (child.Slaved) return;
             child.Slaved = true; child.OriginalKinematic = child.Body.isKinematic;
+            child.OriginalInterpolation = child.Body.interpolation;
             child.Item.StopAllCoroutines(); child.Body.isKinematic = true;
+            child.Body.interpolation = RigidbodyInterpolation.None;
         }
-        private static void RestoreInstrument(Instrument child)
+        private static void RestoreInstrument(Instrument child, InstrumentStateMsg handoff = null)
         {
             if (!child.Slaved) return;
-            if (child.Body != null) child.Body.isKinematic = child.OriginalKinematic;
+            if (child.Body != null)
+            {
+                if (handoff != null && !handoff.Kinematic && handoff.BodyActive && child.Joint != null && CoordSpace.Ready)
+                {
+                    // A pickup can happen before the latest pose is rendered. Resume with its
+                    // line length too, or a still-stowed line immediately locks the body again.
+                    child.Pose.ApplyAt(child.Joint.transform, handoff.Tick);
+                    var limit = child.Joint.linearLimit;
+                    limit.limit = handoff.Limit;
+                    child.Joint.linearLimit = limit;
+                    ItemComponents.Set(child.Item, "currentTargetLength", handoff.TargetLength);
+                    if (child.Item is ShipItemChipLog) ItemComponents.Set(child.Item, "thrown", handoff.Thrown);
+                }
+                child.Body.isKinematic = handoff?.Kinematic ?? child.OriginalKinematic;
+                child.Body.interpolation = child.OriginalInterpolation;
+                if (handoff != null && !handoff.Kinematic) child.Body.velocity = handoff.Velocity;
+            }
             if (child.Item != null) { ItemComponents.Set(child.Item, "activated", false); ItemComponents.Set(child.Item, "holding", false); ItemComponents.Set(child.Item, "throwing", false); }
-            child.Slaved = false; child.Pose.Clear(); child.Rotator.Clear();
+            child.Slaved = false;
+            ClearInstrumentSamples(child);
+            child.Pending.Clear();
         }
         private void CaptureInstrument(ItemEntry entry, Instrument child, InstrumentBody msg)
         {
@@ -107,10 +135,8 @@ namespace SailwindCoop.Sync
                 child.Sent = request;
                 _net.Broadcast(request, reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable); return;
             }
-            var state = new InstrumentStateMsg { Final = final, ParentRevision = BuildState(entry, _net.Clock.ServerTick).Revision };
+            var state = new InstrumentStateMsg { Final = final };
             CaptureInstrument(entry, child, state);
-            // A slave body's kinematic flag/zero velocity are transport mechanics, not the owner's physical state.
-            if (child.Slaved && child.Latest != null) { state.Kinematic = child.Latest.Kinematic; state.Velocity = child.Latest.Velocity; }
             if (periodic)
             {
                 var mode = child.Stream.Next(InstrumentChanged(child.Sent, state));
@@ -119,6 +145,7 @@ namespace SailwindCoop.Sync
             }
             else child.Stream.Sent(final);
             state.Revision = ++child.Revision; child.Sent = state;
+            child.Resend = false;
             _net.Broadcast(state, reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable);
         }
         private static bool InstrumentChanged(InstrumentBody a, InstrumentBody b)
@@ -132,7 +159,10 @@ namespace SailwindCoop.Sync
                (a.Velocity - b.Velocity).sqrMagnitude > 1e-4f ||
                Quaternion.Angle(a.Rot, b.Rot) > 0.1f || Quaternion.Angle(a.RotatorRot, b.RotatorRot) > 0.1f;
         /// <summary>Host: a client finished loading and has no instrument child state yet.</summary>
-        public void ResyncInstruments() { foreach (var child in _instruments.Values) child.Stream.Reset(); }
+        public void ResyncInstruments()
+        {
+            foreach (var child in _instruments.Values) { child.Stream.Reset(); child.Resend = true; }
+        }
         internal void InstrumentFinal(ShipItem item)
         {
             if (InteractionContext.Suppressed || _net.State != LinkState.Connected || !CoordSpace.Ready || !HasInstrument(item)) return;
@@ -140,6 +170,15 @@ namespace SailwindCoop.Sync
             var child = BindInstrument(entry); if (child == null) return;
             if (_net.Role == Role.Client && !LocalHand(item)) return; // Drop uses its separate final hook below.
             SendInstrument(entry, child, true);
+        }
+        private void InstrumentPickedUp(ShipItem item)
+        {
+            if (!_byItem.TryGetValue(item, out var entry) || !HasInstrument(item)) return;
+            var child = BindInstrument(entry);
+            if (child == null) return;
+            ApplyPendingInstrumentSamples(entry, child);
+            RestoreInstrument(child, child.Latest);
+            child.Stream.Reset();
         }
         internal void InstrumentDropped(ShipItem item)
         {
@@ -152,30 +191,76 @@ namespace SailwindCoop.Sync
         private void TickInstruments(float dt)
         {
             if (!CoordSpace.Ready || !GameState.playing || GameState.currentlyLoading) return;
-            if (_instruments.Count == 0) return;
-            foreach (var pair in new List<KeyValuePair<int, Instrument>>(_instruments))
-                if (!_byInstanceId.TryGetValue(pair.Key, out var alive) || alive.Item != pair.Value.Item)
-                { RestoreInstrument(pair.Value); _instruments.Remove(pair.Key); _waitingInstruments.Remove(pair.Key); }
-            _instrumentTimer += dt; bool send = _instrumentTimer >= 1f / 15f; if (send) _instrumentTimer = 0;
+            const float interval = 1f / 15f;
+            _instrumentTimer += dt;
+            bool send = _instrumentTimer >= interval;
+            if (send) _instrumentTimer %= interval;
+            if (!send) return;
+            foreach (var pair in _instruments)
+                if (!_byInstanceId.TryGetValue(pair.Key, out var alive) || alive.Item != pair.Value.Item ||
+                    pair.Value.Joint == null || pair.Value.Body == null)
+                    _expiredInstruments.Add(pair.Key);
+            foreach (int id in _expiredInstruments)
+            {
+                RestoreInstrument(_instruments[id]);
+                _instruments.Remove(id);
+                if (!_byInstanceId.ContainsKey(id)) _waitingInstruments.Remove(id);
+            }
+            _expiredInstruments.Clear();
             foreach (var entry in _items)
             {
                 var child = BindInstrument(entry); if (child == null) continue;
                 if (_waitingInstruments.TryGetValue(entry.InstanceId, out var waiting)) { ReceiveInstrument(entry, child, waiting); _waitingInstruments.Remove(entry.InstanceId); }
                 bool remote = RemoteInstrument(child.Item);
-                if (remote) SlaveInstrument(child); else RestoreInstrument(child);
-                if (remote && !entry.Gate.Pending && child.Latest != null &&
-                    (_net.Role == Role.Host || child.Latest.ParentRevision == entry.Gate.Version))
+                if (remote) SlaveInstrument(child); else RestoreInstrument(child, child.Latest);
+                if (_net.Role == Role.Host)
                 {
-                    child.Pose.Apply(child.Joint.transform, _net.Clock.ServerTick); ApplyInstrumentFields(child, child.Latest);
-                    if (child.Item is ShipItemFishingRod rod)
+                    if (!remote) SendInstrument(entry, child, false, periodic: true);
+                    else if (child.Resend && child.Latest != null && child.Latest.ParentRevision == entry.Revision)
                     {
-                        var fish = ItemComponents.Read<FishingRodFish>(rod, "fish");
-                        if (fish != null) child.Rotator.Apply(ItemComponents.Read<Transform>(fish, "rodRotator"), _net.Clock.ServerTick);
+                        // Use the actual source snapshot for a joining peer, even if the guest stopped moving.
+                        _net.Broadcast(child.Latest, DeliveryMethod.ReliableOrdered);
+                        child.Resend = false;
                     }
                 }
-                if (!send) continue;
-                if (_net.Role == Role.Host) SendInstrument(entry, child, false, periodic: true);
                 else if (_net.Role == Role.Client && LocalHand(child.Item)) SendInstrument(entry, child, false, periodic: true);
+            }
+        }
+        private readonly List<int> _expiredInstruments = new List<int>();
+
+        internal void ApplyRemoteInstruments()
+        {
+            if (_net.State != LinkState.Connected || !CoordSpace.Ready || !GameState.playing || GameState.currentlyLoading || Time.timeScale <= 0f) return;
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            var players = CoopBehaviour.Instance?.Players;
+            foreach (var pair in _instruments)
+            {
+                var child = pair.Value;
+                if (child.Item == null || child.Body == null || !child.Slaved || !RemoteInstrument(child.Item) ||
+                    !_byInstanceId.TryGetValue(pair.Key, out var entry)) continue;
+                ApplyPendingInstrumentSamples(entry, child);
+                if (child.Visuals.Count == 0) continue;
+                long tick = child.SampleHolder != 0 && players != null &&
+                    players.TryGetRenderTick(child.SampleHolder, localNow, serverNow, out long holderTick)
+                    ? child.Playback.AdvanceTowards(holderTick, localNow)
+                    : child.Playback.Advance(serverNow, localNow, Mathf.Max(90f, InterpDelayMs));
+                child.Pose.ApplyAt(child.Joint.transform, tick);
+                var from = child.Visuals[0];
+                var to = from;
+                for (int i = 1; i < child.Visuals.Count && tick > from.Tick; i++)
+                {
+                    to = child.Visuals[i];
+                    if (tick < to.Tick) break;
+                    from = to;
+                }
+                float blend = from == to ? 0f : Mathf.Clamp01((float)(tick - from.Tick) / (to.Tick - from.Tick));
+                ApplyInstrumentFields(child, from, to, blend);
+                if (child.Item is ShipItemFishingRod rod)
+                {
+                    var fish = ItemComponents.Read<FishingRodFish>(rod, "fish");
+                    if (fish != null) child.Rotator.ApplyAt(ItemComponents.Read<Transform>(fish, "rodRotator"), tick);
+                }
             }
         }
         public void OnInstrumentRequest(InstrumentRequestMsg msg, NetPeer peer)
@@ -187,18 +272,22 @@ namespace SailwindCoop.Sync
             uint parentRevision = BuildState(entry, _net.Clock.ServerTick).Revision;
             // A preceding handoff's child stream cannot cross a later root action. A final
             // drop may still carry the pre-ack revision when it names that exact root request.
-            if (unchecked((int)(msg.ParentRevision - parentRevision)) < 0 &&
-                !(entry.AckRequester == actor && entry.AckRequest == msg.RequestId)) return;
+            if (!entry.InstrumentEpoch.Accept(msg.ParentRevision, parentRevision, actor, msg.RequestId)) return;
+            if (!child.Requests.AcceptPose(actor, msg.RequestId, msg.Tick)) return;
             bool remote = RemoteInstrument(child.Item);
             if (remote) SlaveInstrument(child); else RestoreInstrument(child);
-            // Requests describe the exact child result. Host stamps time and root revision; no new RNG/input.
+            // Keep the original capture time so the same sample can play with the owner's root pose.
             var state = new InstrumentStateMsg { Final = msg.Final, ParentRevision = parentRevision, Revision = ++child.Revision };
-            CopyInstrument(msg, state); state.Tick = _net.Clock.ServerTick;
-            if (child.Latest != null && child.Latest.ParentRevision != state.ParentRevision) { child.Pose.Clear(); child.Rotator.Clear(); }
-            child.Latest = state; BufferInstrument(child, state);
-            child.Pose.Apply(child.Joint.transform, _net.Clock.ServerTick); ApplyInstrumentFields(child, state);
-            if (!remote) { child.Body.isKinematic = msg.Kinematic; if (!msg.Kinematic) child.Body.velocity = msg.Velocity; }
-            _net.Broadcast(state, msg.Final ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable);
+            CopyInstrument(msg, state);
+            BufferInstrument(child, state, entry.HolderNetId);
+            if (!remote)
+            {
+                child.Pose.ApplyAt(child.Joint.transform, state.Tick);
+                ApplyInstrumentFields(child, state, state, 0f);
+                child.Body.isKinematic = msg.Kinematic;
+                if (!msg.Kinematic) child.Body.velocity = msg.Velocity;
+            }
+            _net.Broadcast(state, _net.ReceivingUnreliable ? DeliveryMethod.Unreliable : DeliveryMethod.ReliableOrdered);
         }
         private static void CopyInstrument(InstrumentBody source, InstrumentBody target)
         {
@@ -221,23 +310,51 @@ namespace SailwindCoop.Sync
         {
             if (entry.PrefabIndex != msg.PrefabIndex || LocalHand(child.Item) || unchecked((int)(msg.ParentRevision - entry.Gate.Version)) < 0) return;
             if (!child.Gate.Receive(msg.Revision, msg.Tick, 0, 0, _net.MyNetId, out var semantic, out var pose)) return;
-            if (child.Latest != null && child.Latest.ParentRevision != msg.ParentRevision) { child.Pose.Clear(); child.Rotator.Clear(); }
-            child.Latest = msg; BufferInstrument(child, msg); // A pending root drop defers application until root acknowledgement.
+            SlaveInstrument(child);
+            child.Pending.Enqueue(msg);
+            ApplyPendingInstrumentSamples(entry, child);
         }
-        private static void BufferInstrument(Instrument child, InstrumentBody msg)
-        { child.Pose.Push(msg.Tick, msg.RealPos, msg.Rot, msg.Velocity); child.Rotator.Push(msg.Tick, msg.RotatorPos, msg.RotatorRot); }
-        private static void ApplyInstrumentFields(Instrument child, InstrumentBody msg)
+
+        private void ApplyPendingInstrumentSamples(ItemEntry entry, Instrument child)
         {
-            var limit = child.Joint.linearLimit; limit.limit = msg.Limit; child.Joint.linearLimit = limit;
+            if (entry.Gate.Pending || !entry.Gate.HasState) return;
+            while (child.Pending.TryTake(entry.Gate.Version, out var msg))
+                BufferInstrument(child, msg, entry.HolderNetId);
+        }
+        private static void ClearInstrumentSamples(Instrument child, bool preservePlayback = false)
+        {
+            child.Pose.Clear(); child.Rotator.Clear(); child.Visuals.Clear(); child.Latest = null;
+            child.Playback.Reset(preservePlayback);
+        }
+
+        private void BufferInstrument(Instrument child, InstrumentStateMsg msg, uint holder)
+        {
+            // A new source may have captured its first pose before the old source's last pose.
+            // Ordinary item revisions keep the previous samples for interpolation.
+            if (child.Latest != null && child.SampleHolder != holder && msg.Tick <= child.Latest.Tick)
+                ClearInstrumentSamples(child, preservePlayback: true);
+            child.SampleHolder = holder;
+            child.Latest = msg;
+            long localNow = _net.Clock.LocalTick;
+            child.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
+            child.Pose.Push(msg.Tick, msg.RealPos, msg.Rot, msg.Velocity);
+            child.Rotator.Push(msg.Tick, msg.RotatorPos, msg.RotatorRot);
+            child.Visuals.Push(msg);
+        }
+
+        private static void ApplyInstrumentFields(Instrument child, InstrumentBody msg, InstrumentBody next, float blend)
+        {
+            var limit = child.Joint.linearLimit; limit.limit = Mathf.Lerp(msg.Limit, next.Limit, blend); child.Joint.linearLimit = limit;
             if (child.Body.gameObject.activeSelf != msg.BodyActive) child.Body.gameObject.SetActive(msg.BodyActive);
-            ItemComponents.Set(child.Item, "currentTargetLength", msg.TargetLength); ItemComponents.Set(child.Item, "targetReelVolume", msg.ReelVolume);
+            float reelVolume = Mathf.Lerp(msg.ReelVolume, next.ReelVolume, blend);
+            ItemComponents.Set(child.Item, "currentTargetLength", Mathf.Lerp(msg.TargetLength, next.TargetLength, blend)); ItemComponents.Set(child.Item, "targetReelVolume", reelVolume);
             // Don't leave remote input/throw coroutines latched when simulation later returns to this machine.
             ItemComponents.Set(child.Item, "activated", false); ItemComponents.Set(child.Item, "holding", false); ItemComponents.Set(child.Item, "throwing", false);
-            var reel = ItemComponents.Read<AudioSource>(child.Item, "reelAudio"); if (reel != null) reel.volume = msg.ReelVolume;
+            var reel = ItemComponents.Read<AudioSource>(child.Item, "reelAudio"); if (reel != null) reel.volume = reelVolume;
             if (child.Item is ShipItemChipLog) ItemComponents.Set(child.Item, "thrown", msg.Thrown);
             if (child.Item is ShipItemFishingRod rod)
             {
-                ItemComponents.Set(rod, "currentRodBend", msg.Bend); InvokeInstrument(rod, "UpdateBend");
+                ItemComponents.Set(rod, "currentRodBend", Mathf.Lerp(msg.Bend, next.Bend, blend)); InvokeInstrument(rod, "UpdateBend");
                 var staticBobber = ItemComponents.Read<GameObject>(rod, "staticBobber");
                 if (staticBobber != null && staticBobber.activeSelf != msg.StaticBobberActive) staticBobber.SetActive(msg.StaticBobberActive);
                 var fish = ItemComponents.Read<FishingRodFish>(rod, "fish");
@@ -266,7 +383,7 @@ namespace SailwindCoop.Sync
         }
         private static readonly Dictionary<Type, Dictionary<string, MethodInfo>> InstrumentCalls = new Dictionary<Type, Dictionary<string, MethodInfo>>();
         private void ClearInstruments()
-        { foreach (var child in _instruments.Values) RestoreInstrument(child); _instruments.Clear(); _waitingInstruments.Clear(); _instrumentTimer = 0; }
+        { foreach (var child in _instruments.Values) RestoreInstrument(child); _instruments.Clear(); _waitingInstruments.Clear(); _expiredInstruments.Clear(); _instrumentTimer = 0; }
     }
     internal static class InstrumentPosePatches
     {

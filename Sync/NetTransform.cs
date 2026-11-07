@@ -61,6 +61,9 @@ namespace SailwindCoop.Sync
             _buf.Push(s);
         }
 
+        internal bool TryPrepend(long tick, Vector3 pos, Quaternion rot, Vector3 vel)
+            => _buf.TryPrepend(new Snap { Tick = tick, RealPos = pos, Rot = rot, RealVel = vel });
+
         /// <summary>
         /// Sample the buffer at host time <paramref name="serverTickNow"/> and write the
         /// resulting LOCAL-space pose into <paramref name="t"/>. No-op until data exists.
@@ -76,6 +79,17 @@ namespace SailwindCoop.Sync
             t.rotation = rot;
         }
 
+        /// <summary>Bridge nearby samples in different supports after converting each to local world space.</summary>
+        internal bool TryApplyTransition(Transform target, NetTransform next, long fromTick, long toTick, long renderTick)
+        {
+            if (renderTick <= fromTick || renderTick >= toTick || toTick - fromTick > 200 ||
+                !SampleAt(fromTick, out var fromPos, out var fromRot, out _) ||
+                !next.SampleAt(toTick, out var toPos, out var toRot, out _) || (toPos - fromPos).sqrMagnitude > 4f) return false;
+            float blend = (float)(renderTick - fromTick) / (toTick - fromTick);
+            target.SetPositionAndRotation(Vector3.Lerp(fromPos, toPos, blend), Quaternion.Slerp(fromRot, toRot, blend));
+            return true;
+        }
+
         /// <summary>
         /// The pose <see cref="Apply"/> would write, for a caller that places something else from it
         /// (a boat's body from its hull's pose). <paramref name="realVel"/> is the sampled velocity;
@@ -84,7 +98,7 @@ namespace SailwindCoop.Sync
         public bool Sample(long serverTickNow, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
             => SampleAt(serverTickNow - (long)InterpDelayMs, out pos, out rot, out realVel);
 
-        private bool SampleAt(long renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
+        internal bool SampleAt(long renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
         {
             pos = Vector3.zero; rot = Quaternion.identity; realVel = Vector3.zero;
             if (_buf.Count == 0) return false;

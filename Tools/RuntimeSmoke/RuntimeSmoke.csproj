@@ -38,6 +38,10 @@
     <Compile Include="..\..\Sync\ChunkAccumulator.cs" Link="ChunkAccumulator.cs" />
     <Compile Include="..\..\Sync\SnapshotBuffer.cs" Link="SnapshotBuffer.cs" />
     <Compile Include="..\..\Sync\PlayerPlaybackClock.cs" Link="PlayerPlaybackClock.cs" />
+    <Compile Include="..\..\Sync\PoseSupportOrder.cs" Link="PoseSupportOrder.cs" />
+    <Compile Include="..\..\Sync\InstrumentRevisionQueue.cs" Link="InstrumentRevisionQueue.cs" />
+    <Compile Include="..\..\Sync\InstrumentRequestEpoch.cs" Link="InstrumentRequestEpoch.cs" />
+    <Compile Include="..\..\Sync\HingePlayback.cs" Link="HingePlayback.cs" />
     <Compile Include="..\..\Sync\PumpVisualMotion.cs" Link="PumpVisualMotion.cs" />
     <Compile Include="..\..\Sync\AnchorStateGate.cs" Link="AnchorStateGate.cs" />
     <Compile Include="..\..\Runtime\CoopLog.cs" Link="CoopLog.cs" />

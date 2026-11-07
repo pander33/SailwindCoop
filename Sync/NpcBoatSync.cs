@@ -70,7 +70,9 @@ namespace SailwindCoop.Sync
             public bool PrevKinematic;
             public RigidbodyInterpolation PrevInterp;
             public bool Engaged;
-            public readonly NetTransform Net = new NetTransform();
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public PlayerPlaybackClock Playback;
+            public long LatestTick = long.MinValue;
             public int Target = int.MinValue;
             public int Dock = int.MinValue;
         }
@@ -197,6 +199,8 @@ namespace SailwindCoop.Sync
 
             try
             {
+                long localNow = _net.Clock.LocalTick;
+                long serverNow = localNow + (long)_net.Clock.OffsetMs;
                 for (int i = 0; i < msg.Boats.Length; i++)
                 {
                     var e = msg.Boats[i];
@@ -204,6 +208,9 @@ namespace SailwindCoop.Sync
                     if (cb == null) continue;
 
                     cb.Net.Push(msg.Tick, e.RealPos, e.Rot, e.RealVel);
+                    if (msg.Tick <= cb.LatestTick) continue;
+                    cb.LatestTick = msg.Tick;
+                    cb.Playback.Observe(msg.Tick, serverNow, localNow);
                     MirrorAi(cb, e);
                 }
 
@@ -239,7 +246,8 @@ namespace SailwindCoop.Sync
             var c = NpcBoatLocator.FindByIndex(index);
             if (c == null) return null;
 
-            cb = new ClientBoat { Controller = c, Rb = c.GetComponent<Rigidbody>() };
+            cb = new ClientBoat { Controller = c, Rb = c.GetComponent<Rigidbody>(),
+                Playback = new PlayerPlaybackClock(MinimumPlaybackDelay) };
             if (cb.Rb != null)
             {
                 cb.PrevKinematic = cb.Rb.isKinematic;
@@ -287,17 +295,20 @@ namespace SailwindCoop.Sync
             catch { return null; }
         }
 
+        private float MinimumPlaybackDelay => 1000f / Mathf.Max(1f, SendHz) + 25f;
+
         /// <summary>Ведём корпуса. Отдельным шагом кадра, потому что снапшоты приходят реже кадров.</summary>
         public void ApplyRemote()
         {
             if (_net.Role != Role.Client || _client.Count == 0) return;
             if (!CoordSpace.Ready) return;
 
-            long now = _net.Clock.ServerTick;
+            long localNow = _net.Clock.LocalTick;
+            long serverNow = localNow + (long)_net.Clock.OffsetMs;
             foreach (var cb in _client.Values)
             {
                 if (cb.Controller == null || !cb.Net.HasData) continue;
-                cb.Net.Apply(cb.Controller.transform, now);
+                cb.Net.ApplyAt(cb.Controller.transform, cb.Playback.Advance(serverNow, localNow, MinimumPlaybackDelay));
             }
         }
 

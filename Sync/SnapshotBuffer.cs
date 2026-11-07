@@ -22,6 +22,12 @@ namespace SailwindCoop.Sync
             else _samples.Insert(i + 1, sample);
             while (_samples.Count > _capacity) _samples.RemoveAt(0);
         }
+        internal bool TryPrepend(T sample)
+        {
+            if (_samples.Count >= _capacity || (_samples.Count > 0 && _tick(sample) >= _tick(_samples[0]))) return false;
+            _samples.Insert(0, sample);
+            return true;
+        }
         internal void Clear() => _samples.Clear();
     }
 }

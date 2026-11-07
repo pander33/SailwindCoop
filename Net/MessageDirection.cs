@@ -21,6 +21,7 @@ namespace SailwindCoop.Net
                 case MsgType.MooringRequest:
                 case MsgType.DamageRequest:
                 case MsgType.PushRequest:
+                case MsgType.OarStroke:
                 case MsgType.LightRequest:
                 case MsgType.WindRequest:
                 case MsgType.ShopRequest:

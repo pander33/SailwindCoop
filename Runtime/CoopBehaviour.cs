@@ -338,6 +338,7 @@ namespace SailwindCoop.Runtime
                 Belts.PlayerLeft(netId);
                 Dice.PlayerLeft(netId);
                 Items.ClearRemoteActor(netId);
+                Interactions.ClearForceActor(netId);
                 Anchor.ClearRemoteActor(netId);
                 Mooring.ClearRemoteActor(netId);
                 WindTotem.ClearRemoteActor(netId);
@@ -369,6 +370,13 @@ namespace SailwindCoop.Runtime
         }
 
         private CoopLog.Repeat _afterPhysicsFailures;
+        private CoopLog.Repeat _forceFailures;
+
+        private void FixedUpdate()
+        {
+            try { Interactions?.ApplyForces(Time.fixedDeltaTime); }
+            catch (System.Exception e) { Plugin.Logger.ReportError("[Coop] Applying guest deck forces failed", e, ref _forceFailures); }
+        }
 
         /// <summary>Runs after every physics step: a client's kinematic boat bodies lose the velocity
         /// <see cref="BoatSync"/> gave them in each step, and the game reads it until the next one.</summary>
@@ -461,6 +469,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Lights.Tick", () => Lights.Tick(_dt)),
                 new SyncStep("Items.Tick", () => Items.Tick(_dt)),
                 new SyncStep("Items.ApplyRemote", () => Items.ApplyRemote()),
+                new SyncStep("Items.ApplyRemoteInstruments", () => Items.ApplyRemoteInstruments()),
                 new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
                 new SyncStep("Dirt.Tick", () => Dirt.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
@@ -782,6 +791,9 @@ namespace SailwindCoop.Runtime
                     break;
                 case MsgType.PushRequest:
                     Interactions.OnPushRequest((PushRequestMsg)msg, fromPeer);
+                    break;
+                case MsgType.OarStroke:
+                    Interactions.OnOarStroke((OarStrokeMsg)msg, fromPeer);
                     break;
                 case MsgType.LightState:
                     Lights.OnLightState((LightStateMsg)msg, fromPeer);

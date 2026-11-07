@@ -23,7 +23,8 @@ namespace SailwindCoop.Sync
             public Transform Head;
             public Animator Animator;
             public AvatarPoseDriver PoseDriver;
-            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public readonly List<PoseSegment> Poses = new List<PoseSegment>();
+            public PoseSegment RenderedPose;
             public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
             public int PlaybackFrame = -1;
             public long PlaybackTick;
@@ -44,14 +45,7 @@ namespace SailwindCoop.Sync
             public ushort LastPoseBoatIndex;
             public bool HasPoseFrame;
             public long LastPoseTick;
-            public long PoseFrameStartTick;
-            public readonly SnapshotBuffer<PlayerStateMsg> PoseDetails = new SnapshotBuffer<PlayerStateMsg>(m => m.Tick, 32);
             public bool WaitingForFirstPose;
-            // Boat-frame converters are rebuilt only when the deck changes: they used to be allocated
-            // fresh for every inbound PlayerState (two closures per packet, per remote, at SnapshotHz).
-            public Transform PoseBoat;
-            public System.Func<Vector3, Vector3> BoatToWorldPos;
-            public System.Func<Quaternion, Quaternion> BoatToWorldRot;
             public bool HasAnimSnapshot;
             public bool HasSpeedParam;
             public bool HasTurnParam;
@@ -72,6 +66,54 @@ namespace SailwindCoop.Sync
             public long EmoteTick;                // host-clock start of the current emote
             public long EmoteVoicedTick;          // start tick of the emote whose shout was played
             public long? PendingEmoteVoiceTick;
+        }
+
+        private sealed class PoseSegment
+        {
+            public readonly CoordFrame Frame;
+            public readonly ushort BoatIndex;
+            public long Start { get; private set; }
+            public long LastTick;
+            public Transform Boat;
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public readonly SnapshotBuffer<PlayerStateMsg> Details = new SnapshotBuffer<PlayerStateMsg>(m => m.Tick, 32);
+
+            public PoseSegment(PlayerStateMsg first)
+            {
+                Frame = first.Frame;
+                BoatIndex = first.BoatIndex;
+                Start = LastTick = first.Tick;
+            }
+
+            public bool Matches(PlayerStateMsg msg) => Frame == msg.Frame && (Frame != CoordFrame.Boat || BoatIndex == msg.BoatIndex);
+
+            public void Push(PlayerStateMsg msg)
+            {
+                LastTick = System.Math.Max(LastTick, msg.Tick);
+                Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
+                Details.Push(msg);
+            }
+
+            public void Prepend(PlayerStateMsg msg)
+            {
+                if (!Net.TryPrepend(msg.Tick, msg.Pos, msg.Rot, msg.Vel)) return;
+                Details.TryPrepend(msg);
+                Start = msg.Tick;
+            }
+
+            public bool Resolve()
+            {
+                if (Frame != CoordFrame.Boat) return true;
+                var boat = BoatLocator.FindByIndex(BoatIndex);
+                if (boat == null) return false;
+                if (Boat != boat)
+                {
+                    Boat = boat;
+                    Net.ToWorldPos = boat.TransformPoint;
+                    Net.ToWorldRot = q => boat.rotation * q;
+                }
+                return true;
+            }
         }
 
         private sealed class AvatarPoseDriver : MonoBehaviour
@@ -364,8 +406,6 @@ namespace SailwindCoop.Sync
 
         // World-frame converters are frame-independent, so one shared instance each is enough. Assigning
         // a method group / lambda per packet would allocate a delegate every time.
-        private static readonly System.Func<Vector3, Vector3> RealToLocalPos = CoordSpace.RealToLocal;
-        private static readonly System.Func<Quaternion, Quaternion> IdentityRot = q => q;
 
         private Transform _localPlayer;
         private PlayerEmbarkerNew _emb;
@@ -484,8 +524,9 @@ namespace SailwindCoop.Sync
             if (index == BoatLocator.NoBoat) return false;
             foreach (var a in _remotes.Values)
             {
-                if (a.Go == null || !a.HasPoseFrame || a.LastPoseFrame != CoordFrame.Boat || a.LastPoseBoatIndex != index ||
-                    a.WaitingForFirstPose || a.PoseBoat != boat) continue;
+                var pose = a.RenderedPose;
+                if (a.Go == null || pose == null || pose.Frame != CoordFrame.Boat || pose.BoatIndex != index ||
+                    a.WaitingForFirstPose || pose.Boat != boat) continue;
                 localPos = boat.InverseTransformPoint(a.Go.transform.position);
                 return true;
             }
@@ -988,15 +1029,9 @@ namespace SailwindCoop.Sync
                 if (a.Go != null) a.Go.SetActive(false);
                 _remotes[msg.NetId] = a;
             }
-            bool frameChanged = !a.HasPoseFrame || a.LastPoseFrame != msg.Frame ||
-                (msg.Frame == CoordFrame.Boat && a.LastPoseBoatIndex != msg.BoatIndex);
             if (a.HasPoseFrame && msg.Tick <= a.LastPoseTick)
             {
-                if (!frameChanged && msg.Tick > a.PoseFrameStartTick && msg.Tick < a.LastPoseTick)
-                {
-                    a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
-                    a.PoseDetails.Push(msg);
-                }
+                if (msg.Tick < a.LastPoseTick) InsertReorderedPose(a, msg);
                 return;
             }
             if (_net.Role == Role.Host)
@@ -1006,21 +1041,17 @@ namespace SailwindCoop.Sync
             }
             long localNow = _net.Clock.LocalTick;
             a.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
-            if (frameChanged)
+            if (a.Poses.Count == 0 || !a.Poses[a.Poses.Count - 1].Matches(msg))
             {
-                a.Net.Clear();
-                a.PoseDetails.Clear();
-                a.PoseFrameStartTick = a.HasPoseFrame ? msg.Tick : long.MinValue;
-                a.PoseBoat = null;
-                a.HasAnimSnapshot = false;
+                a.Poses.Add(new PoseSegment(msg));
+                if (a.Poses.Count > 32) a.Poses.RemoveAt(0);
             }
             a.LastPoseTick = msg.Tick;
             a.LastPoseFrame = msg.Frame;
             a.LastPoseBoatIndex = msg.BoatIndex;
             a.HasPoseFrame = true;
 
-            a.Net.Push(msg.Tick, msg.Pos, msg.Rot, msg.Vel);
-            a.PoseDetails.Push(msg);
+            a.Poses[a.Poses.Count - 1].Push(msg);
             a.StateAt = Time.unscaledTime;
 
             var emote = (EmoteId)msg.Emote;
@@ -1028,6 +1059,29 @@ namespace SailwindCoop.Sync
                 a.PendingEmoteVoiceTick = msg.EmoteTick;
             a.Emote = emote;
             a.EmoteTick = msg.EmoteTick;
+        }
+
+        private static void InsertReorderedPose(RemoteAvatar avatar, PlayerStateMsg msg)
+        {
+            int index = avatar.Poses.Count - 1;
+            while (index >= 0 && msg.Tick < avatar.Poses[index].Start) index--;
+            var previous = index >= 0 ? avatar.Poses[index] : null;
+            if (previous != null && previous.Matches(msg))
+            {
+                if (msg.Tick != previous.Start) previous.Push(msg);
+                return;
+            }
+            if (index + 1 >= avatar.Poses.Count) return;
+            var next = avatar.Poses[index + 1];
+            long playedTick = avatar.PlaybackFrame >= 0 ? avatar.PlaybackTick : long.MinValue;
+            if (!PoseSupportOrder.CanPrepend(msg.Tick, playedTick, previous?.LastTick ?? long.MinValue, next.Start)) return;
+            if (next.Matches(msg)) next.Prepend(msg);
+            else if (avatar.Poses.Count < 32)
+            {
+                var intermediate = new PoseSegment(msg);
+                intermediate.Push(msg);
+                avatar.Poses.Insert(index + 1, intermediate);
+            }
         }
 
         // -----------------------------------------------------------------
@@ -1041,28 +1095,22 @@ namespace SailwindCoop.Sync
             long now = localNow + (long)_net.Clock.OffsetMs;
             foreach (var a in _remotes.Values)
             {
-                if (a.Go == null) continue;
+                if (a.Go == null || a.Poses.Count == 0) continue;
                 long renderTick = RenderTick(a, localNow, now);
-                if (a.LastPoseFrame == CoordFrame.Boat)
-                {
-                    var boat = BoatLocator.FindByIndex(a.LastPoseBoatIndex);
-                    if (boat == null) { a.PoseBoat = null; continue; }
-                    if (a.PoseBoat != boat)
-                    {
-                        a.PoseBoat = boat;
-                        a.BoatToWorldPos = boat.TransformPoint;
-                        a.BoatToWorldRot = q => boat.rotation * q;
-                    }
-                    a.Net.ToWorldPos = a.BoatToWorldPos;
-                    a.Net.ToWorldRot = a.BoatToWorldRot;
-                }
-                else
-                {
-                    a.Net.ToWorldPos = RealToLocalPos;
-                    a.Net.ToWorldRot = IdentityRot;
-                }
-                ApplyPoseDetails(a, renderTick);
-                a.Net.ApplyAt(a.Go.transform, renderTick);
+                int index = 0;
+                while (index + 1 < a.Poses.Count && a.Poses[index + 1].Start <= renderTick) index++;
+                var pose = a.Poses[index];
+                if (!pose.Resolve()) continue;
+                if (index != 0) a.Poses.RemoveRange(0, index);
+                if (a.RenderedPose != pose) a.HasAnimSnapshot = false;
+                a.RenderedPose = pose;
+                ApplyPoseDetails(a, pose, renderTick);
+                // The two positions are in different supports. Bridge only nearby samples,
+                // after projecting both through the decks already placed this frame.
+                var next = a.Poses.Count > 1 ? a.Poses[1] : null;
+                if (next == null || renderTick <= pose.LastTick || !next.Resolve() ||
+                    !pose.Net.TryApplyTransition(a.Go.transform, next.Net, pose.LastTick, next.Start, renderTick))
+                    pose.Net.ApplyAt(a.Go.transform, renderTick);
                 if (a.WaitingForFirstPose)
                 {
                     a.WaitingForFirstPose = false;
@@ -1111,9 +1159,9 @@ namespace SailwindCoop.Sync
                 pose.Apply(target, serverNow);
         }
 
-        private void ApplyPoseDetails(RemoteAvatar avatar, long tick)
+        private void ApplyPoseDetails(RemoteAvatar avatar, PoseSegment pose, long tick)
         {
-            var snapshots = avatar.PoseDetails;
+            var snapshots = pose.Details;
             if (snapshots.Count == 0) return;
             var from = snapshots[0];
             var to = from;
@@ -1127,7 +1175,7 @@ namespace SailwindCoop.Sync
             if (!avatar.HasAnimSnapshot || from.Tick > avatar.LastAnimTick)
                 UpdateAnimatorTargets(avatar, from);
             var head = Quaternion.Slerp(from.HeadRot, to.HeadRot, fraction);
-            avatar.HeadWorldRot = avatar.PoseBoat != null ? avatar.PoseBoat.rotation * head : head;
+            avatar.HeadWorldRot = pose.Boat != null ? pose.Boat.rotation * head : head;
             avatar.Hands = from.Hands;
             avatar.HandR = (from.Hands & to.Hands & PlayerStateMsg.HandRight) != 0
                 ? Vector3.Lerp(from.HandR, to.HandR, fraction) : from.HandR;
@@ -1561,18 +1609,19 @@ namespace SailwindCoop.Sync
             AvatarVisualOffsetDriver offset = a.Rig != null ? a.Rig.Offset : null;
             if (offset != null)
             {
-                offset.Lying = lying && a.Net.ToWorldPos != null && a.Net.ToWorldRot != null;
-                if (a.Net.ToWorldPos != null && a.Net.ToWorldRot != null)
+                var pose = a.RenderedPose;
+                offset.Lying = lying && pose != null;
+                if (offset.Lying)
                 {
                     // Койка задана в кадре лодки или мира; драйверу она нужна относительно корня
                     // аватара. Обе стороны берутся в одном кадре, поэтому задержка интерполяции
                     // корня в результат не попадает.
                     Transform root = a.Go.transform;
                     Quaternion inv = Quaternion.Inverse(root.rotation);
-                    offset.LieHead = inv * (a.Net.ToWorldPos(a.LieHead) - root.position);
-                    offset.LieDir = inv * (a.Net.ToWorldRot(Quaternion.identity) * a.LieDir);
+                    offset.LieHead = inv * (pose.Net.ToWorldPos(a.LieHead) - root.position);
+                    offset.LieDir = inv * (pose.Net.ToWorldRot(Quaternion.identity) * a.LieDir);
                 }
-                offset.LieUp = a.LastPoseFrame == CoordFrame.Boat ? a.PoseBoat : null;
+                offset.LieUp = pose?.Boat;
             }
 
             ApplyAnimatorParams(a);
