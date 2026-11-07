@@ -2700,6 +2700,18 @@ namespace SailwindCoop.Sync
         public void OnSpawnObject(SpawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item || _tombstones.Contains(msg.InstanceId)) return;
+            if (_pendingClientItems.TakeSoldBeforeBind(msg.AuthorRequester, _net.MyNetId, msg.AuthorRequestId,
+                msg.PrefabIndex, msg.InstanceId))
+            {
+                // This is the receipt for a purchase already sold locally. Suppress the echo before
+                // binding or spawning and finish the sale using the host's actual item id.
+                _tombstones.Add(msg.InstanceId);
+                _pendingSpawns.Remove(msg.InstanceId);
+                _pendingStates.Remove(msg.InstanceId);
+                _spawnWait.Remove(msg.InstanceId);
+                SendSold(msg.InstanceId, msg.PrefabIndex);
+                return;
+            }
             if (!_baselineReady) { _pendingSpawns[msg.InstanceId] = msg; return; }
             using (InteractionContext.Begin(InteractionSource.Baseline))
             {
@@ -4186,15 +4198,25 @@ namespace SailwindCoop.Sync
         /// <summary>
         /// Client: a shared item was sold to a shopkeeper locally (own wallet credited by vanilla, item
         /// destroyed locally). Tell the host to destroy its authoritative copy so it despawns for everyone.
-        /// Reuses the Consume action (host destroys its copy by id). Call BEFORE the local destroy.
+        /// Reuses the Consume action (host destroys its copy by id). Capture the ids before local destruction.
         /// </summary>
         public void NotifySold(int instanceId, int prefabIndex)
+            => NotifySold(null, instanceId, prefabIndex);
+
+        internal void NotifySold(ShipItem item, int instanceId, int prefabIndex)
         {
             if (InteractionContext.Suppressed) return;
             if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
-            if (instanceId <= 0 || prefabIndex <= 0) return;
-            if (!_hostIds.Contains(instanceId)) return;
+            if (prefabIndex <= 0) return;
+            // Check the object first: its temporary id can even match an unrelated host item.
+            if (_pendingClientItems.MarkSoldBeforeBind(item, prefabIndex)) return;
+            if (instanceId <= 0 || !_hostIds.Contains(instanceId)) return;
+            SendSold(instanceId, prefabIndex);
+        }
+
+        private void SendSold(int instanceId, int prefabIndex)
+        {
             _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = instanceId, PrefabIndex = prefabIndex },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("out sold(despawn) id=" + instanceId);

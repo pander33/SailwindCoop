@@ -42,6 +42,7 @@ namespace SailwindCoop.Sync
 
         private static bool _resolved;
         private static Assembly _assembly;
+        private static MethodInfo _boughtBack;
         private static CoopLog.Repeat _faults;
 
         internal static bool Present => Resolve();
@@ -101,6 +102,13 @@ namespace SailwindCoop.Sync
             Prefix("Bottomry", "RepayRemote", nameof(RefuseBool));
             Prefix("Bottomry", "RepayAtBox", nameof(RefuseVoid));
             Prefix("Loans", "Use", nameof(RefuseFinancedUse));
+            try
+            {
+                var bottomry = T("Bottomry");
+                _boughtBack = bottomry != null ? AccessTools.Method(bottomry, "BoughtBack", new[] { typeof(PurchasableBoat) }) : null;
+                if (_boughtBack == null) Plugin.Logger.LogWarning("[EconomyOverhaul] not found: Bottomry.BoughtBack");
+            }
+            catch (Exception e) { Fault("find buyback", e); }
             total += 3;
             try
             {
@@ -136,6 +144,9 @@ namespace SailwindCoop.Sync
 
             // One set of markets (MarketSync).
             ApplyMarkets(harmony, ref ok, ref total);
+            total++;
+            if (ShopPatches.PatchPurchaseDebit(harmony, T("FxShops"), "Trade",
+                new[] { typeof(Shopkeeper), typeof(ShipItem), typeof(bool) })) ok++;
 
             _offers = Field("Missions", "offerModifiers");
             _sources = Field("Missions", "sources");
@@ -174,6 +185,13 @@ namespace SailwindCoop.Sync
             : new HarmonyMethod(typeof(EconomyOverhaulCompat).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic));
 
         // ---- Finance ---------------------------------------------------------
+
+        // A guest purchase bypasses EO's local purchase-button finalizer on the host.
+        internal static void CompleteRemoteBuyback(PurchasableBoat boat)
+        {
+            try { _boughtBack?.Invoke(null, new object[] { boat }); }
+            catch (Exception e) { Fault("complete remote buyback", e); }
+        }
 
         private static bool SkipOnClient() => !IsClient;
 

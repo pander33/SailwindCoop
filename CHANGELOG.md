@@ -14,6 +14,10 @@ Everyone must update to wire protocol 105.
 - Market stock and currency rates reconcile immediately after a trade acknowledgement, including
   replies with no changed values after compensating crew trades.
 - Returned or seized boats ignore late movement packets instead of becoming frozen copies again.
+- Refused shop sales leave shared items in place. Economy Overhaul shelf purchases sync regardless
+  of patch load order, and a guest's buyback clears the seizure in the host's save.
+- Paid shop purchases still sync if a later market or UI update fails. A guest can resell an item
+  before its host id arrives and the host removes it once the purchase is acknowledged.
 
 - Passing or dropping a fishing rod preserves its latest fish, line state and simulation timers
   before the new owner starts simulating it.

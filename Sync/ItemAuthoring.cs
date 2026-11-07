@@ -9,6 +9,7 @@ namespace SailwindCoop.Sync
             internal T Item;
             internal int Prefab;
             internal int HostId;
+            internal bool Sold;
         }
         private readonly Dictionary<uint, Request> requests = new Dictionary<uint, Request>();
         internal bool Contains(T item)
@@ -26,6 +27,25 @@ namespace SailwindCoop.Sync
             return pending.Item;
         }
         internal void Bind(uint request, int hostId) => requests[request].HostId = hostId;
+        internal bool MarkSoldBeforeBind(T item, int prefab)
+        {
+            if (item == null) return false;
+            foreach (var request in requests.Values)
+            {
+                if (request.HostId != 0 || request.Prefab != prefab || !ReferenceEquals(request.Item, item)) continue;
+                request.Sold = true;
+                return true;
+            }
+            return false;
+        }
+
+        internal bool TakeSoldBeforeBind(uint requester, uint localPlayer, uint request, int prefab, int hostId)
+        {
+            if (requester != localPlayer || request == 0 || hostId <= 0 ||
+                !requests.TryGetValue(request, out var pending) || !pending.Sold || pending.Prefab != prefab) return false;
+            return requests.Remove(request);
+        }
+
         /// <summary>True while this request is held and its item still exists: a spawn naming it is
         /// that item's host copy and must wait for it rather than create a second one.</summary>
         internal bool Awaits(uint request, System.Func<T, bool> exists)

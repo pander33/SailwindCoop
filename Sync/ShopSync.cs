@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using SailwindCoop.Net;
 using UnityEngine;
@@ -41,10 +43,12 @@ namespace SailwindCoop.Sync
             Remember("bought '" + item.name + "'");
         }
 
-        /// <summary>A good is about to be sold locally (own wallet); have the host despawn its copy.</summary>
-        public void OnSold(int instanceId, int prefabIndex)
+        /// <summary>A sale destroyed a local good after paying the seller. Despawn the host's copy.</summary>
+        public void OnSold(int instanceId, int prefabIndex) => OnSold(null, instanceId, prefabIndex);
+
+        internal void OnSold(ShipItem item, int instanceId, int prefabIndex)
         {
-            ItemSync.Instance?.NotifySold(instanceId, prefabIndex);
+            ItemSync.Instance?.NotifySold(item, instanceId, prefabIndex);
             Remember("sold id=" + instanceId);
         }
 
@@ -148,22 +152,27 @@ namespace SailwindCoop.Sync
 
     /// <summary>
     /// Harmony bridge: let the vanilla shop run locally (so each player pays from their own wallet) and
-    /// forward only the item consequence to the host. Buy = <c>Shopkeeper.TryToSellItem</c>; the postfix
-    /// fires when the good actually became <c>sold</c>. Sell = <c>Shopkeeper.TryToBuyItem</c>; the prefix
-    /// forwards the despawn before vanilla destroys the item (Destroy is deferred to end-of-frame, so the
-    /// reference isn't reliably Unity-null in a postfix).
+    /// forward only the item consequence to the host. Buy = <c>Shopkeeper.TryToSellItem</c>; the
+    /// finalizer also reports a paid purchase if later UI work throws. Sell = <c>Shopkeeper.TryToBuyItem</c>; only a
+    /// completed <c>DestroyItem</c> for the offered item inside that call sends a despawn.
     /// </summary>
     public static class ShopPatches
     {
         public static void Apply(Harmony harmony)
         {
-            bool buy = TryPatch(harmony, "TryToSellItem", nameof(PreBuy), nameof(PostBuy));
-            bool sell = TryPatch(harmony, "TryToBuyItem", nameof(PreSell), null);
-            Plugin.Logger.LogInfo("[ShopPatches] Shop patches (local money): buy(TryToSellItem)=" + buy + ", sell(TryToBuyItem)=" + sell);
-            SailwindCoop.Runtime.PatchHealth.Report("Shop", (buy ? 1 : 0) + (sell ? 1 : 0), 2);
+            bool buy = TryPatch(harmony, "TryToSellItem", nameof(PreBuy), nameof(FinishBuy));
+            bool payment = buy && PatchPurchaseDebit(harmony, typeof(Shopkeeper), "SellItem",
+                new[] { typeof(ShipItem), typeof(int), typeof(int) });
+            bool sell = PatchDestroy(harmony) &&
+                        TryPatch(harmony, "TryToBuyItem", nameof(PreSell), nameof(FinishSell));
+            Plugin.Logger.LogInfo("[ShopPatches] Shop patches: buy=" + buy + ", payment=" + payment + ", sell=" + sell);
+            SailwindCoop.Runtime.PatchHealth.Report("Shop", (buy ? 1 : 0) + (payment ? 1 : 0) + (sell ? 1 : 0), 3);
         }
 
-        private static bool TryPatch(Harmony harmony, string method, string prefixName, string postfixName)
+        private static HarmonyMethod Hook(string name, int priority = Priority.Normal) => name == null ? null :
+            new HarmonyMethod(typeof(ShopPatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)) { priority = priority };
+
+        private static bool TryPatch(Harmony harmony, string method, string prefixName, string finalizerName)
         {
             try
             {
@@ -171,9 +180,8 @@ namespace SailwindCoop.Sync
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
                     null, new[] { typeof(ShipItem) }, null);
                 if (mi == null) return false;
-                var prefix = prefixName == null ? null : new HarmonyMethod(typeof(ShopPatches).GetMethod(prefixName, BindingFlags.Static | BindingFlags.NonPublic));
-                var postfix = postfixName == null ? null : new HarmonyMethod(typeof(ShopPatches).GetMethod(postfixName, BindingFlags.Static | BindingFlags.NonPublic));
-                harmony.Patch(mi, prefix: prefix, postfix: postfix);
+                // Economy Overhaul performs the transaction in its normal-priority prefix.
+                harmony.Patch(mi, prefix: Hook(prefixName, Priority.First), finalizer: Hook(finalizerName));
                 return true;
             }
             catch (Exception e)
@@ -183,55 +191,174 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private sealed class BuyState
+        private static bool PatchDestroy(Harmony harmony)
         {
-            public bool WasSold;
-            public bool HasPlace;
-            public Vector3 Place;
-            public int PrefabIndex;
-        }
-
-        // Buy: record whether the good was already sold so the postfix can detect a fresh purchase,
-        // and its shelf place, which the purchase forgets.
-        private static void PreBuy(ShipItem item, out BuyState __state)
-        {
-            __state = new BuyState { WasSold = true };
             try
             {
-                if (item == null) return;
-                __state.WasSold = item.sold;
+                var target = AccessTools.Method(typeof(ShipItem), nameof(ShipItem.DestroyItem), Type.EmptyTypes);
+                if (target == null) return false;
+                harmony.Patch(target, postfix: Hook(nameof(PostDestroy), Priority.First));
+                return true;
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ShopPatches] DestroyItem: " + e.Message);
+                return false;
+            }
+        }
+
+        // Harmony runs the transpiler synchronously during Patch. Track this installation
+        // separately from any later rebuild of the method by Harmony.
+        [ThreadStatic] private static MethodBase _pendingDebitMarker;
+
+        internal static bool PatchPurchaseDebit(Harmony harmony, Type type, string name, Type[] args)
+        {
+            var previousProbe = _pendingDebitMarker;
+            try
+            {
+                var target = type != null ? AccessTools.Method(type, name, args) : null;
+                if (target == null) throw new MissingMethodException(type?.FullName ?? "FxShops", name);
+                _pendingDebitMarker = target;
+                harmony.Patch(target, transpiler: Hook(nameof(AfterPurchaseDebit)));
+                return _pendingDebitMarker == null;
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[ShopPatches] " + name + " payment hook: " + e.Message);
+                return false;
+            }
+            finally { _pendingDebitMarker = previousProbe; }
+        }
+
+        private static IEnumerable<CodeInstruction> AfterPurchaseDebit(IEnumerable<CodeInstruction> instructions, MethodBase original)
+        {
+            var code = new List<CodeInstruction>(instructions);
+            var sell = AccessTools.Method(typeof(ShipItem), nameof(ShipItem.Sell), Type.EmptyTypes);
+            var wallet = AccessTools.Field(typeof(PlayerGold), nameof(PlayerGold.currency));
+            int debit = -1;
+            // Both shops call item.Sell(), then do PlayerGold.currency[currency] -= price.
+            // Mark the write itself so a zero-price purchase counts too.
+            // On a mismatch keep the input IL: Harmony may run this transpiler again when another mod patches the method.
+            for (int i = 0; i + 8 < code.Count; i++)
+            {
+                if (!code[i].Calls(sell) || code[i + 1].opcode != OpCodes.Ldsfld || !Equals(code[i + 1].operand, wallet) ||
+                    code[i + 3].opcode != OpCodes.Ldelema || !Equals(code[i + 3].operand, typeof(int)) ||
+                    code[i + 4].opcode != OpCodes.Dup || code[i + 5].opcode != OpCodes.Ldind_I4 ||
+                    code[i + 7].opcode != OpCodes.Sub || code[i + 8].opcode != OpCodes.Stind_I4) continue;
+                if (debit >= 0)
+                {
+                    Plugin.Logger.LogWarning("[ShopPatches] " + original + ": more than one shop payment site");
+                    return code;
+                }
+                debit = i + 8;
+            }
+            if (debit < 0)
+            {
+                Plugin.Logger.LogWarning("[ShopPatches] " + original + ": shop payment after ShipItem.Sell was not found");
+                return code;
+            }
+            // item is IL argument 1 in both the instance method and EO's static (shop, item, ...) method.
+            code.Insert(debit + 1, new CodeInstruction(OpCodes.Ldarg_1));
+            code.Insert(debit + 2, new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(ShopPatches), nameof(MarkPurchasePaid))));
+            if (Equals(_pendingDebitMarker, original)) _pendingDebitMarker = null;
+            return code;
+        }
+
+        private sealed class BuyState
+        {
+            internal BuyState Previous;
+            internal ShipItem Item;
+            internal bool Paid, HasPlace;
+            internal Vector3 Place;
+            internal int PrefabIndex;
+        }
+
+        private static BuyState _buy;
+
+        private static void PreBuy(ShipItem item, out BuyState __state)
+        {
+            __state = null;
+            try
+            {
+                if (item == null || item.sold) return;
+                var state = new BuyState { Previous = _buy, Item = item };
                 var prefab = item.GetComponent<SaveablePrefab>();
-                if (prefab == null) return;
-                __state.PrefabIndex = prefab.prefabIndex;
-                __state.HasPlace = ShopSync.ShelfPlace(item, out __state.Place);
+                if (prefab != null)
+                {
+                    state.PrefabIndex = prefab.prefabIndex;
+                    state.HasPlace = ShopSync.ShelfPlace(item, out state.Place);
+                }
+                __state = _buy = state;
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] PreBuy: " + e.Message); }
         }
 
-        private static void PostBuy(ShipItem item, BuyState __state)
+        private static void MarkPurchasePaid(ShipItem item)
         {
+            if (_buy != null && ReferenceEquals(_buy.Item, item)) _buy.Paid = true;
+        }
+
+        private static void FinishBuy(BuyState __state, Exception __exception)
+        {
+            if (__state == null || _buy != __state) return;
+            _buy = __state.Previous;
             try
             {
-                if (item == null || !item.sold || __state == null || __state.WasSold) return;
+                var item = __state.Item;
+                if (item == null || !item.sold || (__exception != null && !__state.Paid)) return;
                 ShopSync.Instance?.OnBought(item);
                 if (__state.HasPlace) ShopSync.Instance?.OnShelfBought(__state.PrefabIndex, __state.Place);
             }
-            catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] PostBuy: " + e.Message); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] FinishBuy: " + e.Message); }
         }
 
-        // Sell: forward the despawn before vanilla destroys the item. TryToBuyItem only bails when the
-        // item is a crate that still has contents — replicate that check so we don't despawn a no-op.
-        private static void PreSell(ShipItem item)
+        private sealed class Sale
         {
+            internal Sale Previous;
+            internal ShipItem Item;
+            internal int InstanceId, PrefabIndex;
+            internal bool Destroyed;
+        }
+
+        private static Sale _sale;
+
+        private static void PreSell(ShipItem item, out Sale __state)
+        {
+            __state = null;
             try
             {
-                if (item == null) return;
-                var inv = item.GetComponent<CrateInventory>();
-                if (inv != null && inv.containedItems != null && inv.containedItems.Count > 0) return;
-                var sv = item.GetComponent<SaveablePrefab>();
-                if (sv != null) ShopSync.Instance?.OnSold(sv.instanceId, sv.prefabIndex);
+                if (item == null || ItemSync.Instance?.IsClientSession != true) return;
+                // DestroyItem unregisters the item, so retain its identity before the transaction.
+                var save = item.GetComponent<SaveablePrefab>();
+                if (save == null) return;
+                __state = _sale = new Sale
+                {
+                    Previous = _sale, Item = item, InstanceId = save.instanceId, PrefabIndex = save.prefabIndex
+                };
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] PreSell: " + e.Message); }
+        }
+
+        private static void PostDestroy(ShipItem __instance, bool __runOriginal)
+        {
+            if (!__runOriginal) return;
+            for (var sale = _sale; sale != null; sale = sale.Previous)
+            {
+                if (!ReferenceEquals(sale.Item, __instance)) continue;
+                sale.Destroyed = true;
+                return;
+            }
+        }
+
+        private static void FinishSell(Sale __state)
+        {
+            if (__state == null || _sale != __state) return;
+            _sale = __state.Previous;
+            try
+            {
+                if (__state.Destroyed) ShopSync.Instance?.OnSold(__state.Item, __state.InstanceId, __state.PrefabIndex);
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] FinishSell: " + e.Message); }
         }
     }
 }

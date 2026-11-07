@@ -67,6 +67,10 @@ namespace SailwindCoop.Sync
                 if (boat != null)
                 {
                     boat.LoadAsPurchased();   // extraSetting = true + hide for-sale UI, no money charged
+                    // The native helper only sets the flag when the for-sale UI has been registered.
+                    so.extraSetting = true;
+                    if (_net.Role == Role.Host)
+                        EconomyOverhaulCompat.CompleteRemoteBuyback(boat);
                     Plugin.Logger.LogInfo("[ShipyardSync] in boat purchase sceneIndex=" + msg.SceneIndex + " marked");
                 }
                 else

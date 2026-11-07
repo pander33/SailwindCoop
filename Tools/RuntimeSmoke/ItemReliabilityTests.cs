@@ -88,6 +88,20 @@ internal static class ItemReliabilityTests
             Assert(!authoring.Awaits(13, x => true), "an author mark this client no longer holds still waits");
             authoring.Clear(); Assert(!authoring.Awaits(14, x => true), "request of an earlier session still waits");
         });
+        test("a sold pending purchase consumes only its own host receipt", () => {
+            var authoring = new ItemAuthoring<object>(); var sold = new object(); var kept = new object();
+            authoring.Add(14, sold, 110); authoring.Add(15, kept, 110);
+            Assert(authoring.MarkSoldBeforeBind(sold, 110), "sale did not attach to its pending purchase");
+            authoring.Prune(x => ReferenceEquals(x, kept));
+            Assert(!authoring.TakeSoldBeforeBind(2, 1, 14, 110, 901), "foreign receipt consumed the sale");
+            Assert(!authoring.TakeSoldBeforeBind(1, 1, 14, 111, 901), "wrong prefab consumed the sale");
+            Assert(!authoring.TakeSoldBeforeBind(1, 1, 15, 110, 902), "unsold purchase was consumed");
+            Assert(authoring.TakeSoldBeforeBind(1, 1, 14, 110, 901), "matching receipt lost the sale after local destruction");
+            Assert(!authoring.TakeSoldBeforeBind(1, 1, 14, 110, 901), "duplicate receipt repeated the sale");
+            Assert(ReferenceEquals(authoring.Resolve(1, 1, 15, 110, 902), kept), "other purchase lost its receipt");
+            authoring.Bind(15, 902);
+            Assert(!authoring.MarkSoldBeforeBind(kept, 110), "bound purchase deferred a normal sale");
+        });
         test("a host item without a local counterpart is reported once and then retried slowly", () => {
             var wait = new SpawnWait(); bool report; int reports = 0, tries = 0;
             for (float now = 0f; now < SpawnWait.ReportAfter; now += 0.25f)

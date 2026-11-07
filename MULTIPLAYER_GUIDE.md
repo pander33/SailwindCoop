@@ -469,8 +469,9 @@ owns them:
 - A guest's plank repair and pole bracing act on the host's ship.
 - **The host's markets are everyone's.** Stock and prices at every port, port capacity, demand
   events and currency rates follow the host's game; a guest's own market simulation stays off while
-  connected. What a guest buys or sells, in the trade book, in shops or at the currency booth,
-  changes the shared markets. The shared wallet is therefore safe with the mod.
+  connected. Guest trades in the book, at shops and at currency booths update the shared markets.
+- A completed shop sale removes the item for the crew. Buying from a shelf shares the purchased
+  item and clears its place. A guest's buyback clears the seizure from the host's world.
 - **Still per player:** the price reports of other ports in the trade book, the visible traders
   (each game sails its own), cargo water damage and fragile damage. A guest may see a trader the
   host does not, or a slightly different condition on the same crate.
