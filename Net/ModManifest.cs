@@ -16,6 +16,18 @@ namespace SailwindCoop.Net
         public const int MaxTextChars = 128;
         public const int ChunkSize = 16 * 1024;
         public const int HashBytes = 32;
+        public const int MaxSettings = 64;
+    }
+
+    /// <summary>The value of one config entry of another mod, as the host's config file holds it.
+    /// Only entries of <c>ModCatalog.SimulationSettings</c> travel, and only when their plugin is
+    /// loaded and the entry could be read.</summary>
+    public sealed class ModSetting
+    {
+        public string Guid = "";
+        public string Section = "";
+        public string Key = "";
+        public string Value = "";
     }
 
     /// <summary>One BepInEx plugin inside a shared mod.</summary>

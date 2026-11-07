@@ -24,6 +24,10 @@ namespace SailwindCoop.Net
         public int[] Parts = Array.Empty<int>();
         public NetSailConfiguration[] Sails = Array.Empty<NetSailConfiguration>();
         public byte[] Dirt = Array.Empty<byte>();
+        /// <summary>Shipyard Expansion's per-sail entry for the hull (angle, jib flip, texture), empty
+        /// without that mod (protocol 101). See <c>Sync/ShipyardExpansionRig.cs</c>.</summary>
+        public string ModRig = "";
+        public const int MaxModRigChars = 16 * 1024;
         public abstract MsgType Type { get; }
         public void Serialize(NetDataWriter w)
         {
@@ -33,6 +37,9 @@ namespace SailwindCoop.Net
             w.Put((ushort)Parts.Length); foreach (int part in Parts) w.Put(part);
             w.Put((ushort)Sails.Length); foreach (var sail in Sails) sail.Write(w);
             w.Put(Dirt.Length); w.Put(Dirt);
+            string rig = ModRig ?? "";
+            if (rig.Length > MaxModRigChars) rig = ""; // never send a cut entry: the receiver would parse it
+            w.Put(rig, MaxModRigChars);
         }
         public void Deserialize(NetDataReader r)
         {
@@ -44,6 +51,7 @@ namespace SailwindCoop.Net
             Sails = new NetSailConfiguration[count]; for (int i = 0; i < count; i++) { Sails[i] = new NetSailConfiguration(); Sails[i].Read(r); }
             count = r.GetInt(); if (count < 0 || count > r.AvailableBytes) throw new InvalidDataException("truncated refit dirt");
             Dirt = new byte[count]; r.GetBytes(Dirt, count);
+            ModRig = r.GetString(MaxModRigChars);
         }
     }
     public sealed class RefitRequestMsg : RefitBody { public override MsgType Type => MsgType.RefitRequest; }

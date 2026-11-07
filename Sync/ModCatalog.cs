@@ -26,6 +26,22 @@ namespace SailwindCoop.Sync
         Different,
     }
 
+    /// <summary>A config entry of another mod that host and client should share; see
+    /// <see cref="ModCatalog.SimulationSettings"/>.</summary>
+    public sealed class ModSettingRule
+    {
+        public readonly string Mod, Guid, Section, Key, Note;
+        public ModSettingRule(string mod, string guid, string section, string key, string note)
+        { Mod = mod; Guid = guid; Section = section; Key = key; Note = note; }
+    }
+
+    public sealed class ModSettingDiff
+    {
+        public ModSettingRule Rule;
+        public string Host = "";
+        public string Local = "";
+    }
+
     public sealed class ModDiff
     {
         public int Index;
@@ -281,6 +297,58 @@ namespace SailwindCoop.Sync
         }
 
         public static bool IsDll(string path) => path != null && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Config entries of other mods that change the shared simulation, so host and client should
+        /// have the same value. Only what changes the boats, prefabs or physics both machines run is
+        /// here; local input, interface and personal settings may differ freely. The reasons are in
+        /// <c>MOD_COMPAT_PLAN.md</c>. Adding a mod means adding rows.
+        /// </summary>
+        public static readonly ModSettingRule[] SimulationSettings =
+        {
+            // Creates sail prefabs 156-158; a refit naming them fails where they do not exist.
+            new ModSettingRule("Shipyard Expansion", "com.nandbrew.shipyardexpansion", "Settings", "Add lug sails", "needs a restart"),
+            // Adds a script that drives a topsail's hinge from the sail below.
+            new ModSettingRule("Shipyard Expansion", "com.nandbrew.shipyardexpansion", "Settings", "Link topmasts", "needs a restart"),
+            // Adds towing cleats (buttons and mooring points) to cog, dhow and kakam.
+            new ModSettingRule("Towable Boats", "com.nandbrew.towableboats", "Settings", "Small boats can tow", "needs a restart"),
+            // Scales the brig's anchor windlass.
+            new ModSettingRule("Anchor Improvements", "com.nandbrew.anchorimprovements", "Options", "Resize brig anchor", "needs a reload"),
+        };
+
+        /// <summary>Settings whose host and local values both exist and differ. A setting present on
+        /// one side only is not reported: its mod is then missing on the other side (shown with the
+        /// mod list), or its value could not be read there (logged by the reader).</summary>
+        public static List<ModSettingDiff> CompareSettings(IEnumerable<ModSetting> host, IEnumerable<ModSetting> local)
+        {
+            var result = new List<ModSettingDiff>();
+            if (host == null || local == null) return result;
+            var mine = new List<ModSetting>(local);
+            foreach (ModSetting theirs in host)
+            {
+                if (theirs == null) continue;
+                ModSettingRule rule = FindRule(theirs.Guid, theirs.Section, theirs.Key);
+                if (rule == null) continue; // a row a newer host knows: nothing to compare it with
+                ModSetting own = mine.Find(s => s != null && Same(s.Guid, theirs.Guid) && Same(s.Section, theirs.Section) && Same(s.Key, theirs.Key));
+                if (own == null || Same(own.Value, theirs.Value)) continue;
+                result.Add(new ModSettingDiff { Rule = rule, Host = theirs.Value ?? "", Local = own.Value ?? "" });
+            }
+            return result;
+        }
+
+        /// <summary>One line per difference, for the menu and the log.</summary>
+        public static string DescribeSetting(ModSettingDiff diff) =>
+            diff.Rule.Mod + ": \"" + diff.Rule.Key + "\" host " + diff.Host + ", you " + diff.Local +
+            " [" + diff.Rule.Section + "], " + diff.Rule.Note;
+
+        public static ModSettingRule FindRule(string guid, string section, string key)
+        {
+            foreach (ModSettingRule rule in SimulationSettings)
+                if (Same(rule.Guid, guid) && Same(rule.Section, section) && Same(rule.Key, key)) return rule;
+            return null;
+        }
+
+        private static bool Same(string a, string b) => string.Equals(a ?? "", b ?? "", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>Files that are never listed: debug symbols and this mod's own marker files.</summary>
         private static bool Skipped(string relative)

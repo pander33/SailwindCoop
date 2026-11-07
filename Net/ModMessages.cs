@@ -17,6 +17,8 @@ namespace SailwindCoop.Net
         /// <summary>The host lets clients download the listed files.</summary>
         public bool FilesOffered;
         public ModEntry[] Mods = new ModEntry[0];
+        /// <summary>The host's values of settings that change the shared simulation (protocol 101).</summary>
+        public ModSetting[] Settings = new ModSetting[0];
 
         public MsgType Type => MsgType.ModManifest;
 
@@ -49,6 +51,16 @@ namespace SailwindCoop.Net
                     w.Put(file.Size);
                     w.Put(file.Hash);
                 }
+            }
+            int settings = Math.Min(Settings.Length, ModLimits.MaxSettings);
+            w.Put((byte)settings);
+            for (int s = 0; s < settings; s++)
+            {
+                ModSetting setting = Settings[s];
+                w.Put(Clip(setting.Guid));
+                w.Put(Clip(setting.Section));
+                w.Put(Clip(setting.Key));
+                w.Put(Clip(setting.Value));
             }
         }
 
@@ -87,6 +99,19 @@ namespace SailwindCoop.Net
                 }
                 Mods[i] = mod;
             }
+            int settings = r.GetByte();
+            // Four strings of at least their length prefix each.
+            if (settings > ModLimits.MaxSettings || settings * 4 * sizeof(ushort) > r.AvailableBytes)
+                throw new InvalidDataException("too many mod settings");
+            Settings = new ModSetting[settings];
+            for (int s = 0; s < settings; s++)
+                Settings[s] = new ModSetting
+                {
+                    Guid = r.GetString(ModLimits.MaxTextChars),
+                    Section = r.GetString(ModLimits.MaxTextChars),
+                    Key = r.GetString(ModLimits.MaxTextChars),
+                    Value = r.GetString(ModLimits.MaxTextChars),
+                };
         }
 
         private static string Clip(string text)

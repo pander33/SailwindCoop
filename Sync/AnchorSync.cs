@@ -117,16 +117,19 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[AnchorSync] pickup role=" + _net.Role + " boat=" + _boatId);
         }
 
-        public void NotifyDrop(Anchor anchor)
+        /// <param name="throwVelocity">World-space velocity a mod's throw is about to give the anchor
+        /// (<see cref="AnchorThrow"/>); zero for a plain drop. On the host the throw lands on the real
+        /// body by itself.</param>
+        public void NotifyDrop(Anchor anchor, Vector3 throwVelocity = default(Vector3))
         {
             if (InteractionContext.Suppressed) return;
-            if (_fleet != null) { ForAnchor(anchor)?.NotifyDrop(anchor); return; }
+            if (_fleet != null) { ForAnchor(anchor)?.NotifyDrop(anchor, throwVelocity); return; }
             if (!Connected || anchor != _anchor) return;
             _holder = 0;
             _remoteHeldPose = null;
             _slave.Clear(); _haveFrame = false; _haveLast = false;
             if (_collider != null) _collider.isTrigger = false;
-            if (_net.Role == Role.Client) { SendRequest(false, true); EnsureSlaved(false); }
+            if (_net.Role == Role.Client) { SendRequest(false, true, throwVelocity); EnsureSlaved(false); }
             else if (_net.Role == Role.Host)
             {
                 RestoreSlaved();
@@ -165,7 +168,7 @@ namespace SailwindCoop.Sync
             return Connected && anchor == _anchor && !LocalHeld && (_net.Role == Role.Client || _holder != 0);
         }
 
-        private void SendRequest(bool held, bool transition)
+        private void SendRequest(bool held, bool transition, Vector3 throwVelocity = default(Vector3))
         {
             uint request = 0;
             if (transition)
@@ -182,7 +185,7 @@ namespace SailwindCoop.Sync
                 Frame = onDeck ? CoordFrame.Boat : CoordFrame.World,
                 Pos = onDeck ? _boat.InverseTransformPoint(_anchor.transform.position) : CoordSpace.LocalToReal(_anchor.transform.position),
                 Rot = onDeck ? Quaternion.Inverse(_boat.rotation) * _anchor.transform.rotation : _anchor.transform.rotation,
-                Vel = !held && _body != null ? _body.velocity : Vector3.zero,
+                Vel = !held && _body != null ? _body.velocity + throwVelocity : Vector3.zero,
                 RopeLength = _rope.currentLength,
             };
             // The held-pose pass repeats nothing: an anchor carried without moving sends no packet.

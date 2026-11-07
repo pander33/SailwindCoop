@@ -4,9 +4,16 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 100.
+Everyone must update to wire protocol 101.
 
 ### Fixed
+
+- Shipyard Expansion: sail angle, jib flip and sail texture now follow a refit to the whole crew,
+  and a guest's refit no longer leaves the host's save with the previous sails' settings.
+- Towable Boats: towed boats no longer drop out of sync for guests during a shared sleep, and a tow
+  line is tied to the right cleat on a moving boat.
+- Anchor Improvements: an anchor thrown by a guest now flies for everyone instead of dropping at
+  their feet.
 
 - Bilge pump handles now show the operator's actual movement to the crew. Holding the handle still
   leaves it still, and guests drain water at the rate they actually pump.
@@ -25,6 +32,10 @@ Everyone must update to wire protocol 100.
 
 ### Added
 
+- The joining player is told when a setting of another mod that changes the shared world differs
+  from the host's (Shipyard Expansion, Towable Boats, Anchor Improvements), in the F8 Mods section
+  and the log. The join goes ahead.
+- Export report lists plugin DLLs that the loader did not start.
 - Liar's Dice for 2–5 players, selectable by the table owner in the lobby alongside Three Rounds.
   Start with five dice each, raise a bid or call a bluff, and lose one die when wrong; the last
   player with dice wins. Ones are not wild.

@@ -73,7 +73,8 @@ namespace SailwindCoop.Sync
                 Sails = data.sails.Where((s, i) => installed[i]).Select(s => new NetSailConfiguration { Prefab = s.prefabIndex, Mast = s.mastIndex,
                     Height = s.installHeight, MinAngle = s.minAngle, MaxAngle = s.maxAngle, Health = s.health,
                     Color = s.sailColor, ScaleY = s.scaleY, ScaleZ = s.scaleZ }).ToArray(),
-                HullDamage = damage != null ? damage.hullDamage : 0, WaterLevel = damage != null ? damage.waterLevel : 0 };
+                HullDamage = damage != null ? damage.hullDamage : 0, WaterLevel = damage != null ? damage.waterLevel : 0,
+                ModRig = ShipyardExpansionRig.Capture(hull.Custom) };
         }
         internal static SaveBoatCustomizationData Data(RefitBody message)
         {
@@ -89,6 +90,16 @@ namespace SailwindCoop.Sync
             ushort id = ResolveHull(target.transform);
             if (!_hulls.TryGetValue(id, out var hull) || !hull.Editing || hull.Committed == null) return false;
             data = Data(hull.Committed); return true;
+        }
+        /// <summary>After <c>GetData</c> returned the committed configuration of a boat being edited
+        /// (<see cref="SavedPreview"/>), SE's own <c>GetData</c> postfix has written the preview's sail
+        /// data into its saved entry; put the committed entry back.</summary>
+        internal void AfterData(SaveableBoatCustomization target)
+        {
+            if (!Connected || ReadingActual || Confirming || target == null) return;
+            ushort id = ResolveHull(target.transform);
+            if (!_hulls.TryGetValue(id, out var hull) || !hull.Editing || hull.Committed == null) return;
+            ShipyardExpansionRig.Restore(hull.Custom, hull.Committed.ModRig);
         }
         internal void BeginPreview(Shipyard editor, GameObject boat)
         {
@@ -150,6 +161,7 @@ namespace SailwindCoop.Sync
             target.Sails = source.Sails; target.RequestId = source.RequestId; target.Requester = source.Requester;
             target.Repair = source.Repair; target.Clean = source.Clean; target.HullDamage = source.HullDamage;
             target.WaterLevel = source.WaterLevel; target.Dirt = source.Dirt; target.Outcome = source.Outcome; target.Baseline = source.Baseline;
+            target.ModRig = source.ModRig;
         }
         private void ScheduleRebuild(Hull hull)
         {
@@ -187,6 +199,9 @@ namespace SailwindCoop.Sync
                         throw new IndexOutOfRangeException("missing sail prefab/mast=" + sail.Prefab + "/" + sail.Mast);
                     refs.masts[sail.Mast].LoadSail(Data(new RefitStateMsg { Sails = new[] { sail } }).sails[0]);
                 }
+                // Mast.LoadSail bypasses SaveableBoatCustomization.LoadData, where SE applies its data.
+                // On the host this also brings SE's saved entry up to date with a client's refit.
+                ShipyardExpansionRig.Apply(hull.Custom, message.ModRig);
                 ApplyResults(hull, message);
                 foreach (var pointer in UnityEngine.Object.FindObjectsOfType<GoPointer>())
                     if (pointer.GetHeldItem() != null && pointer.GetHeldItem().transform.IsChildOf(hull.Custom.transform) && !pointer.GetHeldItem().gameObject.activeInHierarchy) pointer.DropItem();
@@ -256,9 +271,14 @@ namespace SailwindCoop.Sync
         }
         private void Install(Hull hull, RefitStateMsg message)
         {
-            if (SameConfiguration(Capture(hull), message))
+            var current = Capture(hull);
+            if (SameConfiguration(current, message) && !ShipyardExpansionRig.FlipsDiffer(current.ModRig, message.ModRig))
             {
                 bool changedGeneration = BoatGenerationBook.Session.Get(hull.Id) != message.Generation;
+                // Same sails, other SE angles/textures (or a new flip): SE applies them to the existing
+                // sails, no rebuild needed. Un-flipping needs the rebuild below.
+                if (!string.IsNullOrEmpty(message.ModRig) && message.ModRig != current.ModRig)
+                    ShipyardExpansionRig.Apply(hull.Custom, message.ModRig);
                 ApplyResults(hull, message); Adopt(hull, message);
                 if (changedGeneration) ScheduleRebuild(hull);
                 return;

@@ -57,6 +57,7 @@ namespace SailwindCoop.Sync
 
         // Host.
         private ModEntry[] _hostMods = new ModEntry[0];
+        private ModSetting[] _hostSettings = new ModSetting[0];
         private readonly HashSet<uint> _awaiting = new HashSet<uint>();
 
         // Client.
@@ -66,6 +67,7 @@ namespace SailwindCoop.Sync
         private string _installedNames = "";
 #endif
         private List<ModDiff> _diffs = new List<ModDiff>();
+        private List<ModSettingDiff> _settingDiffs = new List<ModSettingDiff>();
         private List<string> _localOnly = new List<string>();
         private string _message = "";
 
@@ -115,6 +117,9 @@ namespace SailwindCoop.Sync
                 _hostMods = new ModEntry[0];
                 Plugin.Logger.LogError("[Mods] role=Host could not list mods, clients will not be told about them: " + e);
             }
+            _hostSettings = ReadSettings("Host").ToArray();
+            if (_hostSettings.Length > 0)
+                Plugin.Logger.LogInfo("[Mods] role=Host simulation settings: " + DescribeValues(_hostSettings));
         }
 
         public void BeginClient()
@@ -132,7 +137,9 @@ namespace SailwindCoop.Sync
 #endif
             _awaiting.Clear();
             _hostMods = new ModEntry[0];
+            _hostSettings = new ModSetting[0];
             _diffs = new List<ModDiff>();
+            _settingDiffs = new List<ModSettingDiff>();
             _localOnly = new List<string>();
             if (!KeepsPhase) { _phase = Phase.Idle; _message = ""; }
         }
@@ -157,10 +164,10 @@ namespace SailwindCoop.Sync
             try
             {
 #if !THUNDERSTORE
-                session.Peer.Send(new ModManifestMsg { FilesOffered = HostOffersDownloads, Mods = _hostMods },
+                session.Peer.Send(new ModManifestMsg { FilesOffered = HostOffersDownloads, Mods = _hostMods, Settings = _hostSettings },
                                   DeliveryMethod.ReliableOrdered);
 #else
-                session.Peer.Send(new ModManifestMsg { Mods = _hostMods }, DeliveryMethod.ReliableOrdered);
+                session.Peer.Send(new ModManifestMsg { Mods = _hostMods, Settings = _hostSettings }, DeliveryMethod.ReliableOrdered);
 #endif
                 _awaiting.Add(session.PlayerNetId);
                 _net.SetMemberState(session.PlayerNetId, MemberJoinState.CheckingMods);
@@ -249,15 +256,23 @@ namespace SailwindCoop.Sync
                 List<LoadedPlugin> local = LoadedPlugins();
                 _diffs = ModCatalog.Compare(mods, PluginsRoot, local);
                 _localOnly = ModCatalog.LocalOnly(mods, local, Excluded());
+                _settingDiffs = ModCatalog.CompareSettings(msg.Settings, ReadSettings("Client"));
 
                 Count(out int missing, out int different);
                 Plugin.Logger.LogInfo("[Mods] role=Client host lists " + mods.Count + " mods: " + missing + " missing, " +
-                                      different + " different, " + _localOnly.Count + " only here");
+                                      different + " different, " + _localOnly.Count + " only here, " +
+                                      _settingDiffs.Count + " simulation settings differ");
+                foreach (ModSettingDiff diff in _settingDiffs)
+                    Plugin.Logger.LogWarning("[Mods] role=Client setting differs from the host: " + ModCatalog.DescribeSetting(diff));
                 if (missing == 0 && different == 0)
                 {
+                    // Different settings do not stop the join; they are only shown.
                     _phase = Phase.Idle;
-                    _message = _localOnly.Count == 0 ? ""
-                        : "You have mods the host does not have: " + string.Join(", ", _localOnly.ToArray()) + ".";
+                    var text = new StringBuilder();
+                    if (_localOnly.Count > 0)
+                        text.Append("You have mods the host does not have: ").Append(string.Join(", ", _localOnly.ToArray())).Append('.');
+                    AppendSettings(text);
+                    _message = text.ToString();
                     SendResult(ModSyncDecision.Proceed);
                     return;
                 }
@@ -270,6 +285,7 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.LogError("[Mods] role=Client mod check failed, joining without it: " + e);
                 _phase = Phase.Idle;
                 _diffs = new List<ModDiff>();
+                _settingDiffs = new List<ModSettingDiff>();
                 SendResult(ModSyncDecision.Proceed);
             }
         }
@@ -283,8 +299,10 @@ namespace SailwindCoop.Sync
 #endif
             Count(out int missing, out int different);
             _phase = Phase.Idle;
-            _message = "Joined with a different mod set (" + missing + " missing, " + different +
-                       " different). Some things may not match the host.";
+            var text = new StringBuilder("Joined with a different mod set (" + missing + " missing, " + different +
+                                         " different). Some things may not match the host.");
+            AppendSettings(text);
+            _message = text.ToString();
             SendResult(ModSyncDecision.Proceed);
         }
 
@@ -390,6 +408,7 @@ namespace SailwindCoop.Sync
             }
             if (_localOnly.Count > 0)
                 text.Append("\nOnly you have: ").Append(string.Join(", ", _localOnly.ToArray()));
+            AppendSettings(text);
 
             view.Deciding = true;
 #if THUNDERSTORE
@@ -418,6 +437,54 @@ namespace SailwindCoop.Sync
             return entry.Files.Length > 0 ? ModCatalog.ShortHash(entry.Files[0].Hash) : "";
         }
 #endif
+
+        private void AppendSettings(StringBuilder text)
+        {
+            if (_settingDiffs.Count == 0) return;
+            if (text.Length > 0) text.Append('\n');
+            text.Append("Settings that change the shared world differ from the host's (change them in BepInEx/config):");
+            foreach (ModSettingDiff diff in _settingDiffs)
+                text.Append("\n  ~ ").Append(ModCatalog.DescribeSetting(diff));
+        }
+
+        private static string DescribeValues(ModSetting[] settings)
+        {
+            var parts = new string[settings.Length];
+            for (int i = 0; i < settings.Length; i++)
+                parts[i] = settings[i].Guid + " [" + settings[i].Section + "] " + settings[i].Key + "=" + settings[i].Value;
+            return string.Join("; ", parts);
+        }
+
+        /// <summary>This machine's values of <see cref="ModCatalog.SimulationSettings"/> for the plugins
+        /// that are loaded. Read through each plugin's own config by section and key; no reference to
+        /// the mods themselves. An entry that cannot be read is left out and logged.</summary>
+        private static List<ModSetting> ReadSettings(string role)
+        {
+            var list = new List<ModSetting>();
+            foreach (ModSettingRule rule in ModCatalog.SimulationSettings)
+            {
+                try
+                {
+                    if (!BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(rule.Guid, out BepInEx.PluginInfo info)) continue;
+                    var config = info?.Instance != null ? info.Instance.Config : null;
+                    var key = new BepInEx.Configuration.ConfigDefinition(rule.Section, rule.Key);
+                    if (config == null || !config.ContainsKey(key))
+                    {
+                        Plugin.Logger.LogWarning("[Mods] role=" + role + " " + rule.Mod + " is loaded but its setting [" +
+                                                 rule.Section + "] " + rule.Key + " was not found; it is not compared");
+                        continue;
+                    }
+                    list.Add(new ModSetting { Guid = rule.Guid, Section = rule.Section, Key = rule.Key,
+                                              Value = config[key].GetSerializedValue() ?? "" });
+                }
+                catch (Exception e)
+                {
+                    Plugin.Logger.LogWarning("[Mods] role=" + role + " could not read " + rule.Mod + " [" + rule.Section +
+                                             "] " + rule.Key + ": " + e.Message);
+                }
+            }
+            return list;
+        }
 
         private static string Names(ModEntry[] mods)
         {

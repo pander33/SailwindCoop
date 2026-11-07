@@ -32,7 +32,8 @@ namespace SailwindCoop.Sync
             hooks.Install(typeof(Shipyard), "ConfirmOrder", Type.EmptyTypes, m => harmony.Patch(m,
                 prefix: Hook(nameof(PreOrder), Priority.First), postfix: Hook(nameof(EndOrder), Priority.Last), finalizer: Hook(nameof(EndFault))));
             hooks.Install(typeof(ShipyardSailInstaller), "InstallSails", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreInstall))));
-            hooks.Install(typeof(SaveableBoatCustomization), "GetData", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreData))));
+            hooks.Install(typeof(SaveableBoatCustomization), "GetData", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreData)),
+                postfix: Hook(nameof(PostData), Priority.Last)));
             hooks.Install(typeof(Sail), "FixedUpdate", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreSail)), postfix: Hook(nameof(PostSail))));
             PatchHealth.Report("Shipyard refit", hooks);
         }
@@ -69,6 +70,10 @@ namespace SailwindCoop.Sync
             }, Report);
             if (!vanilla) __result = data; return vanilla;
         }
+        // Last postfix: runs after Shipyard Expansion's GetData postfix (HarmonyX runs postfixes even
+        // when PreData skipped the original).
+        private static void PostData(SaveableBoatCustomization __instance)
+            => PatchGuard.Run(() => ShipyardSync.Instance?.AfterData(__instance), Report);
         // Physics-rate hook for every sail: no closure per call.
         private static bool PreSail(Sail __instance)
         {

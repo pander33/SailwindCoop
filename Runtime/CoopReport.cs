@@ -27,6 +27,31 @@ namespace SailwindCoop.Runtime
 			}
 		}
 
+		/// <summary>DLLs under <c>BepInEx/plugins</c> in mod folders (or loose in the root) that hold no
+		/// loaded plugin, relative to the plugins folder. Folders with a loaded plugin are skipped as
+		/// a whole: their other DLLs are that plugin's libraries.</summary>
+		private static System.Collections.Generic.List<string> UnloadedPluginFiles()
+		{
+			var result = new System.Collections.Generic.List<string>();
+			try
+			{
+				string root = BepInEx.Paths.PluginPath;
+				if (!Directory.Exists(root)) return result;
+				var loadedUnits = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				foreach (var plugin in BepInEx.Bootstrap.Chainloader.PluginInfos.Values)
+					if (plugin != null && Sync.ModCatalog.TryUnit(root, plugin.Location, out string folder, out string relative))
+						loadedUnits.Add(folder.Length > 0 ? folder : relative);
+				foreach (string file in Directory.GetFiles(root, "*.dll", SearchOption.AllDirectories))
+				{
+					if (!Sync.ModCatalog.TryUnit(root, file, out string folder, out string relative)) continue;
+					if (loadedUnits.Contains(folder.Length > 0 ? folder : relative)) continue;
+					result.Add(folder.Length > 0 ? folder + "/" + relative : relative);
+				}
+			}
+			catch (Exception e) { result.Add("(could not list: " + e.Message + ")"); }
+			return result;
+		}
+
 		private static string Build(CoopBehaviour coop)
 		{
 			var sb = new StringBuilder(4096);
@@ -44,6 +69,10 @@ namespace SailwindCoop.Runtime
 			{
 				foreach (var plugin in BepInEx.Bootstrap.Chainloader.PluginInfos.Values)
 					Put(sb, "plugin", plugin.Metadata.GUID + " " + plugin.Metadata.Version);
+				// A plugin that throws while the loader starts it is dropped from PluginInfos, so the
+				// list above and the mod comparison cannot see it. Its DLL is still on disk.
+				foreach (string dll in UnloadedPluginFiles())
+					Put(sb, "plugin.notLoaded", dll);
 			});
 			Section(sb, "player", () =>
 			{

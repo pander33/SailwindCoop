@@ -417,6 +417,40 @@ Details:
   **Sharing** under **Settings** in the F8 menu to turn it off, and share only mods whose authors allow redistribution.
 <!--/full-->
 
+### Settings Of Other Mods
+
+A few settings of other mods change the shared world, so the host and the joining player should
+have the same value. The joining player sees the ones that differ in the F8 **Mods** section and in
+`BepInEx/LogOutput.log`. The join is never refused over them. Change the value in that mod's file in
+`BepInEx/config` and restart the game.
+
+| Mod | Setting | Why it must match |
+|---|---|---|
+| Shipyard Expansion | `[Settings] Add lug sails` | Creates three sails; a rig using them cannot be built without it |
+| Shipyard Expansion | `[Settings] Link topmasts` | Ties a topsail's angle to the sail below |
+| Towable Boats | `[Settings] Small boats can tow` | Adds towing cleats to the cog, dhow and kakam |
+| Anchor Improvements | `[Options] Resize brig anchor` | Changes the brig's anchor windlass |
+
+Everything else in these mods, and the whole of NAND Tweaks and Sail Collision Fix, may differ
+between players.
+
+Known behaviour with other mods:
+
+- **Shipyard Expansion**: sail angle, jib flip and sail texture are sent with a refit, and a guest's
+  refit updates them in the host's save.
+- **Anchor Improvements**: version 1.1.7 on Thunderstore fails to load on game 0.38 and newer, with
+  or without co-op (reported by its users). With version 2.0.0 (its GitHub source), an anchor thrown
+  by a guest is sent to the host with the throw's speed.
+- **Towable Boats**: tow lines go through the host like any mooring rope, and guests' copies of
+  towed boats stay driven by the host during a shared sleep.
+- **Sail Collision Fix**: a rig the host builds with it reaches everyone; a player without it just
+  cannot build the same rig at a shipyard.
+- **HMS Leopard**: its own controls (bell, cannons, gunports, the cutter and its oars) are not
+  synchronized: they act only for the player who uses them, and rowing the cutter is not supported
+  for guests.
+- A mod that fails while the game starts is not listed by the loader, so it is missing from the mod
+  comparison. **Export report** (F8, Settings) lists such DLLs as `plugin.notLoaded`.
+
 ## Crew Status And Session Access
 
 - The F8 **Crew** list shows whether each player is waiting, comparing mods, receiving/loading the world, ready, or failed.

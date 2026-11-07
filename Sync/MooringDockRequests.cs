@@ -13,16 +13,63 @@ namespace SailwindCoop.Sync
         private static string DockIdentity(GPButtonDockMooring dock)
         {
             if (dock == null) return "";
+            // Each step is the name plus its ordinal among same-named siblings, not the raw sibling
+            // index (as BoatLayout.Hash): a mooring point on a boat (Towable Boats' cleats) sits among
+            // children that other objects join and leave, and mods may add them in another order.
             string path = "";
-            for (var t = dock.transform; t != null; t = t.parent) path = "/" + t.name + "[" + t.GetSiblingIndex() + "]" + path;
+            for (var t = dock.transform; t != null; t = t.parent)
+            {
+                int ordinal = 0;
+                if (t.parent != null)
+                {
+                    int index = t.GetSiblingIndex();
+                    for (int i = 0; i < index; i++) if (t.parent.GetChild(i).name == t.name) ordinal++;
+                }
+                else
+                {
+                    try
+                    {
+                        foreach (var root in t.gameObject.scene.GetRootGameObjects())
+                        {
+                            if (root.transform == t) break;
+                            if (root.name == t.name) ordinal++;
+                        }
+                    }
+                    catch { ordinal = t.GetSiblingIndex(); } // a scene that cannot list its roots
+                }
+                path = "/" + t.name + "[" + ordinal + "]" + path;
+            }
             return dock.gameObject.scene.name + path;
         }
         private static GPButtonDockMooring FindDock(string id, Vector3 real)
         {
             if (!string.IsNullOrEmpty(id))
+            {
+                // The full identity walks every ancestor's siblings and reads names (each read
+                // allocates); a pending request retries every frame. Compare the dock's own name,
+                // the last step of the identity, first.
                 foreach (var dock in UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>())
-                    if (DockIdentity(dock) == id) return dock;
-            return FindDockNear(real); // Identity fallback locates a loaded object, not action eligibility.
+                    if (EndsWithStep(id, dock.name) && DockIdentity(dock) == id) return dock;
+            }
+            // Identity fallback locates a loaded object, not action eligibility.
+            var near = FindDockNear(real);
+            // The position fallback assumes docks do not move. A mooring point on a boat (Towable
+            // Boats) moves, and on an interpolated copy the nearest one can be the other cleat of a
+            // pair: with an identity given, wait for that identity instead.
+            if (near != null && !string.IsNullOrEmpty(id) && OnBoat(near.transform)) return null;
+            return near;
+        }
+        /// <summary>True when the identity's last step is "/name[n]" for this name (names may hold '/' or '[').</summary>
+        private static bool EndsWithStep(string id, string name)
+        {
+            string step = "/" + name + "[";
+            int at = id.LastIndexOf(step, StringComparison.Ordinal);
+            return at >= 0 && id.IndexOf('/', at + step.Length) < 0;
+        }
+        private static bool OnBoat(Transform t)
+        {
+            for (; t != null; t = t.parent) if (BoatLocator.IndexOf(t) != BoatLocator.NoBoat) return true;
+            return false;
         }
         private void SendWaitingDock(MooringRequestMsg msg, uint actor)
             => _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = msg.Index,

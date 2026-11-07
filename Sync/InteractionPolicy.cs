@@ -85,6 +85,10 @@ namespace SailwindCoop.Sync
             string n = btn.GetType().Name;
 
             if (IsSleepInput(btn)) return InteractPolicy.Local;
+            // Mooring points: MooringSync carries what happens at them, and their OnActivate does
+            // nothing. Matters for the ones other mods put on boats (Towable Boats' TowingCleat):
+            // as deck controls they would take button indices, which differ with that mod's settings.
+            if (btn is GPButtonDockMooring) return InteractPolicy.Local;
             if (IsHostOnlyType(n)) return InteractPolicy.HostOnly;
             if (Local.Contains(n)) return InteractPolicy.Local;
             if (SharedPickupable.Contains(n)) return InteractPolicy.Shared;

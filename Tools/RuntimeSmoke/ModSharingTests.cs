@@ -49,6 +49,28 @@ internal static class ModSharingTests
             Assert(mods[0].Folder == "" && mods[0].Files.Length == 1 && mods.All(m => ModPathRules.Validate(m) == null), "lone DLL entry");
         }));
 
+        test("simulation settings of other mods are compared only where both sides have them", () => {
+            Func<string, string, string, string, ModSetting> s = (guid, section, key, value) =>
+                new ModSetting { Guid = guid, Section = section, Key = key, Value = value };
+            const string tb = "com.nandbrew.towableboats", se = "com.nandbrew.shipyardexpansion";
+            var host = new[] {
+                s(tb, "Settings", "Small boats can tow", "true"),
+                s(se, "Settings", "Add lug sails", "true"),
+                s(se, "Settings", "Link topmasts", "false"),
+                s("com.example.newer", "X", "Y", "1") };                       // a row this build does not know
+            var local = new List<ModSetting> {
+                s(tb, "settings", "small boats can tow", "True"),             // same value, other case
+                s(se, "Settings", "Add lug sails", "false") };                // differs; Link topmasts unreadable here
+            List<ModSettingDiff> diffs = ModCatalog.CompareSettings(host, local);
+            Assert(diffs.Count == 1 && diffs[0].Rule.Key == "Add lug sails" && diffs[0].Host == "true" && diffs[0].Local == "false",
+                   "diffs: " + string.Join("|", diffs.Select(ModCatalog.DescribeSetting)));
+            Assert(ModCatalog.DescribeSetting(diffs[0]).Contains("Shipyard Expansion") && ModCatalog.DescribeSetting(diffs[0]).Contains("restart"), "description");
+            Assert(ModCatalog.CompareSettings(host, new ModSetting[0]).Count == 0, "mod absent here: nothing to compare");
+            Assert(ModCatalog.CompareSettings(null, local).Count == 0 && ModCatalog.CompareSettings(host, null).Count == 0, "null lists");
+            foreach (ModSettingRule rule in ModCatalog.SimulationSettings)
+                Assert(ModCatalog.FindRule(rule.Guid.ToUpperInvariant(), rule.Section, rule.Key) == rule, "rule lookup " + rule.Key);
+        });
+
         test("mod comparison reports missing, different version and different build", () => WithDirs((host, client, staging) => {
             List<ModEntry> mods = ModCatalog.Build(host, HostFixture(host), new string[0], null);
             Assert(mods.Count == 3, "host units");

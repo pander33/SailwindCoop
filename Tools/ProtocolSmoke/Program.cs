@@ -158,7 +158,10 @@ namespace ProtocolSmoke
                                         new ModListFile { Path = "data/assets", Size = 8376605, Hash = SampleHash(2) } } },
                     new ModEntry { Folder = "", Complete = false,
                         Plugins = new[] { new ModPlugin { Guid = "a", Name = "A", Version = "0.1" }, new ModPlugin { Guid = "b", Name = "B", Version = "2" } },
-                        Files = new[] { new ModListFile { Path = "Lone.dll", Size = 1, Hash = SampleHash(3) } } } } },
+                        Files = new[] { new ModListFile { Path = "Lone.dll", Size = 1, Hash = SampleHash(3) } } } },
+                    Settings = new[] {
+                        new ModSetting { Guid = "com.nandbrew.towableboats", Section = "Settings", Key = "Small boats can tow", Value = "true" },
+                        new ModSetting { Guid = "com.nandbrew.shipyardexpansion", Section = "Settings", Key = "Add lug sails", Value = "false" } } },
                 new ModSyncResultMsg { Decision = ModSyncDecision.Abort, Missing = 3, Different = 1 },
                 new ModFileRequestMsg { Mod = 2, File = 511 },
                 new ModFileChunkMsg { Mod = 2, File = 511, Index = 77, Data = new byte[] { 1, 2, 3, 250 } },
@@ -293,6 +296,14 @@ namespace ProtocolSmoke
             files.Put(true); files.Put((byte)1); files.Put("Mod"); files.Put(true); files.Put((byte)0); files.Put((ushort)ModLimits.MaxFilesPerMod);
             if (Protocol.ReadBody(MsgType.ModManifest, new NetDataReader(files.Data, 0, files.Length)) != null)
                 failures.Add("ModManifestMsg: file count beyond the payload accepted");
+            var settings = new NetDataWriter();
+            settings.Put(true); settings.Put((byte)0); settings.Put((byte)ModLimits.MaxSettings);
+            if (Protocol.ReadBody(MsgType.ModManifest, new NetDataReader(settings.Data, 0, settings.Length)) != null)
+                failures.Add("ModManifestMsg: setting count beyond the payload accepted");
+            var tooMany = new NetDataWriter();
+            tooMany.Put(true); tooMany.Put((byte)0); tooMany.Put((byte)(ModLimits.MaxSettings + 1));
+            if (Protocol.ReadBody(MsgType.ModManifest, new NetDataReader(tooMany.Data, 0, tooMany.Length)) != null)
+                failures.Add("ModManifestMsg: oversized setting count accepted");
             var chunk = new NetDataWriter();
             chunk.Put((ushort)0); chunk.Put((ushort)0); chunk.Put(0); chunk.Put(ushort.MaxValue);
             if (Protocol.ReadBody(MsgType.ModFileChunk, new NetDataReader(chunk.Data, 0, chunk.Length)) != null)
@@ -392,7 +403,7 @@ namespace ProtocolSmoke
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
                 (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
-                  a is ModEntry || a is ModPlugin || a is ModListFile || a is DicePlayerData))
+                  a is ModEntry || a is ModPlugin || a is ModListFile || a is ModSetting || a is DicePlayerData))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

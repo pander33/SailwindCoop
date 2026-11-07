@@ -14,7 +14,10 @@ namespace SailwindCoop.Net
     public static class Protocol
     {
         /// <summary>Wire protocol version. Increment on any breaking format change.</summary>
-        public const int Version = 100;
+        // 101: ModManifest carries other mods' simulation settings, RefitBody carries Shipyard
+        // Expansion's sail data, dock identities use name ordinals, mooring points are no longer
+        // shared deck buttons.
+        public const int Version = 101;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)

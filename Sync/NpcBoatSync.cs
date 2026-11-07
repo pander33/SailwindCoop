@@ -371,6 +371,7 @@ namespace SailwindCoop.Sync
             int ok = 0;
             ok += TryPatch(harmony, "DistanceCheck", nameof(PostDistanceCheck), postfix: true) ? 1 : 0;
             ok += TryPatch(harmony, "UpdateKinematic", nameof(PreUpdateKinematic), postfix: false) ? 1 : 0;
+            ok += TryPatchLast(harmony, "UpdateKinematic", nameof(PostUpdateKinematic)) ? 1 : 0;
 
             try
             {
@@ -378,8 +379,27 @@ namespace SailwindCoop.Sync
             }
             catch { _cooldownField = null; }
 
-            Plugin.Logger.LogInfo("[NpcBoatPatches] BoatHorizon patches: " + ok + "/2");
-            Runtime.PatchHealth.Report("NpcBoat", ok, 2);
+            Plugin.Logger.LogInfo("[NpcBoatPatches] BoatHorizon patches: " + ok + "/3");
+            Runtime.PatchHealth.Report("NpcBoat", ok, 3);
+        }
+
+        /// <summary>A postfix that runs after every other mod's postfix on the method.</summary>
+        private static bool TryPatchLast(Harmony harmony, string method, string handler)
+        {
+            try
+            {
+                var mi = AccessTools.Method(typeof(BoatHorizon), method);
+                if (mi == null) return false;
+                var hm = new HarmonyMethod(typeof(NpcBoatPatches).GetMethod(handler, BindingFlags.Static | BindingFlags.NonPublic))
+                    { priority = Priority.Last, after = new[] { "com.nandbrew.towableboats" } };
+                harmony.Patch(mi, postfix: hm);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[NpcBoatPatches] " + method + " (last postfix): " + e.Message);
+                return false;
+            }
         }
 
         private static bool TryPatch(Harmony harmony, string method, string handler, bool postfix)
@@ -433,6 +453,31 @@ namespace SailwindCoop.Sync
             catch (Exception e)
             {
                 Plugin.Logger.ReportError("[NpcBoatPatches] DistanceCheck postfix failed", e.Message,
+                                          ref _patchReport);
+            }
+        }
+
+        /// <summary>
+        /// Our prefix skips <c>UpdateKinematic</c> for a body <c>BoatSync</c> drives, but HarmonyX still
+        /// runs every other mod's postfix. Towable Boats' postfix sets <c>isKinematic = false</c> on boats
+        /// in a tow chain while <c>GameState.sleeping</c>, which turned a client's driven copy into a
+        /// simulated body until <c>BoatSync</c> set it back, and in a shared sleep (<c>timeScale</c> 16)
+        /// that is many physics steps. This runs last and puts the flag back at once.
+        /// </summary>
+        private static void PostUpdateKinematic(BoatHorizon __instance)
+        {
+            try
+            {
+                if (__instance == null) return;
+                Transform parent = __instance.transform.parent;
+                Rigidbody body = parent != null ? parent.GetComponent<Rigidbody>() : null;
+                if (body == null || body.isKinematic) return;
+                var boats = Runtime.CoopBehaviour.Instance?.Boats;
+                if (boats != null && boats.DrivesBody(body)) body.isKinematic = true;
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.ReportError("[NpcBoatPatches] UpdateKinematic postfix failed", e.Message,
                                           ref _patchReport);
             }
         }
