@@ -2,9 +2,9 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-07
 
-Everyone must update to wire protocol 106.
+Everyone must update to wire protocol 106. Requires Sailwind 0.40; 0.40.1 is supported.
 
 ### Performance
 

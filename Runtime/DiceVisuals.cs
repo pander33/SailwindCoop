@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -58,7 +58,7 @@ namespace SailwindCoop.Runtime
 					}
 				}
 			}
-			atlas = Upload("Dice faces", TilePixels * Tiles, TilePixels, pixels);
+			atlas = MakeTexture("Dice faces", TilePixels * Tiles, TilePixels, pixels);
 			return atlas;
 		}
 
@@ -78,7 +78,7 @@ namespace SailwindCoop.Runtime
 					pixels[y * ClothPixels + x] = new Color(.105f + noise, .215f + noise, .160f + noise) * (weave * vignette);
 				}
 			}
-			cloth = Upload("Dice cloth", ClothPixels, ClothPixels, pixels);
+			cloth = MakeTexture("Dice cloth", ClothPixels, ClothPixels, pixels);
 			return cloth;
 		}
 
@@ -97,7 +97,7 @@ namespace SailwindCoop.Runtime
 					pixels[y * SlatePixels + x] = new Color(.150f + grain + dust, .158f + grain + dust, .170f + grain + dust) * fade;
 				}
 			}
-			slate = Upload("Dice board", SlatePixels, SlatePixels, pixels);
+			slate = MakeTexture("Dice board", SlatePixels, SlatePixels, pixels);
 			return slate;
 		}
 
@@ -122,7 +122,7 @@ namespace SailwindCoop.Runtime
 					pixels[y * WoodPixels + x] = Color.Lerp(dark, light, tone) * plank;
 				}
 			}
-			wood = Upload("Dice wood", WoodPixels, WoodPixels, pixels);
+			wood = MakeTexture("Dice wood", WoodPixels, WoodPixels, pixels);
 			return wood;
 		}
 
@@ -162,11 +162,11 @@ namespace SailwindCoop.Runtime
 					pixels[y * LeatherPixels + x] = c;
 				}
 			}
-			leather = Upload("Dice cup leather", LeatherPixels, LeatherPixels, pixels);
+			leather = MakeTexture("Dice cup leather", LeatherPixels, LeatherPixels, pixels);
 			return leather;
 		}
 
-		private static Texture2D Upload(string name, int width, int height, Color32[] pixels)
+		private static Texture2D MakeTexture(string name, int width, int height, Color32[] pixels)
 		{
 			// Shading multiplies the alpha of a colour with everything else; the table has no
 			// transparent part, and in the unlit fallback a semi-transparent die would show through.

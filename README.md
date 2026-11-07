@@ -11,7 +11,7 @@ local network, a VPN, or Steam.
 
 **Current Version:** 0.8.0
 **Wire Protocol:** 106. Every machine needs a build with protocol 106.
-**Requirements:** BepInEx 5.x, Sailwind 0.40
+**Requirements:** BepInEx 5.x, Sailwind 0.40 (0.40.1 supported)
 
 The mod is in early development (v0.8.0). Expect bugs, and please report them.
 
