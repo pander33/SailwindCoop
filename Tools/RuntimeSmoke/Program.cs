@@ -492,6 +492,32 @@ internal static class Program
                         i.Operand is FieldReference field && field.Name == "held" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "drop does not clear hand before final hook");
                 }
             });
+            Test("installed moored rope finds its dock through the spring", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    // MooringSync.DockFor and MooringPatches read the private spring by reflection.
+                    Assert(types["PickupableBoatMooringRope"].Fields.Any(f => f.Name == "mooredToSpring" && f.FieldType.Name == "SpringJoint"),
+                        "rope spring binding changed");
+                    var dock = types["GPButtonDockMooring"];
+                    Assert(dock.Fields.Any(f => f.Name == "spring" && f.FieldType.Name == "SpringJoint"), "dock spring binding changed");
+                    // DockFor relies on the spring sitting on the dock button's own GameObject.
+                    var awake = dock.Methods.Single(m => m.Name == "Awake");
+                    Assert(awake.Body.Instructions.Any(i => i.Operand is MethodReference m && m.Name == "GetComponent" &&
+                            m is GenericInstanceMethod g && g.GenericArguments[0].Name == "SpringJoint") &&
+                        awake.Body.Instructions.Any(i => i.Operand is FieldReference f && f.Name == "spring" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld),
+                        "dock no longer takes its spring from its own GameObject");
+                    // ...and on MoorTo reusing that spring: mooredToSpring = mooring.spring.
+                    var moor = types["PickupableBoatMooringRope"].Methods.Single(m => m.Name == "MoorTo");
+                    var code = moor.Body.Instructions;
+                    Assert(Enumerable.Range(0, code.Count - 1).Any(i =>
+                            code[i].OpCode.Code == Mono.Cecil.Cil.Code.Ldfld && code[i].Operand is FieldReference from &&
+                            from.Name == "spring" && from.DeclaringType.Name == "GPButtonDockMooring" &&
+                            code[i + 1].OpCode.Code == Mono.Cecil.Cil.Code.Stfld && code[i + 1].Operand is FieldReference to &&
+                            to.Name == "mooredToSpring"),
+                        "MoorTo no longer stores the dock's own spring in mooredToSpring");
+                }
+            });
             Test("totem effect revision survives an older storm snapshot at the same tick", () => {
                 var weather = new ItemStateGate(); bool semantic, pose;
                 Assert(weather.Receive(2, 100, 0, 0, 0, out semantic, out pose), "weather baseline");

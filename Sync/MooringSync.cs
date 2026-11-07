@@ -20,6 +20,10 @@ namespace SailwindCoop.Sync
     /// the receiver snaps to the nearest <c>GPButtonDockMooring</c> (docks are static). On the client
     /// mooring is cosmetic (its boat is a kinematic puppet) — only the host's spring holds the
     /// authoritative boat — but unmooring on the client must reach the host so the boat can sail.</para>
+    ///
+    /// <para>The dock of a moored rope comes from its spring (<c>mooredToSpring</c> sits on the
+    /// dock button's own GameObject), never from the rope's parent: game 0.40.1 parents every
+    /// moored rope to <c>Refs.shiftingWorld</c>. See <see cref="DockFor"/>.</para>
     /// </summary>
     public sealed partial class MooringSync
     {
@@ -35,8 +39,9 @@ namespace SailwindCoop.Sync
         private BoatMooringRopes _bm;
         private const float RopeSearchSeconds = 1f;
         private float _nextRopeSearch;
-        // Stable rope -> index map. Needed because MoorTo() reparents the rope under the DOCK,
-        // so walking up the hierarchy no longer reaches BoatMooringRopes; the map doesn't care.
+        // Stable rope -> index map. Needed because MoorTo() reparents the rope away from the boat
+        // (game 0.40: under the dock's spring; 0.40.1: to Refs.shiftingWorld), so walking up the
+        // hierarchy no longer reaches BoatMooringRopes; the map doesn't care.
         private readonly System.Collections.Generic.Dictionary<PickupableBoatMooringRope, int> _ropeIndex
             = new System.Collections.Generic.Dictionary<PickupableBoatMooringRope, int>();
 
@@ -418,27 +423,62 @@ namespace SailwindCoop.Sync
 
         private static GPButtonDockMooring DockFor(PickupableBoatMooringRope rope)
         {
-            var dock = rope.GetComponentInParent<GPButtonDockMooring>();
-            if (dock != null) return dock;
+            if (rope == null || !rope.IsMoored()) return null;
             var spring = GetMooredSpring(rope);
-            // MoorTo parents to the spring, which need not be under the dock button.
+            if (spring != null)
+            {
+                // GPButtonDockMooring.Awake takes its spring from its own GameObject. Game 0.40.1
+                // parents a moored rope to Refs.shiftingWorld, so the spring is the only link left.
+                // The map goes first: it holds only docks GetComponent would miss or get wrong
+                // (two buttons sharing one spring), recorded from MoorTo itself.
+                if (_dockBySpring.TryGetValue(spring, out var known) && known != null && known.spring == spring) return known;
+                var own = spring.GetComponent<GPButtonDockMooring>();
+                if (own != null && own.spring == spring) return own;
+            }
+            // Game 0.40 parented a moored rope to the dock's spring.
+            var dock = rope.GetComponentInParent<GPButtonDockMooring>();
+            if (dock != null && (spring == null || dock.spring == spring)) return dock;
+            // Last resort for a spring that is not on its button (a dock added by another mod).
+            // The result is remembered, so the host's once-a-second pass searches the scene once.
             if (spring != null)
                 foreach (var candidate in UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>())
-                    if (candidate.spring == spring) return candidate;
+                    if (candidate.spring == spring) { _dockBySpring[spring] = candidate; return candidate; }
             return null;
         }
 
+        // Docks whose spring is not on their own GameObject, learned from MoorTo or a scene search.
+        private static readonly Dictionary<SpringJoint, GPButtonDockMooring> _dockBySpring =
+            new Dictionary<SpringJoint, GPButtonDockMooring>();
+
+        internal static void RememberDock(GPButtonDockMooring dock)
+        {
+            if (dock == null || dock.spring == null) return;
+            if (dock.spring.GetComponent<GPButtonDockMooring>() == dock) return;   // found without the map
+            _dockBySpring[dock.spring] = dock;
+        }
+
         private static System.Reflection.FieldInfo _fSpring;
-        private static SpringJoint GetMooredSpring(PickupableBoatMooringRope rope)
+        private static bool _warnedSpring;
+        internal static SpringJoint GetMooredSpring(PickupableBoatMooringRope rope)
         {
             try
             {
                 if (_fSpring == null)
                     _fSpring = typeof(PickupableBoatMooringRope).GetField("mooredToSpring",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                return _fSpring != null ? _fSpring.GetValue(rope) as SpringJoint : null;
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (_fSpring == null) throw new MissingFieldException("PickupableBoatMooringRope.mooredToSpring");
+                return _fSpring.GetValue(rope) as SpringJoint;
             }
-            catch { return null; }
+            catch (Exception e)
+            {
+                if (!_warnedSpring)
+                {
+                    _warnedSpring = true;
+                    Plugin.Logger.LogWarning("[MooringSync] Не удалось прочитать пружину швартова (mooredToSpring): " + e.Message +
+                        ". Причал будет искаться по сцене, смена причала при той же длине не передаётся.");
+                }
+                return null;
+            }
         }
 
         private int IndexOf(PickupableBoatMooringRope rope)
@@ -483,6 +523,7 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            _dockBySpring.Clear();
             if (_fleet != null) { MooringPatches.ClearIntents(); _fleet.Clear(); return; }
             _cachedBoat = null;
             _bm = null;
@@ -529,14 +570,15 @@ namespace SailwindCoop.Sync
         private static HarmonyMethod Callback(string name) => new HarmonyMethod(typeof(MooringPatches).GetMethod(name,
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static));
         private static void Report(Exception e) { try { Plugin.Logger?.LogWarning("[MooringPatches] " + e); } catch { } }
-        private struct RopeBefore { internal bool Captured, Moored; internal Transform Parent; internal float Length; }
+        // Spring, not parent: game 0.40.1 parents every moored rope to Refs.shiftingWorld.
+        private struct RopeBefore { internal bool Captured, Moored; internal SpringJoint Spring; internal float Length; }
         private static void PreState(PickupableBoatMooringRope __instance, out RopeBefore __state)
         {
             var state = new RopeBefore();
             SailwindCoop.Runtime.PatchGuard.Run(() => {
                 if (__instance == null) return;
                 state.Captured = true; state.Moored = __instance.IsMoored();
-                state.Parent = __instance.transform.parent; state.Length = __instance.currentRopeLengthSquared;
+                state.Spring = MooringSync.GetMooredSpring(__instance); state.Length = __instance.currentRopeLengthSquared;
             }, Report);
             __state = state;
         }
@@ -551,8 +593,9 @@ namespace SailwindCoop.Sync
         private static void PostMoorTo(PickupableBoatMooringRope __instance, GPButtonDockMooring mooring, RopeBefore __state)
             => SailwindCoop.Runtime.PatchGuard.Run(() => {
                 if (__instance == null || !__state.Captured || !__instance.IsMoored() ||
-                    (__state.Moored && __state.Parent == __instance.transform.parent &&
+                    (__state.Moored && __state.Spring == MooringSync.GetMooredSpring(__instance) &&
                      __state.Length.Equals(__instance.currentRopeLengthSquared))) return;
+                MooringSync.RememberDock(mooring);
                 if (_dropIntents.Remove(__instance))
                 {
                     using (InteractionContext.Begin(InteractionSource.LocalInput))

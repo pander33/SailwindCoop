@@ -19,6 +19,9 @@ Everyone must update to wire protocol 106.
 
 ### Fixed
 
+- Sailwind 0.40.1: the host no longer searches the whole scene every second for each moored rope.
+  The game now keeps moored ropes outside the dock, and the mod finds the dock through the rope's
+  spring instead. Works on both 0.40 and 0.40.1.
 - Economy Overhaul: guests running the mod cannot open, use or sell the host's financed cargo, including new loans
   made after joining. Refused actions no longer charge the host or forgive a sale's unpaid debt.
   The Kicia altar also refuses financed cargo on guests before sacrifice effects or consumption.
