@@ -4,6 +4,15 @@ using LiteNetLib.Utils;
 
 namespace SailwindCoop.Net
 {
+    [Flags]
+    public enum ModFeatures : byte
+    {
+        None = 0,
+        EconomyOverhaul = 1,
+        SharedMarkets = 2,
+        ShipyardExpansion = 4,
+    }
+
     // ---------------------------------------------------------------------
     // Mod sharing. After HelloAck the host sends the list of its shared mods and
     // holds the world transfer until the client answers. A client that lacks some
@@ -19,6 +28,7 @@ namespace SailwindCoop.Net
         public ModEntry[] Mods = new ModEntry[0];
         /// <summary>The host's values of settings that change the shared simulation (protocol 101).</summary>
         public ModSetting[] Settings = new ModSetting[0];
+        public ModFeatures Features;
 
         public MsgType Type => MsgType.ModManifest;
 
@@ -62,6 +72,7 @@ namespace SailwindCoop.Net
                 w.Put(Clip(setting.Key));
                 w.Put(Clip(setting.Value));
             }
+            w.Put((byte)Features);
         }
 
         public void Deserialize(NetDataReader r)
@@ -112,6 +123,7 @@ namespace SailwindCoop.Net
                     Key = r.GetString(ModLimits.MaxTextChars),
                     Value = r.GetString(ModLimits.MaxTextChars),
                 };
+            Features = (ModFeatures)r.GetByte();
         }
 
         private static string Clip(string text)
@@ -136,11 +148,12 @@ namespace SailwindCoop.Net
         public ModSyncDecision Decision;
         public byte Missing;
         public byte Different;
+        public ModFeatures Features;
 
         public MsgType Type => MsgType.ModSyncResult;
 
-        public void Serialize(NetDataWriter w) { w.Put((byte)Decision); w.Put(Missing); w.Put(Different); }
-        public void Deserialize(NetDataReader r) { Decision = (ModSyncDecision)r.GetByte(); Missing = r.GetByte(); Different = r.GetByte(); }
+        public void Serialize(NetDataWriter w) { w.Put((byte)Decision); w.Put(Missing); w.Put(Different); w.Put((byte)Features); }
+        public void Deserialize(NetDataReader r) { Decision = (ModSyncDecision)r.GetByte(); Missing = r.GetByte(); Different = r.GetByte(); Features = (ModFeatures)r.GetByte(); }
     }
 
 #if !THUNDERSTORE

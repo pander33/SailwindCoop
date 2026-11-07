@@ -220,6 +220,15 @@ namespace SailwindCoop.Sync
         private readonly ItemSaveIdentity _saveIdentity = new ItemSaveIdentity();
         private readonly OperationLedger<List<ItemEntry>> _authoredResults = new OperationLedger<List<ItemEntry>>();
         private ShipItem _authoringItem;
+        private ShipItem _consumingItem;
+        private readonly Dictionary<ShipItem, List<ItemEntry>> _pendingAuthored = new Dictionary<ShipItem, List<ItemEntry>>();
+        private readonly List<ItemEntry> _completedAuthors = new List<ItemEntry>();
+        private readonly List<ItemEntry> _authorSpawnRetries = new List<ItemEntry>();
+        private bool _receivingBatch, _consumeRefresh;
+        private float _batchRetryAt, _authorSpawnRetryAt;
+        private Runtime.CoopLog.Repeat _batchFailures, _authorSpawnFailures;
+        private bool _receivingClientLifecycle, _clientIndexDirty;
+        private BoatLocalItems[] _receiveBoatCaches;
         private readonly Dictionary<ShipItem, KeyValuePair<uint, uint>> _authoredIdentity = new Dictionary<ShipItem, KeyValuePair<uint, uint>>();
         // Host: items just taken from the host's belt into its hand. The game empties the belt slot inside
         // GoPointer.PickUpItem (ShipItem.OnPickup -> GPButtonInventorySlot.WithdrawItem), before the
@@ -782,10 +791,13 @@ namespace SailwindCoop.Sync
             }
 
             bool pose = msg.Action == ItemAction.Pose;
-            var e = pose ? HostLookup(msg.InstanceId, msg.PrefabIndex) : null;
+            bool consume = msg.Action == ItemAction.Consume;
+            var e = pose || consume ? HostLookup(msg.InstanceId, msg.PrefabIndex) : null;
+            if (consume && e != null && _destroyingItems.Contains(e.Item)) return;
             if (!IsCurrentItemEntry(e))
             {
-                RefreshItems(force: true);
+                if (_consumeRefresh) FlushReceivedItems();
+                else RefreshItems(force: true);
                 e = HostLookup(msg.InstanceId, msg.PrefabIndex);
             }
             if (e == null || e.Item == null)
@@ -803,7 +815,7 @@ namespace SailwindCoop.Sync
             }
             if (!continuous) ClearClientHeldPose(e);
             if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
-            if (msg.Action == ItemAction.Consume)
+            if (consume)
             {
                 // The client ate/consumed the item. The eater's PlayerNeeds is personal and already
                 // applied on the client; the host only owns the shared lifecycle, so it just destroys
@@ -811,8 +823,14 @@ namespace SailwindCoop.Sync
                 var ce = HostLookup(msg.InstanceId, msg.PrefabIndex);
                 if (ce != null && ce.Item != null)
                 {
-                    try { ce.Item.DestroyItem(); } catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Consume destroy: " + ex.Message); }
-                    RefreshItems(force: true);   // emit the despawn now
+                    var item = ce.Item;
+                    var previous = _consumingItem;
+                    _consumingItem = item;
+                    try { item.DestroyItem(); }
+                    catch (Exception ex) { Plugin.Logger.LogWarning("[ItemSync] Consume destroy: " + ex.Message); }
+                    finally { _consumingItem = previous; }
+                    _consumeRefresh = true;
+                    if (!_receivingBatch) FlushReceivedItems();
                     Remember("in consume #" + ce.Index + " actor=" + actor);
                 }
                 else Remember("reject consume id=" + msg.InstanceId);
@@ -2592,7 +2610,8 @@ namespace SailwindCoop.Sync
 
         private void BroadcastSpawn(ItemEntry e, LiteNetLib.NetPeer peer = null, bool snapshot = false)
         {
-            if (e == null || e.Item == null || _operationApplying || e.Item == _authoringItem) return;
+            if (e == null || e.Item == null || _operationApplying || e.Item == _authoringItem ||
+                _pendingAuthored.ContainsKey(e.Item) || _destroyingItems.Contains(e.Item)) return;
             var state = BuildState(e, _net.Clock.ServerTick);
             CoordFrame frame = state.Frame; ushort boatIndex = state.BoatIndex;
             Vector3 pos = state.Pos, vel = state.Vel; Quaternion rot = state.Rot;
@@ -3026,12 +3045,18 @@ namespace SailwindCoop.Sync
         /// <summary>A cargo membership change happened locally (load/unload). Client forwards the request;
         /// the host mirrors it and broadcasts authoritative state.</summary>
         public void OnLocalCargo(ShipItem item)
+            => OnLocalCargo(item, null);
+
+        private void OnLocalCargo(ShipItem item, ItemEntry e)
         {
             if (InteractionContext.Suppressed) return;
             if (ItemOperationCapture.Absorb()) return;
             if (ApplyingCargo || _net.State != LinkState.Connected || item == null) return;
-            RefreshItems(force: false);
-            if (!_byItem.TryGetValue(item, out var e)) return;
+            if (e == null)
+            {
+                RefreshItems(force: false);
+                if (!_byItem.TryGetValue(item, out e)) return;
+            }
             if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             int port = CargoPortOf(item);
             if (_net.Role == Role.Client && port < 0)
@@ -3500,6 +3525,7 @@ namespace SailwindCoop.Sync
             var prev = buffers.Prev;
             foreach (var kv in _byInstanceId) prev.Add(kv.Key, kv.Value);
             _pendingClientItems.Prune(item => item != null);
+            _destroyingItems.RemoveWhere(item => item == null);
 
             // Alive set = previously-known still-alive (covers items that went temporarily inactive,
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
@@ -3575,17 +3601,7 @@ namespace SailwindCoop.Sync
                 int prefabIndex = ordered[i].PrefabIndex;
                 prev.TryGetValue(instanceId, out var e);
                 bool isNew = e == null;
-                if (e == null)
-                {
-                    e = new ItemEntry
-                    {
-                        InstanceId = instanceId,
-                        PrefabIndex = prefabIndex,
-                        NetId = NetIdFor(instanceId),
-                    };
-                    if (_localHeld.TryGetValue(item, out var holder))
-                        e.HolderNetId = holder;
-                }
+                if (isNew) e = NewItemEntry(item, instanceId, prefabIndex);
                 e.Index = (ushort)i;
                 e.InstanceId = instanceId;
                 e.PrefabIndex = prefabIndex;
@@ -3614,6 +3630,13 @@ namespace SailwindCoop.Sync
 
             // Host: items that appeared after load (caught fish, cooked food, crate contents) -> spawn.
             foreach (var e in newlyAdded) BroadcastSpawn(e);
+        }
+
+        private ItemEntry NewItemEntry(ShipItem item, int instanceId, int prefabIndex)
+        {
+            var entry = new ItemEntry { InstanceId = instanceId, PrefabIndex = prefabIndex, NetId = NetIdFor(instanceId) };
+            if (_localHeld.TryGetValue(item, out var holder)) entry.HolderNetId = holder;
+            return entry;
         }
 
         /// <summary>Client: host id of an item the local player carries.</summary>
@@ -3717,10 +3740,10 @@ namespace SailwindCoop.Sync
             var pending = _pendingClientItems.Resolve(_net.MyNetId, _net.MyNetId, authorRequestId, prefabIndex, instanceId);
             if (pending != null)
             {
+                bool oldIdCollision = _byInstanceId.TryGetValue(InstanceIdOf(pending), out var previous) && previous.Item != pending;
                 RemapLocalItem(pending, instanceId);
                 _hostIds.Add(instanceId);
-                RefreshItems(force: true);
-                _byInstanceId.TryGetValue(instanceId, out var fr);
+                var fr = BindClientSpawn(pending, instanceId, prefabIndex, allowIncremental: !oldIdCollision);
                 if (fr != null && fr.Item == pending) _pendingClientItems.Bind(authorRequestId, instanceId);
                 // If this item was just withdrawn from our belt to hand, tell the host we hold it now.
                 if (pending == _pendingHeldItem || LocalHand(pending))
@@ -3764,8 +3787,36 @@ namespace SailwindCoop.Sync
                                           Quaternion.identity, amount, health, sold, nailed);
             if (spawned == null) return null;
             _hostIds.Add(instanceId);
+            var bound = BindClientSpawn(spawned, instanceId, prefabIndex);
+            return bound != null && bound.PrefabIndex == prefabIndex ? bound : null;
+        }
+
+        private ItemEntry BindClientSpawn(ShipItem item, int id, int prefab, bool allowIncremental = true)
+        {
+            // Bind the identity now so the next packet can reference it. The batch only delays
+            // sorting the local index, which does not identify the item on the wire.
+            if (_receivingClientLifecycle && allowIncremental && _items.Count <= ushort.MaxValue &&
+                item.gameObject.activeInHierarchy && !_destroyingItems.Contains(item) &&
+                !_byInstanceId.ContainsKey(id) && !_byItem.ContainsKey(item))
+            {
+                var save = item.GetComponent<SaveablePrefab>();
+                if (HasStableIdentity(item, save) && save.instanceId == id && save.prefabIndex == prefab)
+                {
+                    var entry = NewItemEntry(item, id, prefab);
+                    entry.Item = item;
+                    entry.Index = (ushort)_items.Count;
+                    entry.Net.InterpDelayMs = InterpDelayMs;
+                    _items.Add(entry);
+                    _byItem.Add(item, entry);
+                    _byInstanceId.Add(id, entry);
+                    _net.Registry.RegisterFixed(entry.NetId, NetObjKind.Item, NetRegistry.HostAuthority, item);
+                    _nextPendingStateRetry = 0f;
+                    _clientIndexDirty = true;
+                    return entry;
+                }
+            }
             RefreshItems(force: true);
-            return _byInstanceId.TryGetValue(instanceId, out var e) && e.PrefabIndex == prefabIndex ? e : null;
+            return _byInstanceId.TryGetValue(id, out var found) ? found : null;
         }
 
         /// <summary>Reassign a live local item's instanceId to the host's, keeping engine dedup/caches sane.</summary>
@@ -3794,6 +3845,7 @@ namespace SailwindCoop.Sync
 
             if (_byInstanceId.TryGetValue(oldId, out var old))
             {
+                _items.Remove(old);
                 _byInstanceId.Remove(oldId);
                 if (old.Item != null) _byItem.Remove(old.Item);
                 _net.Registry.Remove(old.NetId);
@@ -4077,7 +4129,7 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private static void RemoveCachedLocalItem(int instanceId)
+        private void RemoveCachedLocalItem(int instanceId)
         {
             if (instanceId <= 0) return;
             try
@@ -4086,8 +4138,12 @@ namespace SailwindCoop.Sync
                     _fBoatCachedItems = typeof(BoatLocalItems).GetField("cachedItems", BindingFlags.NonPublic | BindingFlags.Instance);
                 if (_fBoatCachedItems == null) return;
 
-                foreach (var localItems in UnityEngine.Object.FindObjectsOfType<BoatLocalItems>())
+                var caches = _receivingClientLifecycle
+                    ? _receiveBoatCaches ?? (_receiveBoatCaches = UnityEngine.Object.FindObjectsOfType<BoatLocalItems>())
+                    : UnityEngine.Object.FindObjectsOfType<BoatLocalItems>();
+                foreach (var localItems in caches)
                 {
+                    if (localItems == null) continue;
                     var list = _fBoatCachedItems.GetValue(localItems) as List<SavePrefabData>;
                     if (list == null) continue;
                     for (int i = list.Count - 1; i >= 0; i--)
@@ -4177,6 +4233,7 @@ namespace SailwindCoop.Sync
         // cart). Their cart membership can be sent only once the host has authored them and its id
         // has landed here; until then OnLocalCargo has nothing to name. Dropped after 30 s.
         private readonly Dictionary<ShipItem, float> _cargoAfterAuthor = new Dictionary<ShipItem, float>();
+        private readonly List<ShipItem> _cargoAfterAuthorDone = new List<ShipItem>();
 
         internal void QueueCargoAfterAuthor(ShipItem item)
         {
@@ -4186,13 +4243,26 @@ namespace SailwindCoop.Sync
         private void SendCargoAfterAuthor()
         {
             float now = Time.unscaledTime;
-            foreach (var pair in new List<KeyValuePair<ShipItem, float>>(_cargoAfterAuthor))
+            _cargoAfterAuthorDone.Clear();
+            foreach (var pair in _cargoAfterAuthor)
             {
                 var item = pair.Key;
-                bool ready = item != null && _byItem.TryGetValue(item, out var e) && _hostIds.Contains(e.InstanceId);
-                if (ready) OnLocalCargo(item);
-                if (ready || item == null || now > pair.Value) _cargoAfterAuthor.Remove(item);
+                bool ready = TryGetAuthoredCargo(item, out _);
+                if (ready || item == null || now > pair.Value) _cargoAfterAuthorDone.Add(item);
             }
+            foreach (var item in _cargoAfterAuthorDone)
+            {
+                if (TryGetAuthoredCargo(item, out var e)) OnLocalCargo(item, e);
+                _cargoAfterAuthor.Remove(item);
+            }
+            _cargoAfterAuthorDone.Clear();
+        }
+
+        private bool TryGetAuthoredCargo(ShipItem item, out ItemEntry entry)
+        {
+            entry = null;
+            return item != null && _byItem.TryGetValue(item, out entry) && _hostIds.Contains(entry.InstanceId) &&
+                !_pendingClientItems.Contains(item) && IsCurrentItemEntry(entry);
         }
 
         /// <summary>
@@ -4222,7 +4292,109 @@ namespace SailwindCoop.Sync
             Remember("out sold(despawn) id=" + instanceId);
         }
 
-        /// <summary>Host: author the item the client created; RefreshItems then broadcasts the SpawnObject.</summary>
+        internal void BeginReceiveBatch() => _receivingBatch = true;
+
+        internal void MarkRemoteConsume(ShipItem item)
+        {
+            // A foreign prefix may skip DestroyItem. Only the completed original marks an
+            // object dead before Unity's end-of-frame destruction.
+            if (ReferenceEquals(item, _consumingItem)) _destroyingItems.Add(item);
+        }
+
+        internal void BeforeReceive(MsgType type, INetMessage message)
+        {
+            _receivingClientLifecycle = _receivingBatch && _net.Role == Role.Client &&
+                (type == MsgType.SpawnObject || type == MsgType.DespawnObject);
+            if (!_receivingClientLifecycle) FinishClientLifecycle();
+            // Consecutive creations or removals can share one registry pass. Flush before
+            // a different message can use their identities, even within the same poll.
+            if ((_pendingAuthored.Count > 0 && type != MsgType.FishCatch) ||
+                (_consumeRefresh && !(message is ItemRequestMsg request && request.Action == ItemAction.Consume && request.InstanceId != 0)))
+                FlushReceivedItems();
+        }
+
+        internal void EndReceiveBatch()
+        {
+            _receivingBatch = false;
+            _receivingClientLifecycle = false;
+            FinishClientLifecycle();
+            FlushReceivedItems();
+            RetryAuthorSpawns();
+        }
+
+        private void FinishClientLifecycle()
+        {
+            _receiveBoatCaches = null;
+            if (!_clientIndexDirty) return;
+            _clientIndexDirty = false;
+            _items.Sort((a, b) => a.InstanceId.CompareTo(b.InstanceId));
+            for (int i = 0; i < _items.Count; i++) _items[i].Index = (ushort)i;
+        }
+
+        private void FlushReceivedItems()
+        {
+            if (!_consumeRefresh && _pendingAuthored.Count == 0) return;
+            if (Time.unscaledTime < _batchRetryAt) return;
+            try { RefreshItems(force: true); }
+            catch (Exception e)
+            {
+                // Keep pending authors and removals for the next attempt. A failed registry
+                // refresh must not consume the unrelated message that ended the batch.
+                _batchRetryAt = Time.unscaledTime + .25f;
+                Plugin.Logger.ReportError("[ItemSync] Receive batch refresh failed", e, ref _batchFailures);
+                return;
+            }
+            _consumeRefresh = false;
+            try
+            {
+                // Bind all results before sending, so a retry can replay its authoritative item.
+                foreach (var pair in _pendingAuthored)
+                {
+                    if (!_byItem.TryGetValue(pair.Key, out var entry)) continue;
+                    pair.Value.Add(entry);
+                    _completedAuthors.Add(entry);
+                }
+                _pendingAuthored.Clear();
+                // Publish even before the world baseline has settled: authors await their host ids.
+                foreach (var entry in _completedAuthors)
+                {
+                    if (TryPublishAuthor(entry)) continue;
+                    if (_authorSpawnRetries.Count == 0) _authorSpawnRetryAt = Time.unscaledTime + .25f;
+                    _authorSpawnRetries.Add(entry);
+                }
+            }
+            finally
+            {
+                _completedAuthors.Clear();
+            }
+        }
+
+        private bool TryPublishAuthor(ItemEntry entry)
+        {
+            try { BroadcastSpawn(entry); return true; }
+            catch (Exception e)
+            {
+                Plugin.Logger.ReportError("[ItemSync] Author spawn failed, will retry", e, ref _authorSpawnFailures);
+                return false;
+            }
+        }
+
+        private void RetryAuthorSpawns()
+        {
+            if (_authorSpawnRetries.Count == 0 || Time.unscaledTime < _authorSpawnRetryAt) return;
+            _authorSpawnRetryAt = Time.unscaledTime + .25f;
+            int waiting = 0;
+            for (int i = 0; i < _authorSpawnRetries.Count; i++)
+            {
+                var entry = _authorSpawnRetries[i];
+                if (!IsCurrentItemEntry(entry) || !_byItem.TryGetValue(entry.Item, out var current) || current != entry ||
+                    _tombstones.Contains(entry.InstanceId) || TryPublishAuthor(entry)) continue;
+                _authorSpawnRetries[waiting++] = entry;
+            }
+            _authorSpawnRetries.RemoveRange(waiting, _authorSpawnRetries.Count - waiting);
+        }
+
+        /// <summary>Host: author the item the client created and publish it in this network poll.</summary>
         public void OnFishCatch(FishCatchMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Host) return;
@@ -4257,6 +4429,7 @@ namespace SailwindCoop.Sync
                 var retained = new List<ItemEntry>();
                 if (!_authoredResults.TryBegin(actor, msg.RequestId, retained, out var previous))
                 {
+                    if (previous.Count == 0) FlushReceivedItems();
                     foreach (var entry in previous) BroadcastSpawn(entry, fromPeer, snapshot: true);
                     return;
                 }
@@ -4281,13 +4454,9 @@ namespace SailwindCoop.Sync
                 if (good != null && msg.MissionIndex >= 0 && missions != null && msg.MissionIndex < missions.Length &&
                     missions[msg.MissionIndex] != null && MissionNamesProduct(item, msg.MissionIndex))
                     good.RegisterToMission(msg.MissionIndex, missions[msg.MissionIndex].dueDay);
-                RefreshItems(force: true);
-                var authored = _byItem[item];
-                authored.AuthorRequester = actor;
-                authored.AuthorRequestId = msg.RequestId;
-                retained.Add(authored);
+                _pendingAuthored.Add(item, retained);
                 _authoringItem = null;
-                BroadcastSpawn(authored);
+                if (!_receivingBatch) FlushReceivedItems();
                 Remember("in fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
             }
             catch (Exception e)
@@ -4347,12 +4516,21 @@ namespace SailwindCoop.Sync
             _localClaimed.Clear();
             _pendingClientItems.Clear();
             _cargoAfterAuthor.Clear();
+            _cargoAfterAuthorDone.Clear();
             _baselineItems.Clear();
             _saveIdentity.Clear();
             _authoredResults.Clear();
             _authoredIdentity.Clear();
             _hostHeldFromBelt.Clear();
             _authoringItem = null;
+            _consumingItem = null;
+            _pendingAuthored.Clear();
+            _completedAuthors.Clear();
+            _authorSpawnRetries.Clear();
+            _batchRetryAt = _authorSpawnRetryAt = 0f;
+            _receiveBoatCaches = null;
+            _receivingClientLifecycle = _clientIndexDirty = false;
+            _receivingBatch = _consumeRefresh = false;
             _pendingHeldItem = null;
             _gp = null;
             _rejectedPoseLogged.Clear();

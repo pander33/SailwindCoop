@@ -41,10 +41,22 @@ namespace SailwindCoop.Sync
             _checkTimer += Time.unscaledDeltaTime;   // also while the host's world is held (timeScale 0)
             if (_lastSig != null && _checkTimer < CheckSeconds) return;
             _checkTimer = 0f;
-            string sig = BuildSignature(out var entries);
+            bool includeMod = EconomyOverhaulCompat.Present && _net.HasModPeer(ModFeatures.EconomyOverhaul);
+            string sig = BuildSignature(includeMod, out var entries);
             if (sig == _lastSig) return;
             _lastSig = sig;
-            _net.Broadcast(new MissionJournalMsg { Missions = entries }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            var journal = new MissionJournalMsg { Missions = entries };
+            if (includeMod)
+            {
+                var vanilla = (MissionEntry[])entries.Clone();
+                for (int i = 0; i < vanilla.Length; i++)
+                {
+                    vanilla[i].ModModifiers = 0;
+                    vanilla[i].ModFlags = 0;
+                }
+                _net.BroadcastForFeature(ModFeatures.EconomyOverhaul, journal, new MissionJournalMsg { Missions = vanilla });
+            }
+            else _net.Broadcast(journal, LiteNetLib.DeliveryMethod.ReliableOrdered);
             MissionText = entries.Length + " missions (host)";
         }
 
@@ -53,7 +65,7 @@ namespace SailwindCoop.Sync
         public void SendBaseline(LiteNetLib.NetPeer peer)
         {
             if (_net.Role != Role.Host || peer == null) return;
-            BuildSignature(out var entries);
+            BuildSignature((_net.FeaturesOf(peer) & ModFeatures.EconomyOverhaul) != 0, out var entries);
             peer.Send(new MissionJournalMsg { Missions = entries }, LiteNetLib.DeliveryMethod.ReliableOrdered);
         }
 
@@ -61,7 +73,7 @@ namespace SailwindCoop.Sync
         // Host: build the wire journal + a cheap change signature.
         // -----------------------------------------------------------------
 
-        private string BuildSignature(out MissionEntry[] entries)
+        private string BuildSignature(bool includeMod, out MissionEntry[] entries)
         {
             var list = new System.Collections.Generic.List<MissionEntry>(Slots);
             var sb = new StringBuilder();
@@ -88,7 +100,7 @@ namespace SailwindCoop.Sync
                         DeliveredGoods = d.deliveredGoods,
                         DueDay = d.dueDay,
                     });
-                    if (EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world))
+                    if (includeMod && EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world))
                     {
                         var withMod = list[list.Count - 1];
                         withMod.ModModifiers = modifiers;
@@ -141,7 +153,8 @@ namespace SailwindCoop.Sync
                     }
                     catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] mission " + e.MissionIndex + ": " + ex.Message); }
                 }
-                EconomyOverhaulCompat.MirrorRecords(entries);
+                if ((_net.HostModFeatures & ModFeatures.EconomyOverhaul) != 0)
+                    EconomyOverhaulCompat.MirrorRecords(entries);
                 Plugin.Logger.LogInfo("[MissionSync] journal mirrored: " + entries.Length + " missions");
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] ApplyJournal: " + ex.Message); }
@@ -172,7 +185,8 @@ namespace SailwindCoop.Sync
                 DueDay = d.dueDay,
             };
             // Economy Overhaul rolls modifiers per offer object on this machine; the host builds a new one.
-            if (EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world))
+            if ((_net.HostModFeatures & ModFeatures.EconomyOverhaul) != 0 &&
+                EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world))
             {
                 entry.ModModifiers = modifiers;
                 entry.ModFlags = (byte)(1 | (world ? 2 : 0));

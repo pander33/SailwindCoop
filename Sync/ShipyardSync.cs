@@ -104,7 +104,8 @@ namespace SailwindCoop.Sync
 
         private void TickOwnership(float dt)
         {
-            if (_net.Role != Role.Host || _net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading) return;
+            if (_net.Role != Role.Host || _net.State != LinkState.Connected || !EconomyOverhaulCompat.Present ||
+                !GameState.playing || GameState.currentlyLoading) return;
             _ownershipTimer += dt;
             if (_ownershipTimer < 1f) return;
             _ownershipTimer = 0f;

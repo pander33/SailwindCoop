@@ -51,31 +51,40 @@ namespace SailwindCoop.Sync
         // ---- Markets of this world ------------------------------------------------
 
         private Port[] _portsSeen;
-        private IslandMarket[] _markets = new IslandMarket[0];
+        private Port[] _marketOwners = Array.Empty<Port>();
+        private IslandMarket[] _markets = Array.Empty<IslandMarket>();
+        private float _retryMissingAt;
 
-        private IslandMarket[] Markets()
+        private IslandMarket[] Markets(bool retryUnresolved = false)
         {
+            float now = Time.unscaledTime;
+            bool retryMissing = now >= _retryMissingAt;
+            if (retryMissing) _retryMissingAt = now + ScanSecs;
+            retryMissing |= retryUnresolved;
             var ports = Port.ports;
-            if (ports == null) return _markets = new IslandMarket[0];
-            bool stale = !ReferenceEquals(ports, _portsSeen) || _markets.Length != ports.Length;
-            if (!stale)
-                for (int i = 0; i < _markets.Length; i++)
-                    if (ports[i] != null && _markets[i] == null) { stale = true; break; }
-            if (stale)
+            if (ports == null) return Array.Empty<IslandMarket>();
+            if (!ReferenceEquals(ports, _portsSeen))
             {
                 _portsSeen = ports;
+                _marketOwners = new Port[ports.Length];
                 _markets = new IslandMarket[ports.Length];
-                for (int i = 0; i < ports.Length; i++)
-                    _markets[i] = ports[i] != null ? ports[i].GetComponent<IslandMarket>() : null;
+            }
+            for (int i = 0; i < ports.Length; i++)
+            {
+                var port = ports[i];
+                var market = _markets[i];
+                // The registry fills slots in place. Retry a missing component without invalidating
+                // other ports, and immediately replace an entry whose Unity object was destroyed.
+                if (ReferenceEquals(port, _marketOwners[i]) && port != null &&
+                    (market != null || (!retryMissing && ReferenceEquals(market, null)))) continue;
+                _marketOwners[i] = port;
+                _markets[i] = port != null ? port.GetComponent<IslandMarket>() : null;
             }
             return _markets;
         }
 
-        private IslandMarket Market(int port)
-        {
-            var markets = Markets();
-            return port >= 0 && port < markets.Length && markets[port] != null && markets[port].currentSupply != null ? markets[port] : null;
-        }
+        private static IslandMarket Market(IslandMarket[] markets, int port) =>
+            port >= 0 && port < markets.Length && markets[port] != null && markets[port].currentSupply != null ? markets[port] : null;
 
         public void Tick()
         {
@@ -83,6 +92,14 @@ namespace SailwindCoop.Sync
             {
                 if (_net.State != LinkState.Connected || !EconomyOverhaulCompat.MarketsOn) return;
                 if (_net.Role == Role.Host) TickHost();
+                else if (Mirrors && _unappliedPorts.Count > 0 && Time.unscaledTime >= _retryMissingAt &&
+                         GameState.playing && !GameState.currentlyLoading)
+                {
+                    _repaint.Clear();
+                    _repaint.UnionWith(_unappliedPorts);
+                    CollectPendingTrades();
+                    if (PaintMarkets()) EconomyOverhaulCompat.RefreshTradeBook();
+                }
             }
             catch (Exception e) { Plugin.Logger.ReportError("[Markets] Tick failed", e, ref _failures); }
         }
@@ -101,6 +118,8 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<uint, uint> _ackByClient = new Dictionary<uint, uint>();
         private readonly HashSet<uint> _owesAck = new HashSet<uint>();
         private readonly List<MarketPort> _portBuffer = new List<MarketPort>();
+        private readonly List<MarketPort> _livePorts = new List<MarketPort>();
+        private readonly List<uint> _gonePeers = new List<uint>();
         private float _scanAt;
 
         private void TickHost()
@@ -110,18 +129,26 @@ namespace SailwindCoop.Sync
             if (now < _scanAt && _owesAck.Count == 0) return;
             _scanAt = now + ScanSecs;
 
-            uint[] ready = _net.ReadyClientIds();
+            uint[] ready = _net.ReadyClientIds(ModFeatures.SharedMarkets);
             // A client that left takes its view and its acknowledgement along: one that comes back
             // starts with everything and a fresh count.
-            var gone = new List<uint>();
-            foreach (uint id in _peers.Keys) if (Array.IndexOf(ready, id) < 0) gone.Add(id);
-            foreach (uint id in _ackByClient.Keys) if (Array.IndexOf(ready, id) < 0 && !gone.Contains(id)) gone.Add(id);
-            foreach (uint id in gone) { _peers.Remove(id); _ackByClient.Remove(id); }
+            _gonePeers.Clear();
+            foreach (uint id in _peers.Keys) if (Array.IndexOf(ready, id) < 0) _gonePeers.Add(id);
+            foreach (uint id in _ackByClient.Keys) if (Array.IndexOf(ready, id) < 0 && !_peers.ContainsKey(id)) _gonePeers.Add(id);
+            foreach (uint id in _gonePeers) { _peers.Remove(id); _ackByClient.Remove(id); }
             if (ready.Length == 0) { _owesAck.Clear(); return; }
 
             double[] fx = EconomyOverhaulCompat.ReadFx(out int fxDay, out double[] rates, out double[] basis, out double[] smooth, out double[] closes);
             MarketEvent[] events = EconomyOverhaulCompat.ReadDemand(out double[] demandView);
             var markets = Markets();
+            // Shared across peer comparisons. SendToPlayer serializes inline and copies the bytes.
+            _livePorts.Clear();
+            for (int port = 0; port < markets.Length; port++)
+            {
+                var m = Market(markets, port);
+                if (m != null)
+                    _livePorts.Add(new MarketPort { Port = (short)port, Bonus = EconomyOverhaulCompat.MarketBonus(port), Supply = m.currentSupply });
+            }
 
             foreach (uint id in ready)
             {
@@ -130,13 +157,9 @@ namespace SailwindCoop.Sync
                 if (full) view.FullAt = now + FullSecs;
 
                 _portBuffer.Clear();
-                for (int port = 0; port < markets.Length; port++)
+                foreach (var port in _livePorts)
                 {
-                    var m = markets[port];
-                    if (m == null || m.currentSupply == null) continue;
-                    float bonus = EconomyOverhaulCompat.MarketBonus(port);
-                    if (!Changed(view, port, m.currentSupply, bonus) && !full) continue;
-                    _portBuffer.Add(new MarketPort { Port = (short)port, Bonus = bonus, Supply = (float[])m.currentSupply.Clone() });
+                    if (Changed(view, port.Port, port.Supply, port.Bonus) || full) _portBuffer.Add(port);
                 }
                 bool fxChanged = fx != null && (full || !Same(view.Fx, fx));
                 bool demandChanged = demandView != null && (full || !Same(view.Demand, demandView));
@@ -188,23 +211,23 @@ namespace SailwindCoop.Sync
         {
             try
             {
-                if (_net.Role != Role.Host) return;
+                if (_net.Role != Role.Host || !EconomyOverhaulCompat.MarketsOn ||
+                    (_net.FeaturesOf(fromPeer) & ModFeatures.SharedMarkets) == 0) return;
                 uint from = _net.PlayerNetIdForPeer(fromPeer);
                 if (from == 0) return;
                 _ackByClient[from] = msg.Seq;
                 _owesAck.Add(from);
-                if (!EconomyOverhaulCompat.MarketsOn) return;
-
                 var touched = new HashSet<int>();
+                var markets = msg.Changes.Length > 0 ? Markets(retryUnresolved: true) : Array.Empty<IslandMarket>();
                 foreach (var c in msg.Changes)
                 {
-                    var m = Market(c.Port);
+                    var m = Market(markets, c.Port);
                     if (m == null || c.Good < 0 || c.Good >= m.currentSupply.Length) continue;
                     m.currentSupply[c.Good] += c.Delta;
                     touched.Add(c.Port);
                     EconomyOverhaulCompat.CheckDemand(c.Port, c.Good);
                 }
-                foreach (int port in touched) EconomyOverhaulCompat.RefreshMarket(Market(port));
+                foreach (int port in touched) EconomyOverhaulCompat.RefreshMarket(Market(markets, port));
                 EconomyOverhaulCompat.AddFx(msg.Cargo, msg.Shops, msg.Rates);
                 EconomyOverhaulCompat.RefreshTradeBook();
             }
@@ -219,13 +242,60 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<long, float> _pendingStock = new Dictionary<long, float>();
         private readonly Dictionary<int, MarketPort> _hostPorts = new Dictionary<int, MarketPort>();
         private readonly HashSet<int> _repaint = new HashSet<int>();
+        private readonly HashSet<int> _unappliedPorts = new HashSet<int>();
+        private readonly Dictionary<int, MarketPrices> _prices = new Dictionary<int, MarketPrices>();
+        private readonly double[] _pendingRates = new double[4];
         private EconomyStateMsg _hostFx;
+
+        private struct MarketPrices
+        {
+            public IslandMarket Market;
+            public PriceReport Report;
+            public float Cap, Limit, DefaultCap, Positive, Negative;
+            public float[] Stock;
+
+            public static MarketPrices Capture(IslandMarket market, int port)
+            {
+                var reports = market.knownPrices;
+                var tuning = DebugMarketTracker.instance;
+                return new MarketPrices
+                {
+                    Market = market,
+                    Report = reports != null && port < reports.Length ? reports[port] : null,
+                    Cap = market.goodsSoftCapOverride,
+                    Limit = market.supplyPurchaseLimit,
+                    DefaultCap = DebugMarketTracker.goodsAmountSoftCap,
+                    Positive = tuning != null ? tuning.positivePriceMult : float.NaN,
+                    Negative = tuning != null ? tuning.negativePriceMult : float.NaN,
+                };
+            }
+
+            public bool Matches(MarketPrices current)
+            {
+                if (!ReferenceEquals(Market, current.Market) || !ReferenceEquals(Report, current.Report) ||
+                    Report == null || !Report.approved || Report.day != GameState.day ||
+                    Cap != current.Cap || Limit != current.Limit || DefaultCap != current.DefaultCap ||
+                    Positive != current.Positive || Negative != current.Negative ||
+                    Stock.Length != current.Market.currentSupply.Length) return false;
+                for (int i = 0; i < Stock.Length; i++)
+                    if (!SameBits(Stock[i], current.Market.currentSupply[i])) return false;
+                return true;
+            }
+
+            public void SaveStock(float[] buffer)
+            {
+                var supply = Market.currentSupply;
+                Stock = buffer != null && buffer.Length == supply.Length ? buffer : new float[supply.Length];
+                Array.Copy(supply, Stock, Stock.Length);
+            }
+        }
 
         public void OnEconomyState(EconomyStateMsg msg)
         {
             try
             {
-                if (_net.Role != Role.Client || !EconomyOverhaulCompat.MarketsOn) return;
+                if (_net.Role != Role.Client || !EconomyOverhaulCompat.MarketsOn ||
+                    (_net.HostModFeatures & ModFeatures.SharedMarkets) == 0) return;
                 if (!_mirrors)
                 {
                     _mirrors = true;
@@ -246,49 +316,75 @@ namespace SailwindCoop.Sync
                     _repaint.Add(p.Port);
                 }
                 if (msg.HasFx) _hostFx = msg;
+                _repaint.UnionWith(_unappliedPorts);
+                CollectPendingTrades();
 
-                // Changes the host has not counted yet are still ours to show.
-                _pendingStock.Clear();
-                var pendingRates = new double[4];
-                foreach (var p in _pending)
-                {
-                    foreach (var c in p.Value.Changes)
-                    {
-                        long key = ((long)c.Port << 16) | (ushort)c.Good;
-                        _pendingStock.TryGetValue(key, out float sum);
-                        _pendingStock[key] = sum + c.Delta;
-                    }
-                    for (int i = 0; i < pendingRates.Length && i < p.Value.Rates.Length; i++) pendingRates[i] += p.Value.Rates[i];
-                }
-
-                // Even an ack-only reply changes the overlay. The host may be back at its last
-                // transmitted stock after another player's compensating trade, so no port was sent.
-                foreach (int port in _repaint)
-                {
-                    if (!_hostPorts.TryGetValue(port, out var p)) continue;
-                    var m = Market(p.Port);
-                    if (m == null || p.Supply == null) continue;
-                    int count = Math.Min(m.currentSupply.Length, p.Supply.Length);
-                    for (int g = 0; g < count; g++)
-                    {
-                        float value = p.Supply[g];
-                        if (_pendingStock.Count > 0 && _pendingStock.TryGetValue(((long)p.Port << 16) | (ushort)g, out float mine)) value += mine;
-                        m.currentSupply[g] = value;
-                    }
-                    if (!float.IsNaN(p.Bonus)) EconomyOverhaulCompat.SetMarketBonus(p.Port, p.Bonus);
-                    EconomyOverhaulCompat.RefreshMarket(m);
-                }
+                // Even an ack-only reply can remove a local change from the overlay.
+                bool pricesChanged = PaintMarkets();
                 if (_hostFx != null && (msg.HasFx || ratesAcknowledged))
                 {
                     var rates = (double[])_hostFx.Rates.Clone();
-                    for (int i = 0; i < rates.Length && i < pendingRates.Length; i++) rates[i] += pendingRates[i];
+                    for (int i = 0; i < rates.Length && i < _pendingRates.Length; i++) rates[i] += _pendingRates[i];
                     EconomyOverhaulCompat.WriteFx(_hostFx.FxDay, rates, (double[])_hostFx.Basis.Clone(),
                         (double[])_hostFx.Smooth.Clone(), (double[])_hostFx.Closes.Clone());
                 }
                 if (msg.HasDemand) EconomyOverhaulCompat.WriteDemand(msg.Events);
-                if (_repaint.Count > 0 || msg.HasFx || ratesAcknowledged) EconomyOverhaulCompat.RefreshTradeBook();
+                if (pricesChanged || msg.HasFx || msg.HasDemand || ratesAcknowledged) EconomyOverhaulCompat.RefreshTradeBook();
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[Markets] OnEconomyState: " + e.Message); }
+        }
+
+        private void CollectPendingTrades()
+        {
+            _pendingStock.Clear();
+            Array.Clear(_pendingRates, 0, _pendingRates.Length);
+            foreach (var p in _pending)
+            {
+                foreach (var c in p.Value.Changes)
+                {
+                    long key = ((long)c.Port << 16) | (ushort)c.Good;
+                    _pendingStock.TryGetValue(key, out float sum);
+                    _pendingStock[key] = sum + c.Delta;
+                }
+                for (int i = 0; i < _pendingRates.Length && i < p.Value.Rates.Length; i++) _pendingRates[i] += p.Value.Rates[i];
+            }
+        }
+
+        private bool PaintMarkets()
+        {
+            if (_repaint.Count == 0) return false;
+            var markets = Markets();
+            bool pricesChanged = false;
+            foreach (int port in _repaint)
+            {
+                if (!_hostPorts.TryGetValue(port, out var p) || p.Supply == null) continue;
+                var m = Market(markets, port);
+                if (m == null) { _unappliedPorts.Add(port); continue; }
+                _unappliedPorts.Remove(port);
+                bool stockChanged = false;
+                int count = Math.Min(m.currentSupply.Length, p.Supply.Length);
+                for (int g = 0; g < count; g++)
+                {
+                    float value = p.Supply[g];
+                    if (_pendingStock.Count > 0 && _pendingStock.TryGetValue(((long)p.Port << 16) | (ushort)g, out float mine)) value += mine;
+                    if (SameBits(m.currentSupply[g], value)) continue;
+                    m.currentSupply[g] = value;
+                    stockChanged = true;
+                }
+                bool bonusChanged = !float.IsNaN(p.Bonus) && EconomyOverhaulCompat.SetMarketBonus(port, p.Bonus);
+                var inputs = MarketPrices.Capture(m, port);
+                _prices.TryGetValue(port, out var seen);
+                if (!stockChanged && !bonusChanged && seen.Matches(inputs)) continue;
+                if (EconomyOverhaulCompat.RefreshMarket(m))
+                {
+                    var refreshed = MarketPrices.Capture(m, port);
+                    refreshed.SaveStock(seen.Stock);
+                    _prices[port] = refreshed;
+                }
+                else _prices.Remove(port);
+                pricesChanged = true;
+            }
+            return pricesChanged;
         }
 
         // A client's trade: what it changes is measured from before to after. Nested trades (a shop
@@ -301,7 +397,7 @@ namespace SailwindCoop.Sync
         {
             if (_tradeDepth > 0) { _tradeDepth++; return; }
             if (!Mirrors) return;
-            var markets = Markets();
+            var markets = Markets(retryUnresolved: true);
             for (int port = 0; port < markets.Length; port++)
             {
                 var m = markets[port];
@@ -320,7 +416,7 @@ namespace SailwindCoop.Sync
             if (_tradeDepth == 0 || --_tradeDepth > 0) return;
             if (!Mirrors) return;
             var changes = new List<MarketChange>();
-            var markets = Markets();
+            var markets = Markets(retryUnresolved: true);
             for (int port = 0; port < markets.Length; port++)
             {
                 var m = markets[port];
@@ -362,6 +458,9 @@ namespace SailwindCoop.Sync
             _ackByClient.Clear();
             _owesAck.Clear();
             _scanAt = 0f;
+            _livePorts.Clear();
+            _portBuffer.Clear();
+            _gonePeers.Clear();
             if (_mirrors) Plugin.Logger.LogInfo("[Markets] session over; this machine's market simulation is back on");
             _mirrors = false;
             _seq = 0;
@@ -370,10 +469,14 @@ namespace SailwindCoop.Sync
             _hostPorts.Clear();
             _hostFx = null;
             _repaint.Clear();
+            _unappliedPorts.Clear();
+            _prices.Clear();
             _tradeDepth = 0;
             _before.Clear();
             _portsSeen = null;
-            _markets = new IslandMarket[0];
+            _marketOwners = Array.Empty<Port>();
+            _markets = Array.Empty<IslandMarket>();
+            _retryMissingAt = 0f;
         }
     }
 }

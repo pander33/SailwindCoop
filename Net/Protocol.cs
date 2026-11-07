@@ -22,7 +22,8 @@ namespace SailwindCoop.Net
         // ownership both ways, DamageRequest gains RepairHull and RemoveOakum.
         // 104: Economy Overhaul's markets shared: EconomyState (127) and EconomyDelta (128).
         // 105: authoritative financed cargo ids; client finance guards precede action relays.
-        public const int Version = 105;
+        // 106: mod capabilities in the join exchange and a dedicated market snapshot channel.
+        public const int Version = 106;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -183,25 +184,33 @@ namespace SailwindCoop.Net
     /// <summary>Convenience send helpers over a LiteNetLib peer.</summary>
     public static class PeerExt
     {
+        // Market snapshots can span several fragments. Keep their ordered queue separate from
+        // item/boat actions while preserving the order of snapshots and trade acknowledgements.
+        internal const byte MarketChannel = 1;
+
         /// <summary>Diagnostics: (type, bytes) of an Unreliable packet that did not fit one datagram.</summary>
         public static System.Action<MsgType, int> Oversized;
 
         public static void Send(this NetPeer peer, INetMessage msg, DeliveryMethod method)
         {
             var writer = Protocol.Write(msg);
-            if (peer.SendWritten(writer, method)) ReportOversized(msg.Type, writer.Length);
+            if (peer.SendWritten(writer, method, msg.Type == MsgType.EconomyState ? MarketChannel : (byte)0))
+                ReportOversized(msg.Type, writer.Length);
         }
 
         /// <summary>Sends an already written message (see <see cref="Protocol.Write"/>); one writer can go
         /// to several peers, LiteNetLib copies its bytes. True when it went reliably for being too large;
         /// the caller reports that once (<see cref="ReportOversized"/>).</summary>
         public static bool SendWritten(this NetPeer peer, NetDataWriter writer, DeliveryMethod method)
+            => SendWritten(peer, writer, method, 0);
+
+        private static bool SendWritten(this NetPeer peer, NetDataWriter writer, DeliveryMethod method, byte channel)
         {
             // LiteNetLib throws on an Unreliable payload above the peer MTU and only fragments reliable
             // channels. A snapshot that outgrew one datagram (a large hull's ControlState) is still
             // delivered, in order, instead of failing every send. The MTU is per peer.
             bool oversized = method == DeliveryMethod.Unreliable && writer.Length > peer.GetMaxSinglePacketSize(method);
-            peer.Send(writer, oversized ? DeliveryMethod.ReliableOrdered : method);
+            peer.Send(writer, channel, oversized ? DeliveryMethod.ReliableOrdered : method);
             return oversized;
         }
 

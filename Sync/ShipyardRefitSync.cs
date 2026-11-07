@@ -145,12 +145,13 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Host)
             {
                 result.Generation = BoatGenerationBook.Session.Next(hull.Id); hull.Committed = result;
-                ScheduleRebuild(hull); _net.Broadcast(result, DeliveryMethod.ReliableOrdered);
+                ScheduleRebuild(hull); BroadcastRefit(result);
             }
             else
             {
                 if (++_nextRefit == 0) ++_nextRefit; hull.Gate.Begin(_nextRefit);
                 var request = new RefitRequestMsg(); Copy(result, request); request.RequestId = _nextRefit;
+                if ((_net.HostModFeatures & ModFeatures.ShipyardExpansion) == 0) request.ModRig = "";
                 _net.Broadcast(request, DeliveryMethod.ReliableOrdered);
             }
             Plugin.Logger.LogInfo("[Shipyard] committed boat=" + hull.Id + " request=" + _nextRefit + " repair=" + repair + " clean=" + clean);
@@ -162,6 +163,27 @@ namespace SailwindCoop.Sync
             target.Repair = source.Repair; target.Clean = source.Clean; target.HullDamage = source.HullDamage;
             target.WaterLevel = source.WaterLevel; target.Dirt = source.Dirt; target.Outcome = source.Outcome; target.Baseline = source.Baseline;
             target.ModRig = source.ModRig;
+        }
+
+        private static RefitStateMsg WithoutModRig(RefitStateMsg state)
+        {
+            var vanilla = new RefitStateMsg();
+            Copy(state, vanilla);
+            vanilla.ModRig = "";
+            return vanilla;
+        }
+
+        private void BroadcastRefit(RefitStateMsg state)
+        {
+            if (string.IsNullOrEmpty(state.ModRig)) _net.Broadcast(state, DeliveryMethod.ReliableOrdered);
+            else _net.BroadcastForFeature(ModFeatures.ShipyardExpansion, state, WithoutModRig(state));
+        }
+
+        private void SendRefit(NetPeer peer, RefitStateMsg state)
+        {
+            if (!string.IsNullOrEmpty(state.ModRig) && (_net.FeaturesOf(peer) & ModFeatures.ShipyardExpansion) == 0)
+                state = WithoutModRig(state);
+            peer.Send(state, DeliveryMethod.ReliableOrdered);
         }
         private void ScheduleRebuild(Hull hull)
         {
@@ -228,10 +250,10 @@ namespace SailwindCoop.Sync
             }
             if (hull == null) { peer.Send(new RefitStateMsg { BoatIndex = message.BoatIndex, Requester = actor,
                 RequestId = message.RequestId, Outcome = RefitOutcome.MissingObject }, DeliveryMethod.ReliableOrdered); return; }
-            if (message.Baseline) { peer.Send(hull.Committed, DeliveryMethod.ReliableOrdered); return; }
+            if (message.Baseline) { SendRefit(peer, hull.Committed); return; }
             if (Suspended(hull.Id)) { _refitWaiting.Add(new Packet { Type = message.Type, Message = message, Peer = peer }); return; }
             var result = new RefitStateMsg { BoatIndex = hull.Id, Requester = actor, RequestId = message.RequestId };
-            if (!_refits.TryBegin(actor, message.RequestId, result, out var previous)) { peer.Send(previous, DeliveryMethod.ReliableOrdered); return; }
+            if (!_refits.TryBegin(actor, message.RequestId, result, out var previous)) { SendRefit(peer, previous); return; }
             result.Outcome = RefitOutcome.PartialFault;
             try { RebuildHull?.Invoke(hull.Id); ApplyConfiguration(hull, message); result.Outcome = RefitOutcome.Applied; }
             catch (Exception error) { Report("host refit boat=" + hull.Id, error); }
@@ -243,7 +265,7 @@ namespace SailwindCoop.Sync
                     if (actual.Clean) actual.Dirt = DirtPainter.Capture(hull.Custom.GetComponent<SaveableObject>()?.GetCleanable());
                     actual.Generation = BoatGenerationBook.Session.Next(hull.Id); actual.Requester = actor;
                     actual.RequestId = message.RequestId; actual.Outcome = result.Outcome; Copy(actual, result);
-                    hull.Committed = result; _net.Broadcast(result, DeliveryMethod.ReliableOrdered);
+                    hull.Committed = result; BroadcastRefit(result);
                 }
                 catch (Exception error) { Report("refit result capture boat=" + hull.Id, error); result.Generation = 0; peer.Send(result, DeliveryMethod.ReliableOrdered); }
                 finally { ScheduleRebuild(hull); }
@@ -364,7 +386,7 @@ namespace SailwindCoop.Sync
                 if (!hull.Editing) hull.Committed = Capture(hull);
                 var baseline = new RefitStateMsg(); Copy(hull.Committed, baseline); baseline.Baseline = true;
                 baseline.Requester = baseline.RequestId = 0; baseline.Repair = baseline.Clean = false;
-                peer.Send(baseline, DeliveryMethod.ReliableOrdered);
+                SendRefit(peer, baseline);
             }
         }
         public void Clear()

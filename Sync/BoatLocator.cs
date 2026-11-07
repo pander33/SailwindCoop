@@ -92,11 +92,21 @@ namespace SailwindCoop.Sync
         public static int SetEpoch => _setEpoch;
 
         public static Transform FindByIndex(ushort index)
+            => TryFind(index, out var entry) ? entry.Boat : null;
+
+        internal static Transform FindByIndex(ushort index, out bool unowned)
         {
-            if (index == NoBoat) return null;
+            unowned = false;
+            if (!TryFind(index, out var entry)) return null;
+            unowned = entry.Purchasable && entry.Saveable != null && !entry.Saveable.extraSetting;
+            return entry.Boat;
+        }
+
+        private static bool TryFind(ushort index, out Entry entry)
+        {
+            if (index == NoBoat) { entry = default; return false; }
             EnsureScan();
-            if (_byId.TryGetValue(index, out var e) && e.Boat != null) return e.Boat;
-            return null;
+            return _byId.TryGetValue(index, out entry) && entry.Boat != null;
         }
 
         public static ushort IndexOf(Transform boat)

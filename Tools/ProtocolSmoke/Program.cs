@@ -160,7 +160,7 @@ namespace ProtocolSmoke
                 new BeltStateMsg { NetId = 0x12345678, Prefabs = new[] { 110, 0, 57, 0, 233 }, Lit = 0x01 },
                 new PumpStrokeMsg { BoatIndex = 30, Generation = 7, PumpIndex = 2, Rotation = 42.5f, Effort = 1.25f },
                 new MoneyOfferMsg { FromNetId = 0x12345678, ToNetId = 0x87654321, Kind = MoneyOfferKind.Take, Currency = 2, Amount = 75 },
-                new ModManifestMsg { FilesOffered = true, Mods = new[] {
+                new ModManifestMsg { FilesOffered = true, Features = ModFeatures.EconomyOverhaul | ModFeatures.SharedMarkets, Mods = new[] {
                     new ModEntry { Folder = "SeaLifeMod", Complete = true,
                         Plugins = new[] { new ModPlugin { Guid = "com.example.sealife", Name = "Sea Life", Version = "1.2.0" } },
                         Files = new[] { new ModListFile { Path = "SeaLifeMod.dll", Size = 14336, Hash = SampleHash(1) },
@@ -171,7 +171,7 @@ namespace ProtocolSmoke
                     Settings = new[] {
                         new ModSetting { Guid = "com.nandbrew.towableboats", Section = "Settings", Key = "Small boats can tow", Value = "true" },
                         new ModSetting { Guid = "com.nandbrew.shipyardexpansion", Section = "Settings", Key = "Add lug sails", Value = "false" } } },
-                new ModSyncResultMsg { Decision = ModSyncDecision.Abort, Missing = 3, Different = 1 },
+                new ModSyncResultMsg { Decision = ModSyncDecision.Proceed, Missing = 3, Different = 1, Features = ModFeatures.ShipyardExpansion },
                 new MissionAcceptMsg { Mission = new MissionEntry { OriginPort = 4, DestinationPort = 17, GoodPrefabIndex = 210, GoodCount = 24,
                     TotalPrice = 1830, InsuranceLevel = 0.5f, Distance = 212.5f, DueDay = 41, ModModifiers = 5, ModFlags = 3 } },
                 new MissionJournalMsg { Missions = new[] {

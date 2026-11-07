@@ -24,6 +24,8 @@ namespace SailwindCoop.Sync
         private static MethodInfo _save, _load;
         private static CoopLog.Repeat _faults;
 
+        internal static bool Present => Resolve();
+
         private static bool Resolve()
         {
             if (_resolved) return _save != null && _load != null;

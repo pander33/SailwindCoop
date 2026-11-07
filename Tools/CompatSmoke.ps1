@@ -19,14 +19,16 @@ namespace UnityEngine {
 }
 public class PurchasableBoat { public SaveableObject Save; public T GetComponent<T>() where T:class=>Save as T; }
 public class SaveableObject { public bool extraSetting; }
-public class Port { public static Port[] ports; public IslandMarket Market; public T GetComponent<T>() where T:class => Market as T; }
-public class IslandMarket { public float[] currentSupply; }
+public class Port { public static Port[] ports; public static int Lookups; public IslandMarket Market; public T GetComponent<T>() where T:class { Lookups++; return Market as T; } }
+public class IslandMarket { public float[] currentSupply; public float goodsSoftCapOverride,supplyPurchaseLimit; public PriceReport[] knownPrices; }
+public class PriceReport { public bool approved; public int day; }
+public class DebugMarketTracker { public static DebugMarketTracker instance=new DebugMarketTracker(); public static float goodsAmountSoftCap=100; public float positivePriceMult=1,negativePriceMult=1; }
 public class ShipItem { public SaveablePrefab Save; public T GetComponent<T>() where T:class => Save as T; }
 public class ShipItemCrate : ShipItem {}
 public class Good { public ShipItem Item; public T GetComponent<T>() where T:class => Item as T; }
 public static class ShipItemRegistry { public static IEnumerable<ShipItem> Active()=>new ShipItem[0]; }
 public class SaveablePrefab { public int instanceId; }
-public static class GameState { public static bool playing=true, currentlyLoading; }
+public static class GameState { public static bool playing=true, currentlyLoading; public static int day=5; }
 namespace LiteNetLib {
  public enum DeliveryMethod { ReliableOrdered }
  public class NetPeer { public List<object> Sent=new List<object>(); public void Send(object m,DeliveryMethod d){Sent.Add(m);} }
@@ -38,22 +40,29 @@ namespace SailwindCoop {
 }
 namespace SailwindCoop.Net {
  public enum Role { Host,Client } public enum LinkState { Connected,Disconnected }
+ [Flags] public enum ModFeatures { None=0,EconomyOverhaul=1,SharedMarkets=2 }
  public class CoopNet {
  public class ClockStub { public long LocalTick=1000; public double OffsetMs; } public ClockStub Clock=new ClockStub();
  public Role Role; public LinkState State; public List<object> Sent=new List<object>();
- public uint[] ReadyClientIds()=>new uint[]{1}; public uint PlayerNetIdForPeer(NetPeer p)=>1;
+ public ModFeatures HostModFeatures=ModFeatures.EconomyOverhaul|ModFeatures.SharedMarkets;
+ public ModFeatures PeerFeatures=ModFeatures.EconomyOverhaul|ModFeatures.SharedMarkets;
+ public uint[] ReadyClientIds(ModFeatures required)=>(PeerFeatures&required)==required ? new uint[]{1} : new uint[0];
+ public uint PlayerNetIdForPeer(NetPeer p)=>1;
+ public ModFeatures FeaturesOf(NetPeer p)=>PeerFeatures;
  public void SendToPlayer(uint id,object m,DeliveryMethod d){Sent.Add(m);} public void Broadcast(object m,DeliveryMethod d){Sent.Add(m);}
  }
  public struct MarketPort { public short Port; public float Bonus; public float[] Supply; }
  public struct MarketEvent {}
  public struct MarketChange { public short Port,Good; public float Delta; }
+ public struct MissionEntry {}
  public class EconomyStateMsg { public uint AckSeq; public MarketPort[] Ports=new MarketPort[0]; public bool HasFx,HasDemand; public int FxDay; public double[] Rates=new double[0],Basis=new double[0],Smooth=new double[0],Closes=new double[0]; public MarketEvent[] Events; }
  public class EconomyDeltaMsg { public uint Seq; public MarketChange[] Changes=new MarketChange[0]; public double[] Cargo=new double[0],Shops=new double[0],Rates=new double[0]; }
  public class FinancedCargoMsg { public bool Enabled; public int[] InstanceIds=new int[0]; }
  public class BoatStateMsg { public ushort BoatIndex; public uint NetId; public long Tick; public object RealPos,Rot,RealVel; }
 }
 namespace SailwindCoop.Sync {
- public static class BoatLocator { public static Transform Boat; public static bool IndicesAuthoritative=true; public static Transform FindByIndex(ushort id)=>Boat; public static int SceneIndexOf(ushort id)=>id; }
+ public static class BoatLocator { public static Transform Boat; public static bool IndicesAuthoritative=true;
+ public static Transform FindByIndex(ushort id,out bool unowned){unowned=Boat?.Purchase?.Save?.extraSetting==false;return Boat;} public static int SceneIndexOf(ushort id)=>id; }
  public sealed partial class BoatSync {
  private CoopNet _net;private HashSet<ushort> _warnedUnknown=new HashSet<ushort>();
  private Dictionary<ushort,ClientBoat> _clientBoats=new Dictionary<ushort,ClientBoat>();
@@ -69,7 +78,7 @@ namespace SailwindCoop.Sync {
  private static bool IsClient=>true;
  private static string HostOnlyText="host", FinancedText="finance";
  private static void Notify(string s){} private static void Fault(string s,Exception e){throw new Exception(s,e);}
- private const int TradeLoan=1; private static bool _inTrade; private static HashSet<int> _tradeIds;
+ private const int TradeLoan=1,TradeSell=2; private static bool _inTrade; private static HashSet<int> _tradeIds;
  private static MethodInfo _tradeQuote; private static FieldInfo _tradeUnits,_tradeCargo;
  public sealed class FakeUnit { public Good Cargo; }
  public sealed class FakeBatch { public List<FakeUnit> Units=new List<FakeUnit>(); }
@@ -90,13 +99,18 @@ namespace SailwindCoop.Sync {
  public static bool LocalFinanced(ShipItem item)=>item.Save!=null && item.Save.instanceId==7;
  public sealed class LoanRecord { public bool loan; }
  public static Dictionary<int,LoanRecord> TestCargo=new Dictionary<int,LoanRecord>();
+ public static int MissionClears;
+ private static void MirrorRecords(MissionEntry[] entries){if(entries.Length==0)MissionClears++;}
  private static FieldInfo _creditCargo,_creditLoan;
  private static FieldInfo Field(string type,string name)=>name=="Cargo"?typeof(EconomyOverhaulCompat).GetField("TestCargo"):typeof(LoanRecord).GetField("loan");
- public static bool ReadFinanced(out int[] ids){ids=Loans;return true;}
- public static double[] ReadFx(out int day,out double[] rates,out double[] basis,out double[] smooth,out double[] closes){day=5; rates=(double[])Fx.Clone();basis=smooth=(double[])rates.Clone();closes=new double[0];return rates;}
+ public static int LoanScans, FxScans, PriceRefreshes;
+ public static bool ReadFinanced(HashSet<int> ids){LoanScans++;ids.Clear();ids.UnionWith(Loans);return true;}
+ public static double[] ReadFx(out int day,out double[] rates,out double[] basis,out double[] smooth,out double[] closes){FxScans++;day=5; rates=(double[])Fx.Clone();basis=smooth=(double[])rates.Clone();closes=new double[0];return rates;}
  public static MarketEvent[] ReadDemand(out double[] view){view=null;return new MarketEvent[0];}
- public static float MarketBonus(int p)=>0; public static void RefreshMarket(IslandMarket m){} public static void CheckDemand(int p,int g){} public static void RefreshTradeBook(){} public static void AddFx(double[] a,double[] b,double[] c){}
- public static void SetMarketBonus(int p,float b){} public static void WriteFx(int d,double[] a,double[] b,double[] c,double[] e){Fx=a;} public static void WriteDemand(MarketEvent[] e){}
+ public static float MarketBonus(int p)=>0;
+ public static bool RefreshMarket(IslandMarket m){PriceRefreshes++;int port=Array.FindIndex(Port.ports,p=>p.Market==m);if(m.knownPrices==null)m.knownPrices=new PriceReport[Port.ports.Length]; if(m.knownPrices[port]==null)m.knownPrices[port]=new PriceReport();m.knownPrices[port].day=GameState.day;m.knownPrices[port].approved=true;return true;}
+ public static void CheckDemand(int p,int g){} public static void RefreshTradeBook(){} public static void AddFx(double[] a,double[] b,double[] c){}
+ public static bool SetMarketBonus(int p,float b)=>false; public static void WriteFx(int d,double[] a,double[] b,double[] c,double[] e){Fx=a;} public static void WriteDemand(MarketEvent[] e){}
  public static void ReadFxQueues(out double[] a,out double[] b,out double[] c){a=b=new double[0];c=(double[])Fx.Clone();}
  }
 }
@@ -157,7 +171,16 @@ public static class CompatChecks {
  Check(!EconomyOverhaulCompat.TestCargo[99].loan,"repaid cargo no longer has a local EO loan to deduct again on sale");
  Check(EconomyOverhaulCompat.Unseal(new ShipItemCrate{Save=item.Save}) && EconomyOverhaulCompat.Use(item) && EconomyOverhaulCompat.Sale(item)==item,"production guards permit ordinary repaid cargo");
  ItemPatches.Forward(crate,EconomyOverhaulCompat.Unseal(crate));Check(ItemSync.Instance.Forwarded==1,"ordinary repaid crate still relays once");
- finance.Receive(new FinancedCargoMsg{Enabled=false,InstanceIds=new[]{99}});Check(!finance.Blocks(item),"host without EO leaves ordinary cargo usable");
+ net.HostModFeatures=ModFeatures.None;Check(!finance.Blocks(item),"host without EO leaves ordinary cargo usable");
+ EconomyOverhaulCompat.TestCargo[99].loan=true;
+ EconomyOverhaulCompat.OnGuestWorldLoaded(net);
+ Check(!EconomyOverhaulCompat.TestCargo[99].loan && EconomyOverhaulCompat.MissionClears==1 && net.Sent.Count==0,
+       "mixed guest load clears stale loan and mission metadata without a packet");
+ net.HostModFeatures=ModFeatures.EconomyOverhaul;
+ EconomyOverhaulCompat.TestCargo[99].loan=true;
+ EconomyOverhaulCompat.OnGuestWorldLoaded(net);
+ Check(EconomyOverhaulCompat.TestCargo[99].loan && EconomyOverhaulCompat.MissionClears==1,
+       "EO host leaves cleanup to the authoritative baseline");
  finance.Receive(new FinancedCargoMsg{Enabled=true,InstanceIds=new[]{99}});net.State=LinkState.Disconnected;
  Check(!finance.Blocks(item),"disconnect restores local play");net.State=LinkState.Connected;finance.Clear();
  Check(!finance.Blocks(item),"new session does not retain old host loan ids");
@@ -168,6 +191,47 @@ public static class CompatChecks {
  EconomyOverhaulCompat.Loans=new int[0];finance.Tick(true);Check(hostNet.Sent.Count==2,"closing the last loan publishes an empty snapshot");
  var peer=new NetPeer();EconomyOverhaulCompat.Loans=new[]{42};finance.SendBaseline(peer);
  Check(((FinancedCargoMsg)peer.Sent.Single()).InstanceIds.SequenceEqual(new[]{42}),"joining guest receives fresh loan ids independently of scan timer");
+ var quietNet=new CoopNet{Role=Role.Host,PeerFeatures=ModFeatures.None};var quietFinance=new FinancedCargoSync(quietNet);
+ var quietMarket=new MarketSync(quietNet);var quietPeer=new NetPeer();
+ int loanScans=EconomyOverhaulCompat.LoanScans,fxScans=EconomyOverhaulCompat.FxScans;
+ quietFinance.Tick(true);quietFinance.SendBaseline(quietPeer);quietMarket.Tick();
+ Check(quietNet.Sent.Count==0 && quietPeer.Sent.Count==0 && EconomyOverhaulCompat.LoanScans==loanScans && EconomyOverhaulCompat.FxScans==fxScans,
+       "host skips market and finance work when no guest supports it");
+ EconomyOverhaulCompat.Present=false;EconomyOverhaulCompat.MarketsOn=false;
+ quietNet.PeerFeatures=ModFeatures.EconomyOverhaul|ModFeatures.SharedMarkets;Time.unscaledTime+=2;
+ quietFinance.Tick(true);quietFinance.SendBaseline(quietPeer);quietMarket.Tick();
+ Check(quietNet.Sent.Count==0 && quietPeer.Sent.Count==0 && EconomyOverhaulCompat.LoanScans==loanScans && EconomyOverhaulCompat.FxScans==fxScans,
+       "host without EO skips market and finance work even with an EO guest");
+ EconomyOverhaulCompat.Present=true;EconomyOverhaulCompat.MarketsOn=true;
+ net=new CoopNet{Role=Role.Client};sync=new MarketSync(net);
+ var missing=new Port();
+ Port.ports=Enumerable.Range(0,33).Select(i=>i==2 ? missing : new Port{Market=new IslandMarket{currentSupply=new[]{0f}}}).ToArray();
+ var full=new EconomyStateMsg{Ports=Enumerable.Range(0,33).Select(i=>new MarketPort{Port=(short)i,Supply=new[]{10f*(i+1)}}).ToArray()};
+ Port.Lookups=0;EconomyOverhaulCompat.PriceRefreshes=0;sync.OnEconomyState(full);
+ Check(Port.Lookups==33 && EconomyOverhaulCompat.PriceRefreshes==32,"first full snapshot resolves each port once and refreshes its existing markets");
+ Time.unscaledTime+=20;Port.Lookups=0;sync.OnEconomyState(full);
+ Check(Port.Lookups==1 && EconomyOverhaulCompat.PriceRefreshes==32,"identical full snapshot retries only the missing market and skips price refreshes");
+ missing.Market=new IslandMarket{currentSupply=new[]{0f}};Time.unscaledTime+=.1f;
+ sync.OnEconomyState(new EconomyStateMsg{Ports=new[]{new MarketPort{Port=2,Supply=new[]{31f}}}});
+ sync.Tick();
+ Check(missing.Market.currentSupply[0]==0,"late market respects the component lookup timer");
+ Trade(sync,2,-2);
+ var lateTrade=(EconomyDeltaMsg)net.Sent.Single();
+ Check(lateTrade.Changes.Length==1 && lateTrade.Changes[0].Port==2 && lateTrade.Changes[0].Delta==-2,
+       "trade can record stock in a newly available market before its retry");
+ Time.unscaledTime++;sync.Tick();
+ Check(missing.Market.currentSupply[0]==29 && EconomyOverhaulCompat.PriceRefreshes==33,
+       "late market applies the latest stored stock with local trades before another packet");
+ sync.OnEconomyState(new EconomyStateMsg{AckSeq=lateTrade.Seq,Ports=new[]{new MarketPort{Port=2,Supply=new[]{29f}}}});
+ full.Ports[2].Supply[0]=29;
+ Port.ports[0].Market.goodsSoftCapOverride=72;sync.OnEconomyState(full);
+ Check(EconomyOverhaulCompat.PriceRefreshes==34,"capacity change invalidates matching market stock");
+ GameState.day++;sync.OnEconomyState(full);
+ Check(EconomyOverhaulCompat.PriceRefreshes==67,"new day refreshes reports even with unchanged stock");
+ Port.ports[1].Market.currentSupply[0]=25;full.Ports[1].Supply[0]=25;sync.OnEconomyState(full);
+ Check(EconomyOverhaulCompat.PriceRefreshes==68,"stock already applied locally invalidates an older price report");
+ net.HostModFeatures=ModFeatures.None;full.Ports[0].Supply[0]=100;sync.OnEconomyState(full);
+ Check(Port.ports[0].Market.currentSupply[0]==10,"guest ignores market state without a negotiated host feature");
  var boatNet=new CoopNet{Role=Role.Client};var boats=new BoatSync(boatNet);
  var save=new SaveableObject{extraSetting=true};var root=new Transform{Purchase=new PurchasableBoat{Save=save}};BoatLocator.Boat=root;
  var pose=new BoatStateMsg{BoatIndex=10,NetId=12,Tick=1};boats.OnBoatState(pose,null);
@@ -199,7 +263,7 @@ function Get-ProductionMethod([string]$source, [string]$signature) {
     }
     $source.Substring($start, $end - $start)
 }
-$guards = foreach ($signature in @('private static bool RefuseFinancedUnseal(', 'private static bool RefuseFinancedSacrifice(', 'private static void RefuseFinancedSale(', 'private static bool RefuseFinancedUse(', 'private static bool TradeBegin(', 'internal static void ClearSettledLoans(')) {
+$guards = foreach ($signature in @('private static bool RefuseFinancedUnseal(', 'private static bool RefuseFinancedSacrifice(', 'private static void RefuseFinancedSale(', 'private static bool RefuseFinancedUse(', 'private static bool TradeBegin(', 'internal static void OnGuestWorldLoaded(', 'internal static void ClearSettledLoans(')) {
     Get-ProductionMethod $compat $signature
 }
 $guardSource = 'namespace SailwindCoop.Sync { internal static partial class EconomyOverhaulCompat {' + ($guards -join "`n") + '}}'

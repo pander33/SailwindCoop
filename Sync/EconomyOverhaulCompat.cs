@@ -230,23 +230,31 @@ namespace SailwindCoop.Sync
             catch (Exception e) { Fault("financed cargo", e); return false; }
         }
 
-        internal static bool ReadFinanced(out int[] ids)
+        internal static bool ReadFinanced(HashSet<int> ids)
         {
-            ids = new int[0];
-            if (!Present) return true;
+            ids.Clear();
+            if (!Present) return false;
             try
             {
                 if (_creditCargo == null) _creditCargo = Field("World", "Cargo");
                 if (_creditLoan == null) _creditLoan = Field("CargoState", "loan");
                 var cargo = _creditCargo?.GetValue(null) as IDictionary;
                 if (cargo == null || _creditLoan == null) return false;
-                var found = new List<int>();
                 foreach (DictionaryEntry entry in cargo)
-                    if (entry.Value != null && (bool)_creditLoan.GetValue(entry.Value)) found.Add((int)entry.Key);
-                ids = found.ToArray();
+                    if (entry.Value != null && (bool)_creditLoan.GetValue(entry.Value)) ids.Add((int)entry.Key);
                 return true;
             }
             catch (Exception e) { Fault("read financed cargo", e); return false; }
+        }
+
+        internal static void OnGuestWorldLoaded(CoopNet net)
+        {
+            if (net.Role != Role.Client || net.State != LinkState.Connected || !Present ||
+                (net.HostModFeatures & ModFeatures.EconomyOverhaul) != 0) return;
+            // Vanilla preserves modData in the save. The guest can load old EO records even
+            // though its host has no active loans or mission modifiers to send.
+            ClearSettledLoans(null);
+            MirrorRecords(Array.Empty<MissionEntry>());
         }
 
         internal static void ClearSettledLoans(HashSet<int> financed)
@@ -261,7 +269,8 @@ namespace SailwindCoop.Sync
                 // old local marker makes EO withhold the principal again when the guest sells it.
                 // Do not call Loans.Close: its reputation bookkeeping belongs to the host too.
                 foreach (DictionaryEntry entry in cargo)
-                    if (entry.Value != null && !financed.Contains((int)entry.Key) && (bool)_creditLoan.GetValue(entry.Value))
+                    if (entry.Value != null && (financed == null || !financed.Contains((int)entry.Key)) &&
+                        (bool)_creditLoan.GetValue(entry.Value))
                         _creditLoan.SetValue(entry.Value, false);
             }
             catch (Exception e) { Fault("clear settled cargo loans", e); }
@@ -320,6 +329,7 @@ namespace SailwindCoop.Sync
         // ---- Trade book goods -------------------------------------------------
 
         private const int TradeLoan = 1; // EconomyOverhaul.TradeAction: Buy, Loan, Sell
+        private const int TradeSell = 2;
         private static MethodInfo _tradeQuote;
         private static FieldInfo _tradeUnits, _tradeCargo;
         private static bool _inTrade;
@@ -330,12 +340,13 @@ namespace SailwindCoop.Sync
             if (!IsClient) return true;
             try
             {
-                if (__args != null && __args.Length > 1 && Convert.ToInt32(__args[1]) == TradeLoan)
+                int action = __args != null && __args.Length > 1 ? Convert.ToInt32(__args[1]) : -1;
+                if (action == TradeLoan)
                 {
                     Notify(HostOnlyText);
                     return false;
                 }
-                if (__args != null && __args.Length == 3 && Convert.ToInt32(__args[1]) == 2 && _tradeQuote != null && _tradeUnits != null && _tradeCargo != null)
+                if (action == TradeSell && __args.Length == 3 && _tradeQuote != null && _tradeUnits != null && _tradeCargo != null)
                 {
                     var batch = _tradeQuote.Invoke(null, __args);
                     if (_tradeUnits.GetValue(batch) is IEnumerable units)
@@ -347,11 +358,16 @@ namespace SailwindCoop.Sync
                             return false;
                         }
                 }
-                _tradeIds = new HashSet<int>();
-                foreach (var item in ShipItemRegistry.Active())
+                // A sale removes cargo. Only purchases need the before/after creation scan.
+                _tradeIds = null;
+                if (action != TradeSell)
                 {
-                    var save = item != null ? item.GetComponent<SaveablePrefab>() : null;
-                    if (save != null && save.instanceId > 0) _tradeIds.Add(save.instanceId);
+                    _tradeIds = new HashSet<int>();
+                    foreach (var item in ShipItemRegistry.Active())
+                    {
+                        var save = item != null ? item.GetComponent<SaveablePrefab>() : null;
+                        if (save != null && save.instanceId > 0) _tradeIds.Add(save.instanceId);
+                    }
                 }
                 _inTrade = true;
                 MarketSync.Instance?.BeginTrade();

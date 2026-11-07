@@ -145,26 +145,29 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Client: the host's bonus; the port's capacity and buy limit follow it.</summary>
-        internal static void SetMarketBonus(int port, float bonus)
+        internal static bool SetMarketBonus(int port, float bonus)
         {
-            if (MarketBonus(port) == bonus) return;
+            if (MarketBonus(port) == bonus) return false;
             try
             {
                 var state = _marketData.Invoke(null, new object[] { port });
-                if (state == null) return;
+                if (state == null) return false;
                 _bonus.SetValue(state, bonus);
                 // Award with nothing: the mod's own way to apply a bonus to the market.
                 _award.Invoke(null, new object[] { port, 0f });
+                return true;
             }
             catch (Exception e) { Fault("write bonus", e); }
+            return false;
         }
 
         /// <summary>The market's own price report after its stock changed, as EO does after a cycle.</summary>
-        internal static void RefreshMarket(IslandMarket market)
+        internal static bool RefreshMarket(IslandMarket market)
         {
-            if (market == null || _refresh == null) return;
-            try { _refresh.Invoke(null, new object[] { market }); }
+            if (market == null || _refresh == null) return false;
+            try { _refresh.Invoke(null, new object[] { market }); return true; }
             catch (Exception e) { Fault("refresh market", e); }
+            return false;
         }
 
         /// <summary>Host: a client's sale may end a demand event, as a sale on the host does.</summary>

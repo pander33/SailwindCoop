@@ -140,6 +140,7 @@ namespace SailwindCoop.Sync
             _hostSettings = new ModSetting[0];
             _diffs = new List<ModDiff>();
             _settingDiffs = new List<ModSettingDiff>(); _economyOnlyHere = false;
+            _net.HostModFeatures = ModFeatures.None;
             _localOnly = new List<string>();
             if (!KeepsPhase) { _phase = Phase.Idle; _message = ""; }
         }
@@ -164,10 +165,10 @@ namespace SailwindCoop.Sync
             try
             {
 #if !THUNDERSTORE
-                session.Peer.Send(new ModManifestMsg { FilesOffered = HostOffersDownloads, Mods = _hostMods, Settings = _hostSettings },
+                session.Peer.Send(new ModManifestMsg { FilesOffered = HostOffersDownloads, Mods = _hostMods, Settings = _hostSettings, Features = LocalFeatures },
                                   DeliveryMethod.ReliableOrdered);
 #else
-                session.Peer.Send(new ModManifestMsg { Mods = _hostMods, Settings = _hostSettings }, DeliveryMethod.ReliableOrdered);
+                session.Peer.Send(new ModManifestMsg { Mods = _hostMods, Settings = _hostSettings, Features = LocalFeatures }, DeliveryMethod.ReliableOrdered);
 #endif
                 _awaiting.Add(session.PlayerNetId);
                 _net.SetMemberState(session.PlayerNetId, MemberJoinState.CheckingMods);
@@ -193,6 +194,7 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.LogInfo("[Mods] role=Host NetId=" + netId + " left at the mod check");
                 return;
             }
+            _net.SetPeerFeatures(peer, msg.Features);
             if (msg.Missing > 0 || msg.Different > 0)
             {
                 Plugin.Logger.LogWarning("[Mods] role=Host NetId=" + netId + " joins without " + msg.Missing +
@@ -238,6 +240,7 @@ namespace SailwindCoop.Sync
         public void OnManifest(ModManifestMsg msg)
         {
             if (_net.Role != Role.Client) return;
+            _net.HostModFeatures = msg.Features;
             try
             {
                 var mods = new List<ModEntry>(msg.Mods);
@@ -257,7 +260,8 @@ namespace SailwindCoop.Sync
                 _diffs = ModCatalog.Compare(mods, PluginsRoot, local);
                 _localOnly = ModCatalog.LocalOnly(mods, local, Excluded());
                 _settingDiffs = ModCatalog.CompareSettings(msg.Settings, ReadSettings("Client"));
-                _economyOnlyHere = HasPlugin(local, EconomyOverhaulCompat.Guid) && !HostHasPlugin(mods, EconomyOverhaulCompat.Guid);
+                _economyOnlyHere = HasPlugin(local, EconomyOverhaulCompat.Guid) &&
+                    (msg.Features & ModFeatures.EconomyOverhaul) == 0;
                 if (_economyOnlyHere)
                     Plugin.Logger.LogWarning("[Mods] role=Client Economy Overhaul is installed here but not on the host: " +
                                              "it will treat the host's world as a first installation");
@@ -333,6 +337,7 @@ namespace SailwindCoop.Sync
                     Decision = decision,
                     Missing = (byte)Math.Min(missing, 255),
                     Different = (byte)Math.Min(different, 255),
+                    Features = LocalFeatures,
                 }, DeliveryMethod.ReliableOrdered);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[Mods] role=Client answer not sent: " + e.Message); }
@@ -443,19 +448,15 @@ namespace SailwindCoop.Sync
 #endif
 
         private bool _economyOnlyHere;
+        private static ModFeatures LocalFeatures =>
+            (EconomyOverhaulCompat.Present ? ModFeatures.EconomyOverhaul : ModFeatures.None) |
+            (EconomyOverhaulCompat.MarketsOn ? ModFeatures.SharedMarkets : ModFeatures.None) |
+            (ShipyardExpansionRig.Present ? ModFeatures.ShipyardExpansion : ModFeatures.None);
 
         private static bool HasPlugin(List<LoadedPlugin> plugins, string guid)
         {
             foreach (LoadedPlugin plugin in plugins)
                 if (string.Equals(plugin.Guid, guid, StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
-        }
-
-        private static bool HostHasPlugin(List<ModEntry> mods, string guid)
-        {
-            foreach (ModEntry mod in mods)
-                foreach (ModPlugin plugin in mod.Plugins)
-                    if (plugin != null && string.Equals(plugin.Guid, guid, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
 

@@ -4,11 +4,22 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 105.
+Everyone must update to wire protocol 106.
+
+### Performance
+
+- Shared Economy Overhaul markets use a separate reliable channel, so a delayed market snapshot
+  can no longer block item and boat events in the gameplay queue. Repeated snapshots skip unchanged
+  price reports and retry missing markets individually.
+- Optional market, credit, mission and sail data goes only to machines that support it. Hosts
+  without Economy Overhaul skip its credit and ownership scans.
+- Consecutive item creations and removals share a registry rebuild during a network poll.
+  Guests bind incoming item IDs immediately and reuse one scene lookup for the boat and house caches
+  during a burst. A failed purchase confirmation is retried independently of the rest.
 
 ### Fixed
 
-- Economy Overhaul: guests cannot open, use or sell the host's financed cargo, including new loans
+- Economy Overhaul: guests running the mod cannot open, use or sell the host's financed cargo, including new loans
   made after joining. Refused actions no longer charge the host or forgive a sale's unpaid debt.
   The Kicia altar also refuses financed cargo on guests before sacrifice effects or consumption.
 - Market stock and currency rates reconcile immediately after a trade acknowledgement, including

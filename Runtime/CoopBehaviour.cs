@@ -164,6 +164,9 @@ namespace SailwindCoop.Runtime
             System.Action<string> patchFault = text => Plugin.Logger.LogError("[Coop] role=initializing " + text);
             if (EconomyOverhaulCompat.Present)
                 PatchHealth.Install("Economy Overhaul", () => EconomyOverhaulCompat.Apply(_harmony), patchFault);
+            if (BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(NpcBoatPatches.TowableBoatsGuid, out var towable) &&
+                towable?.Instance != null)
+                PatchHealth.Install("Towable Boats", () => NpcBoatPatches.ApplyTowableBoats(_harmony), patchFault);
         }
 
         private void Awake()
@@ -252,7 +255,12 @@ namespace SailwindCoop.Runtime
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };
             // Two facts, not one: the loaded world is a host's copy whenever the load finished, and
             // the guest is in that host's session only if the session outlived the load.
-            SaveTransfer.OnSaveLoaded += current => { _inHostWorldCopy = true; _clientCoopWorldLoaded = current; };
+            SaveTransfer.OnSaveLoaded += current =>
+            {
+                _inHostWorldCopy = true;
+                _clientCoopWorldLoaded = current;
+                if (current) EconomyOverhaulCompat.OnGuestWorldLoaded(Net);
+            };
             Mods = new ModSync(Net)
             {
                 // Stream the host's world to the client once it answered the mod check, so it loads
@@ -569,7 +577,15 @@ namespace SailwindCoop.Runtime
                 Plugin.Logger.ReportError("[Coop] Steam join request failed", e, ref _steamJoinFailures);
             }
 
-            try { using (InteractionContext.Begin(InteractionSource.RemoteApply)) Net.PollEvents(); }
+            try
+            {
+                using (InteractionContext.Begin(InteractionSource.RemoteApply))
+                {
+                    Items.BeginReceiveBatch();
+                    try { Net.PollEvents(); }
+                    finally { Items.EndReceiveBatch(); }
+                }
+            }
             catch (System.Exception e)
             {
                 Plugin.Logger.ReportError("[Coop] Net.PollEvents failed", e, ref _pollFailures);
@@ -736,6 +752,7 @@ namespace SailwindCoop.Runtime
 
         private void OnGameMessage(MsgType type, INetMessage msg, LiteNetLib.NetPeer fromPeer)
         {
+            Items.BeforeReceive(type, msg);
             if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
             {

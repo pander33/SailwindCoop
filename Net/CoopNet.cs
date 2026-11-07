@@ -21,6 +21,7 @@ namespace SailwindCoop.Net
         public string PlayerGuid = "";
         public string ModVersion = "";
         public string SelectedAvatar = ""; // avatar bundle file name chosen by this player
+        public ModFeatures ModFeatures;
         public MemberJoinState JoinState = MemberJoinState.Handshaking;
         public int BoatIndex = -1;
         public bool Kicked;
@@ -460,6 +461,7 @@ namespace SailwindCoop.Net
                 ReconnectDelay = Math.Max(100, ReconnectDelayMs),
                 UnconnectedMessagesEnabled = false,
                 IPv6Enabled = false,
+                ChannelsCount = PeerExt.MarketChannel + 1,
             };
         }
 
@@ -1067,11 +1069,15 @@ namespace SailwindCoop.Net
 
         /// <summary>Host: the clients that have loaded the world.</summary>
         public uint[] ReadyClientIds()
+            => ReadyClientIds(ModFeatures.None);
+
+        public uint[] ReadyClientIds(ModFeatures required)
         {
             var ids = new List<uint>();
             if (Role == Role.Host)
                 foreach (var s in _sessions.Values)
-                    if (s.HandshakeDone && s.JoinState == MemberJoinState.Ready) ids.Add(s.PlayerNetId);
+                    if (s.HandshakeDone && s.JoinState == MemberJoinState.Ready &&
+                        (s.ModFeatures & required) == required) ids.Add(s.PlayerNetId);
             return ids.ToArray();
         }
 
@@ -1086,6 +1092,40 @@ namespace SailwindCoop.Net
                 return true;
             }
             return false;
+        }
+
+        internal ModFeatures FeaturesOf(NetPeer peer)
+            => peer != null && _sessions.TryGetValue(peer.Id, out var session) && session.Peer == peer
+                ? session.ModFeatures : ModFeatures.None;
+
+        internal ModFeatures HostModFeatures { get; set; }
+
+        internal bool HasModPeer(ModFeatures feature)
+        {
+            foreach (var session in _sessions.Values)
+                if (session.HandshakeDone && (session.ModFeatures & feature) == feature) return true;
+            return false;
+        }
+
+        internal void SetPeerFeatures(NetPeer peer, ModFeatures features)
+        {
+            if (peer != null && _sessions.TryGetValue(peer.Id, out var session) && session.Peer == peer)
+                session.ModFeatures = features;
+        }
+
+        /// <summary>Host: sends optional mod data only to clients that can apply it.</summary>
+        internal void BroadcastForFeature(ModFeatures feature, INetMessage withMod, INetMessage vanilla)
+        {
+            NetDataWriter modWriter = null, vanillaWriter = null;
+            foreach (var session in _sessions.Values)
+            {
+                if (!session.HandshakeDone) continue;
+                bool supports = (session.ModFeatures & feature) == feature;
+                var writer = supports
+                    ? modWriter ?? (modWriter = Protocol.Write(withMod))
+                    : vanillaWriter ?? (vanillaWriter = Protocol.Write(vanilla));
+                session.Peer.SendWritten(writer, DeliveryMethod.ReliableOrdered);
+            }
         }
 
         /// <summary>Host-only: forward a message to every handshaked client except the sender.</summary>

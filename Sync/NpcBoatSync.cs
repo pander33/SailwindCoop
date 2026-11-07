@@ -359,6 +359,8 @@ namespace SailwindCoop.Sync
     /// </summary>
     public static class NpcBoatPatches
     {
+        internal const string TowableBoatsGuid = "com.nandbrew.towableboats";
+
         /// <summary>Ванильный радиус из <c>BoatHorizon.DistanceCheck</c>.</summary>
         private const float ActivationRadius = 1000f;
 
@@ -371,7 +373,6 @@ namespace SailwindCoop.Sync
             int ok = 0;
             ok += TryPatch(harmony, "DistanceCheck", nameof(PostDistanceCheck), postfix: true) ? 1 : 0;
             ok += TryPatch(harmony, "UpdateKinematic", nameof(PreUpdateKinematic), postfix: false) ? 1 : 0;
-            ok += TryPatchLast(harmony, "UpdateKinematic", nameof(PostUpdateKinematic)) ? 1 : 0;
 
             try
             {
@@ -379,9 +380,12 @@ namespace SailwindCoop.Sync
             }
             catch { _cooldownField = null; }
 
-            Plugin.Logger.LogInfo("[NpcBoatPatches] BoatHorizon patches: " + ok + "/3");
-            Runtime.PatchHealth.Report("NpcBoat", ok, 3);
+            Plugin.Logger.LogInfo("[NpcBoatPatches] BoatHorizon patches: " + ok + "/2");
+            Runtime.PatchHealth.Report("NpcBoat", ok, 2);
         }
+
+        internal static void ApplyTowableBoats(Harmony harmony) =>
+            Runtime.PatchHealth.Report("Towable Boats", TryPatchLast(harmony, "UpdateKinematic", nameof(PostUpdateKinematic)) ? 1 : 0, 1);
 
         /// <summary>A postfix that runs after every other mod's postfix on the method.</summary>
         private static bool TryPatchLast(Harmony harmony, string method, string handler)
@@ -391,7 +395,7 @@ namespace SailwindCoop.Sync
                 var mi = AccessTools.Method(typeof(BoatHorizon), method);
                 if (mi == null) return false;
                 var hm = new HarmonyMethod(typeof(NpcBoatPatches).GetMethod(handler, BindingFlags.Static | BindingFlags.NonPublic))
-                    { priority = Priority.Last, after = new[] { "com.nandbrew.towableboats" } };
+                    { priority = Priority.Last, after = new[] { TowableBoatsGuid } };
                 harmony.Patch(mi, postfix: hm);
                 return true;
             }

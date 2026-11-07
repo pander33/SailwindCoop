@@ -342,6 +342,8 @@ namespace SailwindCoop.Sync
         private static void PostDestroy(ShipItem __instance, bool __runOriginal)
         {
             if (!__runOriginal) return;
+            try { ItemSync.Instance?.MarkRemoteConsume(__instance); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ShopPatches] remote consume: " + e.Message); }
             for (var sale = _sale; sale != null; sale = sale.Previous)
             {
                 if (!ReferenceEquals(sale.Item, __instance)) continue;

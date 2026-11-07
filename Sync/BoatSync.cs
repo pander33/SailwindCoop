@@ -161,15 +161,10 @@ namespace SailwindCoop.Sync
             // The main menu shares the world scene; don't slave boats before the host's save is loaded.
             if (!InWorld()) return;
 
-            Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
+            Transform boat = BoatLocator.FindByIndex(msg.BoatIndex, out bool unowned);
             // FindByIndex resolves unowned saveable hulls too. Ownership release must survive
             // late datagrams from the old stream; a later purchase will admit fresh poses again.
-            if (boat != null)
-            {
-                var purchase = boat.GetComponentInParent<PurchasableBoat>();
-                var save = purchase != null ? purchase.GetComponent<SaveableObject>() : null;
-                if (save != null && !save.extraSetting) return;
-            }
+            if (unowned) return;
             if (boat == null)
             {
                 if (!_warnedUnknown.Contains(msg.BoatIndex) && BoatLocator.IndicesAuthoritative)
