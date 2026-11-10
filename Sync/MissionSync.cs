@@ -53,6 +53,7 @@ namespace SailwindCoop.Sync
                 {
                     vanilla[i].ModModifiers = 0;
                     vanilla[i].ModFlags = 0;
+                    vanilla[i].ModOffered = 0;
                 }
                 _net.BroadcastForFeature(ModFeatures.EconomyOverhaul, journal, new MissionJournalMsg { Missions = vanilla });
             }
@@ -100,13 +101,14 @@ namespace SailwindCoop.Sync
                         DeliveredGoods = d.deliveredGoods,
                         DueDay = d.dueDay,
                     });
-                    if (includeMod && EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world))
+                    if (includeMod && EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world, out int offered))
                     {
                         var withMod = list[list.Count - 1];
                         withMod.ModModifiers = modifiers;
                         withMod.ModFlags = (byte)(1 | (world ? 2 : 0));
+                        withMod.ModOffered = offered;
                         list[list.Count - 1] = withMod;
-                        sb.Append(modifiers).Append(world ? 'w' : 'p').Append(':');
+                        sb.Append(modifiers).Append(world ? 'w' : 'p').Append(offered).Append(':');
                     }
                     // Every sent field: a slot refilled between two ticks must not look unchanged.
                     sb.Append(d.missionIndex).Append(':').Append(d.originPort).Append(':').Append(d.destinationPort).Append(':')
@@ -186,10 +188,11 @@ namespace SailwindCoop.Sync
             };
             // Economy Overhaul rolls modifiers per offer object on this machine; the host builds a new one.
             if ((_net.HostModFeatures & ModFeatures.EconomyOverhaul) != 0 &&
-                EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world))
+                EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world, out int offered))
             {
                 entry.ModModifiers = modifiers;
                 entry.ModFlags = (byte)(1 | (world ? 2 : 0));
+                entry.ModOffered = offered;
             }
             _net.Broadcast(new MissionAcceptMsg { Mission = entry }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[MissionSync] out accept dest=" + d.destinationPort + " good=" + d.goodPrefabIndex);
@@ -215,7 +218,7 @@ namespace SailwindCoop.Sync
                 var data = new SaveMissionData(-1, e.OriginPort, e.DestinationPort, e.GoodPrefabIndex,
                     e.GoodCount, e.TotalPrice, e.InsuranceLevel, e.Distance, 0, e.DueDay);
                 var mission = new Mission(data);
-                if ((e.ModFlags & 1) != 0) EconomyOverhaulCompat.WriteOffer(mission, e.ModModifiers, (e.ModFlags & 2) != 0);
+                if ((e.ModFlags & 1) != 0) EconomyOverhaulCompat.WriteOffer(mission, e.ModModifiers, (e.ModFlags & 2) != 0, e.ModOffered);
                 PlayerMissions.AcceptMission(mission);   // host vanilla: assigns slot, spawns goods, reduces demand
                 Plugin.Logger.LogInfo("[MissionSync] in accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
             }

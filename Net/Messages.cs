@@ -123,6 +123,7 @@ namespace SailwindCoop.Net
         EconomyState = 127,     // host -> client : Economy Overhaul markets, currencies and demand events (ReliableOrdered, on change)
         EconomyDelta = 128,     // client -> host : what a client's trade did to markets and currencies
         FinancedCargo = 129,    // host -> client : full set of cargo reserved for host finance
+        OfficeState = 130,      // host -> client : Economy Overhaul trade offices (its OfficeState fields, ReliableOrdered, on change)
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -2023,6 +2024,9 @@ namespace SailwindCoop.Net
         public int ModModifiers;
         /// <summary>Bit 0: the Economy Overhaul fields are set. Bit 1: the offer came from the world tab.</summary>
         public byte ModFlags;
+        /// <summary>Economy Overhaul 1.2.0: the offer's crate count when fewer were chosen with the
+        /// board's arrows (its record's <c>offered</c>); 0 for a mission taken whole.</summary>
+        public int ModOffered;
     }
 
     /// <summary>Host → client: the full shared mission journal (read-only mirror). Slots not listed are
@@ -2043,7 +2047,7 @@ namespace SailwindCoop.Net
                 w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
                 w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
                 w.Put(m.Distance); w.Put(m.DeliveredGoods); w.Put(m.DueDay);
-                w.Put(m.ModModifiers); w.Put(m.ModFlags);
+                w.Put(m.ModModifiers); w.Put(m.ModFlags); w.Put(m.ModOffered);
             }
         }
 
@@ -2067,6 +2071,7 @@ namespace SailwindCoop.Net
                     DueDay = r.GetInt(),
                     ModModifiers = r.GetInt(),
                     ModFlags = r.GetByte(),
+                    ModOffered = r.GetInt(),
                 };
             }
         }
@@ -2358,7 +2363,7 @@ namespace SailwindCoop.Net
             w.Put(m.OriginPort); w.Put(m.DestinationPort); w.Put(m.GoodPrefabIndex);
             w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
             w.Put(m.Distance); w.Put(m.DueDay);
-            w.Put(m.ModModifiers); w.Put(m.ModFlags);
+            w.Put(m.ModModifiers); w.Put(m.ModFlags); w.Put(m.ModOffered);
         }
 
         public void Deserialize(NetDataReader r)
@@ -2375,6 +2380,7 @@ namespace SailwindCoop.Net
                 DueDay = r.GetInt(),
                 ModModifiers = r.GetInt(),
                 ModFlags = r.GetByte(),
+                ModOffered = r.GetInt(),
             };
         }
     }
@@ -2983,6 +2989,24 @@ namespace SailwindCoop.Net
             if (count < 0 || count > r.AvailableBytes / sizeof(int)) throw new System.FormatException("financed cargo count " + count);
             InstanceIds = new int[count];
             for (int i = 0; i < count; i++) InstanceIds[i] = r.GetInt();
+        }
+    }
+
+    /// <summary>Host -> client: Economy Overhaul 1.2.0's trade offices, as named fields of its
+    /// <c>OfficeState</c> (built and read in <c>Sync/EconomyOverhaulCompat.Office.cs</c>). The transport
+    /// only carries the bytes.</summary>
+    public sealed class OfficeStateMsg : INetMessage
+    {
+        public const int MaxBytes = 64 * 1024;
+        public byte[] Data = new byte[0];
+        public MsgType Type => MsgType.OfficeState;
+        public void Serialize(NetDataWriter w) { w.Put(Data.Length); w.Put(Data); }
+        public void Deserialize(NetDataReader r)
+        {
+            int count = r.GetInt();
+            if (count < 0 || count > MaxBytes || count > r.AvailableBytes) throw new System.FormatException("office state " + count + " bytes");
+            Data = new byte[count];
+            r.GetBytes(Data, count);
         }
     }
 

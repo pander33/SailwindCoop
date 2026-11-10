@@ -23,7 +23,9 @@ namespace SailwindCoop.Net
         // 104: Economy Overhaul's markets shared: EconomyState (127) and EconomyDelta (128).
         // 105: authoritative financed cargo ids; client finance guards precede action relays.
         // 106: mod capabilities in the join exchange and a dedicated market snapshot channel.
-        public const int Version = 106;
+        // 107: Economy Overhaul 1.2.0: MissionEntry carries the offered crate count (ModOffered);
+        // OfficeState (130) mirrors the trade offices.
+        public const int Version = 107;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -143,6 +145,7 @@ namespace SailwindCoop.Net
                 case MsgType.EconomyState: return new EconomyStateMsg();
                 case MsgType.EconomyDelta: return new EconomyDeltaMsg();
                 case MsgType.FinancedCargo: return new FinancedCargoMsg();
+                case MsgType.OfficeState: return new OfficeStateMsg();
                 case MsgType.ShopTaken: return new ShopTakenMsg();
                 case MsgType.ForageTaken: return new ForageTakenMsg();
                 case MsgType.BeltState: return new BeltStateMsg();

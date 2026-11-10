@@ -147,6 +147,7 @@ namespace ProtocolSmoke
                 new WalletStateMsg { Shared = true, AckSeq = 0x01020304, Currency = new[] { 120, 0, -5, 99999 } },
                 new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
                 new FinancedCargoMsg { Enabled = true, InstanceIds = new[] { 1001, 927381, int.MaxValue } },
+                new OfficeStateMsg { Data = new byte[] { 1, 2, 0, 255, 7 } },
                 new EconomyStateMsg { AckSeq = 0x0B0C0D0E, HasFx = true, FxDay = 812,
                     Rates = new[] { 0.221, 1.93, 0.498, 0.006 }, Basis = new[] { 0.22, 1.9, 0.5, 0.006 },
                     Smooth = new[] { 0.2205, 1.91, 0.499, 0.006 }, Closes = new[] { 0.22, 1.9, 0.5, 0.219, 1.92, 0.51 },
@@ -173,10 +174,10 @@ namespace ProtocolSmoke
                         new ModSetting { Guid = "com.nandbrew.shipyardexpansion", Section = "Settings", Key = "Add lug sails", Value = "false" } } },
                 new ModSyncResultMsg { Decision = ModSyncDecision.Proceed, Missing = 3, Different = 1, Features = ModFeatures.ShipyardExpansion },
                 new MissionAcceptMsg { Mission = new MissionEntry { OriginPort = 4, DestinationPort = 17, GoodPrefabIndex = 210, GoodCount = 24,
-                    TotalPrice = 1830, InsuranceLevel = 0.5f, Distance = 212.5f, DueDay = 41, ModModifiers = 5, ModFlags = 3 } },
+                    TotalPrice = 1830, InsuranceLevel = 0.5f, Distance = 212.5f, DueDay = 41, ModModifiers = 5, ModFlags = 3, ModOffered = 30 } },
                 new MissionJournalMsg { Missions = new[] {
                     new MissionEntry { MissionIndex = 0, OriginPort = 4, DestinationPort = 17, GoodPrefabIndex = 210, GoodCount = 24, TotalPrice = 1830,
-                        InsuranceLevel = 0.5f, Distance = 212.5f, DeliveredGoods = 6, DueDay = 41, ModModifiers = 9, ModFlags = 1 },
+                        InsuranceLevel = 0.5f, Distance = 212.5f, DeliveredGoods = 6, DueDay = 41, ModModifiers = 9, ModFlags = 1, ModOffered = 30 },
                     new MissionEntry { MissionIndex = 4, OriginPort = 1, DestinationPort = 2, GoodPrefabIndex = 133, GoodCount = 3, TotalPrice = 90,
                         Distance = 40f, DueDay = 12 } } },
                 new BoatPurchaseMsg { SceneIndex = 207, Owned = false },
@@ -300,6 +301,10 @@ namespace ProtocolSmoke
             financed.Put(true); financed.Put(int.MaxValue);
             if (Protocol.ReadBody(MsgType.FinancedCargo, new NetDataReader(financed.Data, 0, financed.Length)) != null)
                 failures.Add("FinancedCargoMsg: oversized id count accepted");
+            var office = new NetDataWriter();
+            office.Put(OfficeStateMsg.MaxBytes); office.Put((byte)1);
+            if (Protocol.ReadBody(MsgType.OfficeState, new NetDataReader(office.Data, 0, office.Length)) != null)
+                failures.Add("OfficeStateMsg: oversized byte count accepted");
             var control = new NetDataWriter();
             control.Put((ushort)1); control.Put(0u); control.Put(0u); control.Put(0L); control.Put(false);
             control.Put(ushort.MaxValue);

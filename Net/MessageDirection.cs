@@ -94,6 +94,7 @@ namespace SailwindCoop.Net
                 case MsgType.WalletState:
                 case MsgType.EconomyState:
                 case MsgType.FinancedCargo:
+                case MsgType.OfficeState:
                 case MsgType.DiceState:
                 case MsgType.DiceResult:
                 case MsgType.DiceBaseline:

@@ -44,6 +44,7 @@ namespace SailwindCoop.Runtime
         public WalletSync Wallet { get; private set; }
         public MarketSync Markets { get; private set; }
         public FinancedCargoSync FinancedCargo { get; private set; }
+        public OfficeStateSync Offices { get; private set; }
         public DiceSync Dice { get; private set; }
         public PlayerKnockdown Knockdown { get; private set; }
         public ShipyardSync Shipyard { get; private set; }
@@ -249,6 +250,7 @@ namespace SailwindCoop.Runtime
             Wallet = new WalletSync(Net);
             Markets = new MarketSync(Net);
             FinancedCargo = new FinancedCargoSync(Net);
+            Offices = new OfficeStateSync(Net);
             Shipyard = new ShipyardSync(Net);
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
@@ -484,6 +486,7 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Wallet.Tick", () => Wallet.Tick()),
                 new SyncStep("Markets.Tick", () => Markets.Tick()),
                 new SyncStep("FinancedCargo.Tick", () => FinancedCargo.Tick()),
+                new SyncStep("Offices.Tick", () => Offices.Tick()),
                 new SyncStep("Controls.Tick", () => Controls.Tick(SendDt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
                 new SyncStep("Anchor.Tick", () => Anchor.Tick(SendDt)),
@@ -928,6 +931,9 @@ namespace SailwindCoop.Runtime
                 case MsgType.FinancedCargo:
                     FinancedCargo.Receive((FinancedCargoMsg)msg);
                     break;
+                case MsgType.OfficeState:
+                    Offices.Receive((OfficeStateMsg)msg);
+                    break;
                 case MsgType.EconomyDelta:
                     Markets.OnEconomyDelta((EconomyDeltaMsg)msg, fromPeer);
                     break;
@@ -999,6 +1005,7 @@ namespace SailwindCoop.Runtime
                         {
                             Shipyard.SendBaseline(fromPeer);
                             FinancedCargo.SendBaseline(fromPeer);
+                            Offices.SendBaseline(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
@@ -1284,6 +1291,7 @@ namespace SailwindCoop.Runtime
             Wallet?.Clear();
             Markets?.Clear();
             FinancedCargo?.Clear();
+            Offices?.Clear();
             Sleep?.Clear();
             Shop?.Clear();
             WindTotem?.Clear();
@@ -1883,6 +1891,7 @@ namespace SailwindCoop.Runtime
             Wallet.Clear();
             Markets.Clear();
             FinancedCargo.Clear();
+            Offices.Clear();
             Sleep.Clear();
             OriginCatchUp.ForgetHostOffset();
             Shop.Clear();

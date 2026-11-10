@@ -176,6 +176,16 @@ Domain notes:
   purchase. R9 records the shop debit before later UI work, and R10 holds a sale against the
   pending authoring request until the host id arrives. Unity/EO acceptance remains open in
   `СОСТОЯНИЕ.md` §4 item 31.
+  EO 1.2.0 (protocol 107): trade offices are the host's. A client skips `Office.Midnight` and
+  `OfficeFleet.Trade` and refuses converting, upgrades, treasury moves, wages, crew, the fleet and
+  moving or restyling a clerk; `OfficeStateSync` sends the host's `OfficeState` (every int/float/
+  string array except the per-ship `fleet*` arrays and `playerLook`, by field name) as
+  `OfficeState` (130) on change, checked once a second, and after a client's world load; the client
+  writes it over its copy and calls `OfficeSites.Refresh`. A unique item a client buys at an office
+  is authored by the host (`NotifyClientAuthored`). `WoodPoles.ResizeAttached` sends the item's
+  state from either side. `MissionEntry.ModOffered` carries the offered crate count of a mission
+  cut with the board's arrows. Per machine: the fleet tab's per-ship figures, the cooperation
+  book's daily count until the host's next change.
 - **Steam transport:** a second way to carry the same LiteNetLib datagrams.
   `Net/DatagramTunnel` forwards UDP between loopback sockets and an `IDatagramRelay` on its own
   thread (a world load blocks `Update` longer than the disconnect timeout); `SteamRelay` is Steam

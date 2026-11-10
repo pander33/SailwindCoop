@@ -11,7 +11,7 @@ using UnityEngine;
 namespace SailwindCoop.Sync
 {
     /// <summary>
-    /// Co-op with the Economy Overhaul mod (<c>DogEggz.EconomyOverhaul</c>, 1.1.5). It keeps one economy
+    /// Co-op with the Economy Overhaul mod (<c>DogEggz.EconomyOverhaul</c>, 1.1.5 and 1.2.0). It keeps one economy
     /// state per machine (<c>EconomyOverhaul.World.State</c>, loaded from the host's save on a guest)
     /// and is written for one player with one loan book. Analysis and the choices: <c>ECONOMY_OVERHAUL_PLAN.md</c>.
     ///
@@ -30,8 +30,17 @@ namespace SailwindCoop.Sync
     /// host as damage requests, and the plank is consumed there.</item>
     /// <item>Pole bracing on a client (<c>PoleBrace.Push</c> pushes the bodies directly) goes to the host
     /// through the deck force path.</item>
-    /// <item>Mission modifiers, kept by EO per offer object, travel with a client's accept and with
-    /// the journal (<see cref="MissionSync"/>).</item>
+    /// <item>Mission modifiers and the offered crate count (1.2.0), kept by EO per offer object,
+    /// travel with a client's accept and with the journal (<see cref="MissionSync"/>).</item>
+    /// <item>Trade offices (1.2.0) belong to the host, as finance does: on a client the office's
+    /// midnight (wages, fleet fees) does not run, and converting, upgrades, the treasury, wages, crew
+    /// and the fleet are refused. A unique item bought at an office with the client's own wallet goes
+    /// to the host as a client-authored item. EO's "Prepare to uninstall" is the host's.</item>
+    /// <item>A plank or pole resized while attached (1.2.0) sends its new state: a resting item is
+    /// not streamed.</item>
+    /// <para>The office state is mirrored from the host (<see cref="OfficeStateSync"/>,
+    /// <c>EconomyOverhaulCompat.Office.cs</c>); a client skips its fleet's trades and refuses moving or
+    /// restyling a clerk, so its copy changes only through that mirror.</para>
     /// </list>
     /// </summary>
     internal static partial class EconomyOverhaulCompat
@@ -39,6 +48,8 @@ namespace SailwindCoop.Sync
         internal const string Guid = "DogEggz.EconomyOverhaul";
         private const string HostOnlyText = "In co-op, loans and ship rentals are the host's.";
         private const string FinancedText = "In co-op, financed cargo can only be used by the host.";
+        private const string OfficeText = "In co-op, trade offices are the host's.";
+        private const string UninstallText = "In co-op, only the host can prepare to uninstall.";
 
         private static bool _resolved;
         private static Assembly _assembly;
@@ -102,6 +113,35 @@ namespace SailwindCoop.Sync
             Prefix("Bottomry", "RepayRemote", nameof(RefuseBool));
             Prefix("Bottomry", "RepayAtBox", nameof(RefuseVoid));
             Prefix("Loans", "Use", nameof(RefuseFinancedUse));
+            Prefix("Uninstall", "Refusal", nameof(RefuseUninstall));
+
+            // Trade offices (1.2.0): the host's, as finance is. Without them (1.1.5) not counted.
+            if (T("Office") != null)
+            {
+                // Also runs OfficeFleet.Midnight. On a client it would charge the host's treasury
+                // copy and let the clerk quit there alone, taking the free carts with him.
+                Prefix("Office", "Midnight", nameof(SkipOnClient));
+                Prefix("Office", "ConvertRefusal", nameof(RefuseOffice));
+                Prefix("Office", "UpgradeRefusal", nameof(RefuseOffice));
+                // A withdrawal on a client would pay the host's treasury into the guest's wallet.
+                Prefix("Office", "Move", nameof(RefuseOffice));
+                Prefix("Office", "PayWages", nameof(RefuseOffice));
+                Prefix("OfficeCrew", "Refusal", nameof(RefuseOffice));
+                Prefix("OfficeFleet", "Refusal", nameof(RefuseOffice));
+                Prefix("OfficeFleet", "KindRefusal", nameof(RefuseOffice));
+                Prefix("OfficeFleet", "Dismiss", nameof(RefuseOfficeVoid));
+                // The client's copy changes only through the host's mirror (OfficeStateSync). Its own
+                // visible traders still sail; with no trade recorded their arrival settles nothing
+                // into the treasury.
+                Prefix("OfficeFleet", "Trade", nameof(SkipOnClient));
+                Prefix("ClerkPlacer", "Begin", nameof(RefuseOfficeVoid));
+                Prefix("ClerkLook", "Edit", nameof(RefuseOffice));
+                total++; if (Patch(harmony, "OfficeItems", "Buy", postfix: nameof(OfficeItemBought))) ok++;
+            }
+            if (T("WoodPoles") != null && AccessTools.Method(T("WoodPoles"), "ResizeAttached") != null)
+            {
+                total++; if (Patch(harmony, "WoodPoles", "ResizeAttached", postfix: nameof(RodResized))) ok++;
+            }
             try
             {
                 var bottomry = T("Bottomry");
@@ -150,6 +190,7 @@ namespace SailwindCoop.Sync
 
             _offers = Field("Missions", "offerModifiers");
             _sources = Field("Missions", "sources");
+            _offeredCounts = Field("Missions", "offered");   // 1.2.0
             _category = AccessTools.Method(T("Missions"), "Category");
             _state = Field("World", "State");
             _modifierType = T("MissionModifier");
@@ -200,6 +241,47 @@ namespace SailwindCoop.Sync
             if (!IsClient) return true;
             __result = HostOnlyText;
             return false;
+        }
+
+        private static bool RefuseOffice(ref string __result)
+        {
+            if (!IsClient) return true;
+            __result = OfficeText;
+            return false;
+        }
+
+        private static bool RefuseOfficeVoid()
+        {
+            if (!IsClient) return true;
+            Notify(OfficeText);
+            return false;
+        }
+
+        private static bool RefuseUninstall(ref string __result)
+        {
+            if (!IsClient) return true;
+            __result = UninstallText;
+            return false;
+        }
+
+        // ---- Trade office items and attached rods (1.2.0) ---------------------
+
+        // Bought with the client's own wallet and put down at the office (Object.Instantiate): the
+        // host authors the shared twin. The host's own purchase is found by its item scan.
+        private static void OfficeItemBought(ShipItem __result)
+        {
+            if (!IsClient || __result == null) return;
+            try { ItemSync.Instance?.NotifyClientAuthored(__result); }
+            catch (Exception e) { Fault("office item", e); }
+        }
+
+        // Its size lives in health and it may move along its surface; a resting item is not
+        // streamed, so either side sends the new state (the host broadcasts it).
+        private static void RodResized(ShipItem rod)
+        {
+            if (rod == null) return;
+            try { ItemSync.Instance?.NotifyItemStateChanged(rod, "attached rod resize"); }
+            catch (Exception e) { Fault("attached rod resize", e); }
         }
 
         private static bool RefuseBool(ref bool __result)
@@ -497,34 +579,49 @@ namespace SailwindCoop.Sync
 
         // ---- Missions ------------------------------------------------------------
 
-        private static FieldInfo _offers, _sources, _state;
+        private static FieldInfo _offers, _sources, _state, _offeredCounts;
         private static MethodInfo _category;
         private static Type _modifierType, _missionStateType;
 
         /// <summary>Client: the modifiers and the world-tab flag EO rolled for this offer.</summary>
-        internal static bool ReadOffer(Mission mission, out int modifiers, out bool world)
+        internal static bool ReadOffer(Mission mission, out int modifiers, out bool world, out int offered)
         {
-            modifiers = 0; world = false;
+            modifiers = 0; world = false; offered = 0;
             if (mission == null || _offers == null) return false;
             try
             {
                 if (_offers.GetValue(null) is IDictionary offers && offers.Contains(mission)) modifiers = Convert.ToInt32(offers[mission]);
                 if (_sources?.GetValue(null) is IDictionary sources && sources.Contains(mission)) world = (bool)sources[mission];
                 else world = mission.distance >= 140f;
+                // 1.2.0: (count, total) as offered; EO records the count only when fewer were chosen.
+                if (_offeredCounts?.GetValue(null) is IDictionary counts && counts.Contains(mission))
+                {
+                    var whole = counts[mission];
+                    int count = whole != null ? Convert.ToInt32(whole.GetType().GetField("Item1").GetValue(whole)) : 0;
+                    if (count != mission.goodCount) offered = count;
+                }
                 return true;
             }
             catch (Exception e) { Fault("read offer", e); return false; }
         }
 
         /// <summary>Host: give the mission built from a client's accept the client's offer data, so
-        /// EO's own accept records it.</summary>
-        internal static void WriteOffer(Mission mission, int modifiers, bool world)
+        /// EO's own accept records it. Without the offered count EO would take a mission cut with the
+        /// board's arrows as whole: full reputation factor and full port capacity award.</summary>
+        internal static void WriteOffer(Mission mission, int modifiers, bool world, int offered)
         {
             if (mission == null || _offers == null || _modifierType == null) return;
             try
             {
                 if (_offers.GetValue(null) is IDictionary offers) offers[mission] = Enum.ToObject(_modifierType, modifiers);
                 if (_sources?.GetValue(null) is IDictionary sources) sources[mission] = world;
+                if (offered > mission.goodCount && mission.goodCount > 0 && _offeredCounts?.GetValue(null) is IDictionary counts)
+                {
+                    // The total as offered only feeds the board's arrows of an open offer; scaled back.
+                    var tuple = _offeredCounts.FieldType.GetGenericArguments()[1];
+                    int total = (int)Math.Round(mission.totalPrice * (double)offered / mission.goodCount);
+                    counts[mission] = Activator.CreateInstance(tuple, offered, total);
+                }
             }
             catch (Exception e) { Fault("write offer", e); }
         }
@@ -536,9 +633,9 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Host: EO's record of the mission in a journal slot.</summary>
-        internal static bool ReadRecord(int slot, out int modifiers, out bool world)
+        internal static bool ReadRecord(int slot, out int modifiers, out bool world, out int offered)
         {
-            modifiers = 0; world = false;
+            modifiers = 0; world = false; offered = 0;
             if (_missionStateType == null) return false;
             try
             {
@@ -549,6 +646,8 @@ namespace SailwindCoop.Sync
                     if (record == null || (int)Get(record, "slot") != slot) continue;
                     modifiers = (int)Get(record, "modifiers");
                     world = (bool)Get(record, "world");
+                    var offeredField = AccessTools.Field(record.GetType(), "offered");   // 1.2.0
+                    if (offeredField != null) offered = (int)offeredField.GetValue(record);
                     return true;
                 }
             }
@@ -580,6 +679,7 @@ namespace SailwindCoop.Sync
                     Set(record, "world", (e.ModFlags & 2) != 0);
                     Set(record, "creditedDeliveries", e.DeliveredGoods);
                     Set(record, "modifiers", e.ModModifiers);
+                    Set(record, "offered", e.ModOffered);
                     if (_category != null && mission != null) Set(record, "category", Convert.ToInt32(_category.Invoke(null, new object[] { mission })));
                     records.Add(record);
                 }

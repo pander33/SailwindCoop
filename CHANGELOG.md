@@ -2,6 +2,22 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+Everyone must update to wire protocol 107.
+
+### Economy Overhaul 1.2.0
+
+- Trade offices belong to the host, like loans: guests can use an office but cannot convert a
+  house, buy upgrades, move treasury money, pay wages, hire crew, move the clerk or manage the
+  trade fleet. What the host does at an office (upgrades, treasury, the clerk, free carts) appears
+  for guests within a second.
+- A unique item a guest buys at a trade office appears for everyone.
+- Resizing an attached plank or pole is shared with the other players.
+- A mission a guest takes with fewer crates than offered gives the reduced reputation and port
+  capacity, as in single player.
+- Economy Overhaul's "Prepare to uninstall" works only on the host.
+
 ## [0.8.0] - 2026-11-07
 
 Everyone must update to wire protocol 106. Requires Sailwind 0.40; 0.40.1 is supported.
