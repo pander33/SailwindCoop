@@ -124,6 +124,15 @@ namespace SailwindCoop.Net
         EconomyDelta = 128,     // client -> host : what a client's trade did to markets and currencies
         FinancedCargo = 129,    // host -> client : full set of cargo reserved for host finance
         OfficeState = 130,      // host -> client : Economy Overhaul trade offices (its OfficeState fields, ReliableOrdered, on change)
+        CrewNote = 131,         // player -> host -> observers: optional instruments and horn
+        HookAttachment = 132,   // HooksHangMore requests and committed attachments
+        SailDamage = 133,       // Sail Damage snapshots and repairs
+        PetState = 134,         // FurstMate world and pose data
+        PetRequest = 135,       // FurstMate guest interactions
+        PostalBoardRequest = 136,
+        PostalBoard = 137,
+        TradeSale = 138,
+        TradeSaleReceipt = 139,
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -1690,6 +1699,7 @@ namespace SailwindCoop.Net
     public sealed class FishCatchMsg : INetMessage
     {
         public uint RequestId;
+        public string TradeAuthor = "";
         public int PrefabIndex;
         public CoordFrame Frame;
         public ushort BoatIndex;
@@ -1705,6 +1715,7 @@ namespace SailwindCoop.Net
         public void Serialize(NetDataWriter w)
         {
             w.Put(RequestId);
+            w.Put(TradeAuthor);
             w.Put(PrefabIndex);
             w.Put((byte)Frame);
             w.Put(BoatIndex);
@@ -1719,6 +1730,7 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r)
         {
             RequestId = r.GetUInt();
+            TradeAuthor = r.GetString(32);
             PrefabIndex = r.GetInt();
             Frame = (CoordFrame)r.GetByte();
             BoatIndex = r.GetUShort();
@@ -2027,6 +2039,20 @@ namespace SailwindCoop.Net
         /// <summary>Economy Overhaul 1.2.0: the offer's crate count when fewer were chosen with the
         /// board's arrows (its record's <c>offered</c>); 0 for a mission taken whole.</summary>
         public int ModOffered;
+        public byte PostalKind, PostalTab;
+        public string PostalLetterId;
+
+        internal void WritePostal(NetDataWriter w)
+        {
+            w.Put(PostalKind); w.Put(PostalTab); w.Put(PostalLetterId ?? "");
+        }
+
+        internal void ReadPostal(NetDataReader r)
+        {
+            PostalKind = r.GetByte(); PostalTab = r.GetByte();
+            string id = r.GetString(512);
+            PostalLetterId = id.Length == 0 ? null : id;
+        }
     }
 
     /// <summary>Host → client: the full shared mission journal (read-only mirror). Slots not listed are
@@ -2048,6 +2074,7 @@ namespace SailwindCoop.Net
                 w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
                 w.Put(m.Distance); w.Put(m.DeliveredGoods); w.Put(m.DueDay);
                 w.Put(m.ModModifiers); w.Put(m.ModFlags); w.Put(m.ModOffered);
+                m.WritePostal(w);
             }
         }
 
@@ -2073,6 +2100,7 @@ namespace SailwindCoop.Net
                     ModFlags = r.GetByte(),
                     ModOffered = r.GetInt(),
                 };
+                Missions[i].ReadPostal(r);
             }
         }
     }
@@ -2089,6 +2117,8 @@ namespace SailwindCoop.Net
         public int GoodPrefabIndex;
         public string DestinationName = "";
         public int ExpectedReward;
+        public bool PostalLetter;
+        public int PostalOriginRep, PostalDestinationRep;
 
         public MsgType Type => MsgType.MissionReward;
 
@@ -2102,6 +2132,9 @@ namespace SailwindCoop.Net
             w.Put(GoodPrefabIndex);
             w.Put(DestinationName ?? "");
             w.Put(ExpectedReward);
+            w.Put(PostalLetter);
+            w.Put(PostalOriginRep);
+            w.Put(PostalDestinationRep);
         }
 
         public void Deserialize(NetDataReader r)
@@ -2114,6 +2147,9 @@ namespace SailwindCoop.Net
             GoodPrefabIndex = r.GetInt();
             DestinationName = r.GetString();
             ExpectedReward = r.GetInt();
+            PostalLetter = r.GetBool();
+            PostalOriginRep = r.GetInt();
+            PostalDestinationRep = r.GetInt();
         }
     }
 
@@ -2364,6 +2400,7 @@ namespace SailwindCoop.Net
             w.Put(m.GoodCount); w.Put(m.TotalPrice); w.Put(m.InsuranceLevel);
             w.Put(m.Distance); w.Put(m.DueDay);
             w.Put(m.ModModifiers); w.Put(m.ModFlags); w.Put(m.ModOffered);
+            m.WritePostal(w);
         }
 
         public void Deserialize(NetDataReader r)
@@ -2382,6 +2419,7 @@ namespace SailwindCoop.Net
                 ModFlags = r.GetByte(),
                 ModOffered = r.GetInt(),
             };
+            Mission.ReadPostal(r);
         }
     }
 
@@ -2402,11 +2440,13 @@ namespace SailwindCoop.Net
         public int InstanceId;
         public int PrefabIndex;
         public int PortIndex;
+        public bool PostalDropOff;
+        public uint RequestId;
 
         public MsgType Type => MsgType.MissionDeliver;
 
-        public void Serialize(NetDataWriter w) { w.Put(InstanceId); w.Put(PrefabIndex); w.Put(PortIndex); }
-        public void Deserialize(NetDataReader r) { InstanceId = r.GetInt(); PrefabIndex = r.GetInt(); PortIndex = r.GetInt(); }
+        public void Serialize(NetDataWriter w) { w.Put(InstanceId); w.Put(PrefabIndex); w.Put(PortIndex); w.Put(PostalDropOff); w.Put(RequestId); }
+        public void Deserialize(NetDataReader r) { InstanceId = r.GetInt(); PrefabIndex = r.GetInt(); PortIndex = r.GetInt(); PostalDropOff = r.GetBool(); RequestId = r.GetUInt(); }
     }
 
     /// <summary>Host -> client: notification text for that delivery.</summary>
@@ -2414,11 +2454,12 @@ namespace SailwindCoop.Net
     {
         public bool Delivered;
         public string Text = "";
+        public uint RequestId;
 
         public MsgType Type => MsgType.MissionDeliverResult;
 
-        public void Serialize(NetDataWriter w) { w.Put(Delivered); w.Put(Text ?? ""); }
-        public void Deserialize(NetDataReader r) { Delivered = r.GetBool(); Text = r.GetString(); }
+        public void Serialize(NetDataWriter w) { w.Put(Delivered); w.Put(Text ?? ""); w.Put(RequestId); }
+        public void Deserialize(NetDataReader r) { Delivered = r.GetBool(); Text = r.GetString(); RequestId = r.GetUInt(); }
     }
 
     /// <summary>Both directions: a purchasable boat was bought (its <c>SaveableObject.extraSetting</c> flipped

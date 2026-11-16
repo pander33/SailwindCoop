@@ -133,7 +133,7 @@ namespace SailwindCoop.Sync
             else if (_net.Role == Role.Host)
             {
                 RestoreSlaved();
-                if (_body != null) _body.isKinematic = _anchor.IsSet();
+                if (_body != null) _body.isKinematic = _anchor.IsSet() || HooksHangMoreCompat.IsAttached(_anchor);
                 SendState(reliable: true);
             }
             Plugin.Logger.LogInfo("[AnchorSync] drop role=" + _net.Role + " boat=" + _boatId);
@@ -144,6 +144,21 @@ namespace SailwindCoop.Sync
             if (anchor == null) return null;
             foreach (var c in _fleet.Values) if (c._anchor == anchor) return c;
             return null;
+        }
+
+        internal bool TryGetAttachmentBoat(Anchor anchor, out ushort boatIndex)
+        {
+            var context = ForAnchor(anchor);
+            boatIndex = context != null ? context._boatId : BoatLocator.NoBoat;
+            return context != null;
+        }
+
+        internal Anchor GetAttachmentAnchor(ushort boatIndex) => _fleet.Get(boatIndex)?._anchor;
+
+        internal bool IsCarried(Anchor anchor)
+        {
+            var context = ForAnchor(anchor);
+            return context != null && (context.LocalHeld || context._holder != 0 || context._gate.HasPending);
         }
 
         public bool PreserveRope(RopeControllerAnchor rope)
@@ -165,7 +180,8 @@ namespace SailwindCoop.Sync
         public bool SuppressPhysics(Anchor anchor)
         {
             if (_fleet != null) return ForAnchor(anchor)?.SuppressPhysics(anchor) ?? false;
-            return Connected && anchor == _anchor && !LocalHeld && (_net.Role == Role.Client || _holder != 0);
+            return Connected && anchor == _anchor && !LocalHeld &&
+                (_net.Role == Role.Client || _holder != 0 || HooksHangMoreCompat.IsAttached(anchor));
         }
 
         private void SendRequest(bool held, bool transition, Vector3 throwVelocity = default(Vector3))
@@ -329,7 +345,8 @@ namespace SailwindCoop.Sync
         public void ApplyRemote()
         {
             if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyRemote(); return; }
-            if (!Connected || LocalHeld || _gate.HasPending || _anchor == null || !_slave.HasData || Time.timeScale <= 0.0001f) return;
+            if (!Connected || LocalHeld || _gate.HasPending || _anchor == null || !_slave.HasData || Time.timeScale <= 0.0001f ||
+                (_holder == 0 && HooksHangMoreCompat.IsAttached(_anchor))) return;
             if (_net.Role == Role.Host && _holder == 0) return;
             EnsureSlaved(_holder != 0);
             long localNow = _net.Clock.LocalTick;

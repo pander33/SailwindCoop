@@ -683,9 +683,10 @@ namespace SailwindCoop.Sync
 			// The rates are those of PlayerNeeds.LateUpdate (game 0.39).
 			float missed = step * (scale - Time.timeScale);
 			if (_net.Role != Role.Client || missed <= 0f) return;
-			if (PlayerNeeds.food > 0f) PlayerNeeds.food = Mathf.Max(0f, PlayerNeeds.food - missed * 3f);
-			else PlayerNeeds.foodDebt = Mathf.Max(0f, PlayerNeeds.foodDebt - missed * 5f);
-			PlayerNeeds.water = Mathf.Max(0f, PlayerNeeds.water - missed * 4f);
+			float foodAndWater = missed * NeedsFrameRatePatches.ConsumptionScale;
+			if (PlayerNeeds.food > 0f) PlayerNeeds.food = Mathf.Max(0f, PlayerNeeds.food - foodAndWater * 3f);
+			else PlayerNeeds.foodDebt = Mathf.Max(0f, PlayerNeeds.foodDebt - foodAndWater * 5f);
+			PlayerNeeds.water = Mathf.Max(0f, PlayerNeeds.water - foodAndWater * 4f);
 			PlayerNeeds.vitamins = Mathf.Max(0f, PlayerNeeds.vitamins - missed * 0.2f);
 			PlayerNeeds.protein = Mathf.Max(0f, PlayerNeeds.protein - missed * 0.2f);
 			PlayerNeeds.alcohol = Mathf.Max(0f, PlayerNeeds.alcohol - missed * 12f);

@@ -1113,6 +1113,20 @@ namespace SailwindCoop.Net
                 session.ModFeatures = features;
         }
 
+        internal void SendMod(INetMessage message, ModFeatures feature, DeliveryMethod method, NetPeer except = null)
+        {
+            if (State != LinkState.Connected) return;
+            if (Role == Role.Client)
+            {
+                if ((HostModFeatures & feature) == feature) _hostPeer?.Send(message, method);
+                return;
+            }
+            foreach (var session in _sessions.Values)
+                if (session.HandshakeDone && session.JoinState == MemberJoinState.Ready &&
+                    session.Peer != except && (session.ModFeatures & feature) == feature)
+                    session.Peer.Send(message, method);
+        }
+
         /// <summary>Host: sends optional mod data only to clients that can apply it.</summary>
         internal void BroadcastForFeature(ModFeatures feature, INetMessage withMod, INetMessage vanilla)
         {

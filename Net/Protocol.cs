@@ -25,7 +25,11 @@ namespace SailwindCoop.Net
         // 106: mod capabilities in the join exchange and a dedicated market snapshot channel.
         // 107: Economy Overhaul 1.2.0: MissionEntry carries the offered crate count (ModOffered);
         // OfficeState (130) mirrors the trade offices.
-        public const int Version = 107;
+        // 108: optional crew mod synchronization.
+        // 109: sail repair deltas, dog purchase results, correlated postal delivery replies.
+        // 110: sail repair acknowledgements and recoverable dog purchase results.
+        // 111: recoverable Economy Overhaul sales and empty office snapshots.
+        public const int Version = 111;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -146,6 +150,15 @@ namespace SailwindCoop.Net
                 case MsgType.EconomyDelta: return new EconomyDeltaMsg();
                 case MsgType.FinancedCargo: return new FinancedCargoMsg();
                 case MsgType.OfficeState: return new OfficeStateMsg();
+                case MsgType.CrewNote: return new CrewNoteMsg();
+                case MsgType.HookAttachment: return new HookAttachmentMsg();
+                case MsgType.SailDamage: return new SailDamageMsg();
+                case MsgType.PetState: return new PetStateMsg();
+                case MsgType.PetRequest: return new PetRequestMsg();
+                case MsgType.PostalBoardRequest: return new PostalBoardRequestMsg();
+                case MsgType.PostalBoard: return new PostalBoardMsg();
+                case MsgType.TradeSale: return new TradeSaleMsg();
+                case MsgType.TradeSaleReceipt: return new TradeSaleReceiptMsg();
                 case MsgType.ShopTaken: return new ShopTakenMsg();
                 case MsgType.ForageTaken: return new ForageTakenMsg();
                 case MsgType.BeltState: return new BeltStateMsg();

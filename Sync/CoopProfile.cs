@@ -31,6 +31,8 @@ namespace SailwindCoop.Sync
         private static readonly object SaveGate = new object();
         private static bool _saving;
         private static bool _preserveBackup;
+        internal static readonly DogPurchaseJournal DogPurchases = new DogPurchaseJournal();
+        internal static readonly TradeSaleJournal TradeSales = new TradeSaleJournal();
         public static string ProfilePath => Path.Combine(Application.persistentDataPath, "coop_profile.dat");
 
         public static bool Exists()
@@ -56,6 +58,8 @@ namespace SailwindCoop.Sync
                 {
                     var c = new SaveContainer();
                     FillCharacterFromGame(c);
+                    DogPurchases.SaveProfile(c.modData);
+                    TradeSales.SaveProfile(c.modData);
 
                     // Validate the primary before replacing it: a corrupt primary must never
                     // overwrite the only readable backup, including after a fresh process start.
@@ -175,6 +179,8 @@ namespace SailwindCoop.Sync
             // with no profile — otherwise they'd load into the guest's own belt slots.
             int stripped = StripPersonalBelt(host);
 
+            DogPurchases.LoadProfile(null);
+            TradeSales.LoadProfile(null);
             if (!Exists())
             {
                 Plugin.Logger.LogInfo("[CoopProfile] Profile missing - first session (host belt stripped: " +
@@ -192,6 +198,8 @@ namespace SailwindCoop.Sync
                     Plugin.Logger.LogWarning("[CoopProfile] Primary unreadable; recovered character from .bak");
                     SailwindCoop.Runtime.CoopBehaviour.Notice("Your character profile was recovered from its backup.");
                 }
+                DogPurchases.LoadProfile(profile.modData);
+                TradeSales.LoadProfile(profile.modData);
                 CopyCharacterFields(profile, host);
                 int injected = InjectPersonalBelt(profile, host);
                 Plugin.Logger.LogInfo("[CoopProfile] Profile applied (host belt stripped: " + stripped +

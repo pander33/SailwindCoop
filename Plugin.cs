@@ -11,10 +11,16 @@ namespace SailwindCoop
     /// <see cref="Runtime.CoopBehaviour"/> that owns the network loop.
     /// </summary>
     [BepInPlugin(Guid, "Sailwind LAN Co-op", Version)]
+    [BepInDependency(Sync.VikingHornCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.MusicModCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.HooksHangMoreCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.SailDamageCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.FurstMateCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.PostalExpansionCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.8.0";
+        public const string Version = "0.9.0";
         /// <summary>Which of the two builds this is; see the Edition property in SailwindCoop.csproj.</summary>
 #if THUNDERSTORE
         public const string Edition = "Thunderstore";
@@ -66,6 +72,7 @@ namespace SailwindCoop
         public readonly ConfigEntry<string> PlayerName;
         public readonly ConfigEntry<int> SnapshotHz;
         public readonly ConfigEntry<float> InterpDelayMs;
+        public readonly ConfigEntry<bool> NeedsFrameRateFix;
 
         // Server (host) tuning.
         public readonly ConfigEntry<int> MaxClients;
@@ -135,6 +142,8 @@ namespace SailwindCoop
             PlayerName = c.Bind("Network", "PlayerName", "Player", "Displayed player name.");
             SnapshotHz = c.Bind("Network", "SnapshotHz", 20, "State snapshot send rate (Hz), Stage 1+.");
             InterpDelayMs = c.Bind("Network", "InterpDelayMs", 100f, "Interpolation buffer delay (ms), Stage 1+.");
+            NeedsFrameRateFix = c.Bind("Coop", "NeedsFrameRateFix", true,
+                "Normalize food-debt refill and running and swimming costs to 60 FPS during co-op.");
 
             MaxClients = c.Bind("Server", "MaxClients", 4, "Maximum number of clients connected to the host at once (1 = single guest only). Applied on incoming connections.");
             AnnounceOnLan = c.Bind("Server", "AnnounceOnLan", true, "The host answers players of the local network who look for a game, so it appears in their co-op menu. Off = the game is joined by address only. Applied when starting the host.");

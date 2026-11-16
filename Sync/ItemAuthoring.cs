@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace SailwindCoop.Sync
@@ -10,6 +11,8 @@ namespace SailwindCoop.Sync
             internal int Prefab;
             internal int HostId;
             internal bool Sold;
+            internal Guid TradeAuthor;
+            internal bool DurableSale;
         }
         private readonly Dictionary<uint, Request> requests = new Dictionary<uint, Request>();
         internal bool Contains(T item)
@@ -18,8 +21,8 @@ namespace SailwindCoop.Sync
                 if (request.HostId == 0 && ReferenceEquals(request.Item, item)) return true;
             return false;
         }
-        internal void Add(uint request, T item, int prefab)
-            => requests.Add(request, new Request { Item = item, Prefab = prefab });
+        internal void Add(uint request, T item, int prefab, Guid tradeAuthor = default(Guid))
+            => requests.Add(request, new Request { Item = item, Prefab = prefab, TradeAuthor = tradeAuthor });
         internal T Resolve(uint requester, uint localPlayer, uint request, int prefab, int hostId)
         {
             if (requester != localPlayer || request == 0 || !requests.TryGetValue(request, out var pending) ||
@@ -28,21 +31,33 @@ namespace SailwindCoop.Sync
         }
         internal void Bind(uint request, int hostId) => requests[request].HostId = hostId;
         internal bool MarkSoldBeforeBind(T item, int prefab)
+            => MarkSoldBeforeBind(item, prefab, false, out _);
+
+        internal bool MarkSoldBeforeBind(T item, int prefab, bool durable, out Guid author)
         {
+            author = Guid.Empty;
             if (item == null) return false;
             foreach (var request in requests.Values)
             {
                 if (request.HostId != 0 || request.Prefab != prefab || !ReferenceEquals(request.Item, item)) continue;
+                if (request.Sold) return true;
+                author = request.TradeAuthor;
                 request.Sold = true;
+                request.DurableSale = durable && author != Guid.Empty;
                 return true;
             }
             return false;
         }
 
         internal bool TakeSoldBeforeBind(uint requester, uint localPlayer, uint request, int prefab, int hostId)
+            => TakeSoldBeforeBind(requester, localPlayer, request, prefab, hostId, out _);
+
+        internal bool TakeSoldBeforeBind(uint requester, uint localPlayer, uint request, int prefab, int hostId, out bool durableSale)
         {
+            durableSale = false;
             if (requester != localPlayer || request == 0 || hostId <= 0 ||
                 !requests.TryGetValue(request, out var pending) || !pending.Sold || pending.Prefab != prefab) return false;
+            durableSale = pending.DurableSale;
             return requests.Remove(request);
         }
 

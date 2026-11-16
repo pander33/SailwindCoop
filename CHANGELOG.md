@@ -2,9 +2,27 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-11-16
 
-Everyone must update to wire protocol 107.
+Everyone must update to wire protocol 111. Requires Sailwind 0.40; 0.40.1 is supported.
+
+### Co-op and mod compatibility
+
+- Food-debt refill and the food and water cost of running and swimming use a 60 FPS reference
+  during co-op. Toggle frame-rate normalization under `Coop.NeedsFrameRateFix`. Food and water
+  drain is 30% lower for every player in co-op, including during shared sleep.
+- MusicMod and Viking Horn send the crew's instrument sounds.
+- HooksHangMore shares attachments for items and anchors, including when a guest joins mid-session.
+- Sail Damage shares the host's sail damage and applies guest repairs on the host.
+- Postal Expansion shares the host's mission board and special mail, including letter drop-offs
+  and gold rewards. Guests need the host's Postal Expansion version for these features.
+- FurstMate shares the host's pets, including feeding, commands and purchase or taming requests.
+- Guest repairs retain the full amount of work while host damage updates arrive. Separate-wallet
+  dog purchases keep their recorded charge and recover the host's result when the buyer rejoins
+  the same world.
+- Sustained music follows the actual item holder. A newer attachment replaces pending work
+  for either the item or its hook. Postal boards preserve the selected cargo count and price.
+  Confirmed letter drop-offs show the delivery dialogue even if the letter has left the trigger.
 
 ### Economy Overhaul 1.2.0
 
@@ -13,6 +31,9 @@ Everyone must update to wire protocol 107.
   trade fleet. What the host does at an office (upgrades, treasury, the clerk, free carts) appears
   for guests within a second.
 - A unique item a guest buys at a trade office appears for everyone.
+- Clearing the host's trade offices also clears them for guests.
+- Early resale in the trade book uses the original purchase identity. Unconfirmed guest sales
+  are retried when the guest rejoins the same world.
 - Resizing an attached plank or pole is shared with the other players.
 - A mission a guest takes with fewer crates than offered gives the reduced reputation and port
   capacity, as in single player.

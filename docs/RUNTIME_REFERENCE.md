@@ -1,6 +1,6 @@
 # Runtime reference
 
-Current implementation: plugin 0.8.0, Protocol 106, Sailwind 0.40 / 0.40.1.
+Current implementation: plugin 0.9.0, Protocol 111, Sailwind 0.40 / 0.40.1.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
 Protocol numbers within subsystem descriptions identify when a feature was introduced.
@@ -186,6 +186,35 @@ Domain notes:
   state from either side. `MissionEntry.ModOffered` carries the offered crate count of a mission
   cut with the board's arrows. Per machine: the fleet tab's per-ship figures, the cooperation
   book's daily count until the host's next change.
+  Protocol 111 sends an explicit empty office snapshot when the host clears offices. With EO 1.2.0
+  on both ends, successful shop and trade-book deletions use a reliable sale request. An early
+  sale carries the authoring ID. The guest saves unconfirmed sales with the profile and replays
+  them when rejoining the same world. The host stores author identities and sale receipts with
+  the world save and applies each sale once.
+- **Optional crew mods (protocol 108):** MusicMod and Viking Horn use reliable `CrewNote` events
+  addressed by player and shared item ID. HooksHangMore sends the hook and the attached item
+  or the anchor's boat index. The host commits the attachment once the carry transition has
+  settled, and replays attachments after world load. Sail Damage reflects its save keys and
+  damage arrays, blocks accrual on a connected guest and mirrors the host's initial state.
+  FurstMate runs pet AI on the host, buffers remote poses in the pets' parent coordinates and
+  relays guest interactions through the host. Postal Expansion matches the host's mod version,
+  shares all three offer tabs and preserves special mail metadata in the journal. Letter drop-offs
+  use the game's trigger on the guest and the mod's delivery hours on the host. Their gold and
+  signed reputation changes enter the normal co-op rewards path. See `СОСТОЯНИЕ.md` for acceptance status.
+- **Co-op mod corrections (protocol 110):** each sail keeps unreported and in-flight repairs
+  separately from the clamped preview. The host acknowledges each accepted batch with current
+  damage and handles full mends explicitly. Guests pay with their own wallet when balances
+  are separate. The pending charge and wallet are saved together in the character profile
+  before sending. A guest who rejoins the same world queries the result by its purchase ID.
+  The host stores it in the world's mod data with the dog state. Host restarts recover the
+  state present in the loaded save. A newer attachment replaces pending work for its item
+  or hook. Postal acceptance preserves quantity and price. A successful drop-off reply
+  starts the dialogue while the area still exists, even if the letter has left the trigger.
+- **Needs FPS:** in a loaded co-op world, normalize the two food-debt refill steps by unscaled
+  frame time and the movement drain by the inverse of scaled frame time. All co-op players
+  consume 70% of the usual food and water through passive and movement drain, including food
+  spent refilling food debt and the guest's shared-sleep catch-up. The reduction also applies
+  with the FPS fix disabled.
 - **Steam transport:** a second way to carry the same LiteNetLib datagrams.
   `Net/DatagramTunnel` forwards UDP between loopback sockets and an `IDatagramRelay` on its own
   thread (a world load blocks `Update` longer than the disconnect timeout); `SteamRelay` is Steam

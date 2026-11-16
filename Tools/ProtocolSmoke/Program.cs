@@ -148,6 +148,26 @@ namespace ProtocolSmoke
                 new WalletDeltaMsg { Seq = 0x0A0B0C0D, Delta = new[] { -30, 0, 0, 12 } },
                 new FinancedCargoMsg { Enabled = true, InstanceIds = new[] { 1001, 927381, int.MaxValue } },
                 new OfficeStateMsg { Data = new byte[] { 1, 2, 0, 255, 7 } },
+                new OfficeStateMsg { Data = Array.Empty<byte>() },
+                new FishCatchMsg { RequestId = 82, PrefabIndex = 452, TradeAuthor = "00112233445566778899aabbccddeeff" },
+                new TradeSaleMsg { World = new Guid("d7346b10-28b4-43ed-af26-ddad04db40d0"), Sale = Guid.NewGuid(),
+                    Author = Guid.NewGuid(), Prefab = 452 },
+                new TradeSaleReceiptMsg { World = new Guid("d7346b10-28b4-43ed-af26-ddad04db40d0"), Sale = Guid.NewGuid() },
+                new CrewNoteMsg { Kind = CrewNoteKind.Voice, Actor = 17, ItemInstanceId = 1901, PrefabIndex = 510, Note = 8, Playing = true },
+                new HookAttachmentMsg { Kind = HookAttachmentKind.Anchor, BoatIndex = 15, HookId = 273, HookPrefab = 503, Attached = true },
+                new SailDamageMsg { ReplaceAll = true, Entries = new[] {
+                    new SailDamageEntry { Key = "16/1/233/0", Values = new[] { 0.75f, 0.125f, 0f, 0f, 0.5f, 0.25f } },
+                    new SailDamageEntry { Key = "16/2/236/0", Mend = true } } },
+                new SailDamageMsg { RepairAck = true, Entries = new[] {
+                    new SailDamageEntry { Key = "16/1/233/0", Values = new[] { 0.45f, 0.125f, 0f, 0f, 0.3f, 0.25f } } } },
+                new MissionDeliverMsg { InstanceId = 781, PrefabIndex = 499, PortIndex = 13, PostalDropOff = true, RequestId = 57 },
+                new MissionDeliverResultMsg { Delivered = false, Text = "Closed", RequestId = 57 },
+                new PetStateMsg { Data = new byte[] { 0, 230, 33, 0, 0, 0, 0, 0, 0, 12, 255 } },
+                new PetRequestMsg { Data = new byte[] { 64, 11, 0, 0, 0, 0, 0, 0, 0, 1 } },
+                new PostalBoardMsg { Address = new PostalBoardRequestMsg { Request = 51, Port = 9, Page = 3, Tab = 2 },
+                    Total = 18, Offers = new MissionJournalMsg { Missions = new[] {
+                        new MissionEntry { MissionIndex = 2, OriginPort = 9, DestinationPort = 7, GoodPrefabIndex = 1203,
+                            GoodCount = 1, TotalPrice = 250, DueDay = 93, PostalKind = 3, PostalTab = 2, PostalLetterId = "letter9" } } } },
                 new EconomyStateMsg { AckSeq = 0x0B0C0D0E, HasFx = true, FxDay = 812,
                     Rates = new[] { 0.221, 1.93, 0.498, 0.006 }, Basis = new[] { 0.22, 1.9, 0.5, 0.006 },
                     Smooth = new[] { 0.2205, 1.91, 0.499, 0.006 }, Closes = new[] { 0.22, 1.9, 0.5, 0.219, 1.92, 0.51 },
@@ -429,7 +449,8 @@ namespace ProtocolSmoke
             }
             if (a != null && b != null && a.GetType() == b.GetType() &&
                 (a is ItemDetails || a is CreatedItemState || a is ControlEpoch || a is ChartMark || a is NetSailConfiguration || a is SleepAddress || a is INetMessage ||
-                  a is ModEntry || a is ModPlugin || a is ModListFile || a is ModSetting || a is DicePlayerData || a is MarketPort))
+                  a is ModEntry || a is ModPlugin || a is ModListFile || a is ModSetting || a is DicePlayerData || a is MarketPort ||
+                  a is SailDamageEntry))
                 return a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance).All(f => Equal(f.GetValue(a), f.GetValue(b)));
             return object.Equals(a, b);
         }

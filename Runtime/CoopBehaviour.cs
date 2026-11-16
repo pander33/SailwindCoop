@@ -125,6 +125,7 @@ namespace SailwindCoop.Runtime
         /// <summary>Is OUR co-op menu the thing holding the cursor? Lets <see cref="JoinPause"/> tell a
         /// game menu (which stops the clock) from this one (which does not).</summary>
         public bool CoopMenuOpen => _menuUI != null && _menuUI.Visible;
+        internal bool PlayingCoop => Net?.State == LinkState.Connected && GameState.playing && !GameState.currentlyLoading;
 
         public bool OverlayVisible
         {
@@ -316,6 +317,12 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Dice save lifecycle", () => DiceSavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Needs FPS", () => NeedsFrameRatePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Crew music", () => CrewMusic.Apply(_harmony), patchFault);
+            PatchHealth.Install("HooksHangMore", () => { HooksHangMoreCompat.Init(); HooksHangMoreCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("Sail Damage", () => { SailDamageCompat.Init(); SailDamageCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("FurstMate", () => { FurstMateCompat.Init(); FurstMateCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("Postal Expansion", () => { PostalExpansionCompat.Init(); PostalExpansionCompat.ApplyPatches(_harmony); }, patchFault);
             PatchHealth.Install("Recovery", () => RecoveryPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Missions", () => MissionPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
@@ -497,6 +504,10 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Items.Tick", () => Items.Tick(_dt)),
                 new SyncStep("Items.ApplyRemote", () => Items.ApplyRemote()),
                 new SyncStep("Items.ApplyRemoteInstruments", () => Items.ApplyRemoteInstruments()),
+                new SyncStep("CrewMusic.Tick", CrewMusic.Tick),
+                new SyncStep("HooksHangMore.Tick", HooksHangMoreCompat.Tick),
+                new SyncStep("SailDamage.Tick", SailDamageCompat.Tick),
+                new SyncStep("FurstMate.Tick", FurstMateCompat.Tick),
                 new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
                 new SyncStep("Dirt.Tick", () => Dirt.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
@@ -759,6 +770,19 @@ namespace SailwindCoop.Runtime
             if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
             {
+                case MsgType.CrewNote:
+                    CrewMusic.Receive((CrewNoteMsg)msg, fromPeer); break;
+                case MsgType.HookAttachment:
+                    HooksHangMoreCompat.OnRemoteAttachment((HookAttachmentMsg)msg, fromPeer); break;
+                case MsgType.SailDamage:
+                    SailDamageCompat.OnRemote((SailDamageMsg)msg, fromPeer); break;
+                case MsgType.PetState:
+                case MsgType.PetRequest:
+                    FurstMateCompat.Receive((PetMessage)msg, fromPeer); break;
+                case MsgType.PostalBoardRequest:
+                    PostalExpansionCompat.OnBoardRequest((PostalBoardRequestMsg)msg, fromPeer); break;
+                case MsgType.PostalBoard:
+                    PostalExpansionCompat.OnBoard((PostalBoardMsg)msg); break;
                 case MsgType.DiceRequest:
                 case MsgType.DiceState:
                 case MsgType.DiceResult:
@@ -934,6 +958,12 @@ namespace SailwindCoop.Runtime
                 case MsgType.OfficeState:
                     Offices.Receive((OfficeStateMsg)msg);
                     break;
+                case MsgType.TradeSale:
+                    Items.OnTradeSale((TradeSaleMsg)msg, fromPeer);
+                    break;
+                case MsgType.TradeSaleReceipt:
+                    Items.OnTradeSaleReceipt((TradeSaleReceiptMsg)msg);
+                    break;
                 case MsgType.EconomyDelta:
                     Markets.OnEconomyDelta((EconomyDeltaMsg)msg, fromPeer);
                     break;
@@ -1006,6 +1036,10 @@ namespace SailwindCoop.Runtime
                             Shipyard.SendBaseline(fromPeer);
                             FinancedCargo.SendBaseline(fromPeer);
                             Offices.SendBaseline(fromPeer);
+                            Items.SendTradeSaleBaseline(fromPeer);
+                            HooksHangMoreCompat.ResyncTo(fromPeer);
+                            SailDamageCompat.ResyncTo(fromPeer);
+                            FurstMateCompat.ResyncTo(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
@@ -1138,6 +1172,8 @@ namespace SailwindCoop.Runtime
                 yield break;
             }
 
+            FurstMateCompat.PrepareHostSave(peer);
+            Items.PrepareTradeSaleWorld(peer);
             if (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.instance != null)
             {
                 // SaveGame silently refuses while busy / in bed / in shipyard / not ready — wait for a
@@ -1892,6 +1928,11 @@ namespace SailwindCoop.Runtime
             Markets.Clear();
             FinancedCargo.Clear();
             Offices.Clear();
+            CrewMusic.Clear();
+            HooksHangMoreCompat.Reset();
+            SailDamageCompat.Reset();
+            FurstMateCompat.Reset();
+            PostalExpansionCompat.Reset();
             Sleep.Clear();
             OriginCatchUp.ForgetHostOffset();
             Shop.Clear();

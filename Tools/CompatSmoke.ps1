@@ -58,6 +58,7 @@ namespace SailwindCoop.Net {
  public class EconomyStateMsg { public uint AckSeq; public MarketPort[] Ports=new MarketPort[0]; public bool HasFx,HasDemand; public int FxDay; public double[] Rates=new double[0],Basis=new double[0],Smooth=new double[0],Closes=new double[0]; public MarketEvent[] Events; }
  public class EconomyDeltaMsg { public uint Seq; public MarketChange[] Changes=new MarketChange[0]; public double[] Cargo=new double[0],Shops=new double[0],Rates=new double[0]; }
  public class FinancedCargoMsg { public bool Enabled; public int[] InstanceIds=new int[0]; }
+ public class OfficeStateMsg { public const int MaxBytes=65536; public byte[] Data; }
  public class BoatStateMsg { public ushort BoatIndex; public uint NetId; public long Tick; public object RealPos,Rot,RealVel; }
 }
 namespace SailwindCoop.Sync {
@@ -78,7 +79,8 @@ namespace SailwindCoop.Sync {
  private static bool IsClient=>true;
  private static string HostOnlyText="host", FinancedText="finance";
  private static void Notify(string s){} private static void Fault(string s,Exception e){throw new Exception(s,e);}
- private const int TradeLoan=1,TradeSell=2; private static bool _inTrade; private static HashSet<int> _tradeIds;
+ private const int TradeLoan=1,TradeSell=2; private static bool _inTrade,_tradeSelling; private static HashSet<int> _tradeIds;
+ private static readonly List<object> TradeDestroyed=new List<object>();
  private static MethodInfo _tradeQuote; private static FieldInfo _tradeUnits,_tradeCargo;
  public sealed class FakeUnit { public Good Cargo; }
  public sealed class FakeBatch { public List<FakeUnit> Units=new List<FakeUnit>(); }
@@ -95,6 +97,9 @@ namespace SailwindCoop.Sync {
  public static bool Use(ShipItem item){bool result=true;return RefuseFinancedUse(item,ref result);}
  public static ShipItem Sale(ShipItem item){RefuseFinancedSale(ref item);return item;}
  public static bool MarketsOn=true, Present=true;
+ public static byte[] Office;
+ public static byte[] ReadOffice()=>Office;
+ public static void WriteOffice(byte[] data){Office=data;}
  public static int[] Loans=new int[0]; public static double[] Fx={1,2,3,4};
  public static bool LocalFinanced(ShipItem item)=>item.Save!=null && item.Save.instanceId==7;
  public sealed class LoanRecord { public bool loan; }
@@ -125,6 +130,19 @@ public static class CompatChecks {
  }
  static void Trade(MarketSync sync,int port,float delta){sync.BeginTrade();Port.ports[port].Market.currentSupply[0]+=delta;sync.EndTrade();}
  public static void Run(){
+ var officeHostNet=new CoopNet{Role=Role.Host,State=LinkState.Connected};
+ var offices=new OfficeStateSync(officeHostNet);
+ Time.unscaledTime=0;EconomyOverhaulCompat.Office=new byte[]{1,2};offices.Tick();
+ EconomyOverhaulCompat.Office=null;Time.unscaledTime=2;offices.Tick();
+ Check(officeHostNet.Sent.Count==1,"temporary office read failure preserves the last snapshot");
+ EconomyOverhaulCompat.Office=new byte[0];Time.unscaledTime=4;offices.Tick();
+ Time.unscaledTime=6;offices.Tick();
+ Check(officeHostNet.Sent.Count==2 && ((OfficeStateMsg)officeHostNet.Sent[1]).Data.Length==0,"clearing offices sends one empty snapshot");
+ var officeJoiner=new NetPeer();offices.SendBaseline(officeJoiner);
+ Check(officeJoiner.Sent.Count==1 && ((OfficeStateMsg)officeJoiner.Sent[0]).Data.Length==0,"late join receives the cleared office baseline");
+ var officeGuest=new OfficeStateSync(new CoopNet{Role=Role.Client});
+ EconomyOverhaulCompat.Office=new byte[]{1,2};officeGuest.Receive((OfficeStateMsg)officeJoiner.Sent[0]);
+ Check(EconomyOverhaulCompat.Office.Length==0,"guest applies the empty office snapshot");
  CoopNet net;var sync=Client(out net);
  Trade(sync,0,-1);sync.OnEconomyState(new EconomyStateMsg{AckSeq=1});
  Check(Port.ports[0].Market.currentSupply[0]==10,"ack-only stock restores host base after compensating trades");
@@ -246,7 +264,7 @@ public static class CompatChecks {
  }
 }
 '@
-$sources = @('Sync/MarketSync.cs', 'Sync/FinancedCargoSync.cs') | ForEach-Object {
+$sources = @('Sync/MarketSync.cs', 'Sync/FinancedCargoSync.cs', 'Sync/OfficeStateSync.cs') | ForEach-Object {
     [regex]::Replace((Get-Content (Join-Path $repo $_) -Raw), '(?m)^using [^\r\n]+;\r?\n', '')
 }
 # Execute the actual finance entry guards, without loading native Unity objects.

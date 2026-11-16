@@ -52,11 +52,13 @@ namespace SailwindCoop.Sync
         private const string UninstallText = "In co-op, only the host can prepare to uninstall.";
 
         private static bool _resolved;
+        private static bool _tradeSalesOn;
         private static Assembly _assembly;
         private static MethodInfo _boughtBack;
         private static CoopLog.Repeat _faults;
 
         internal static bool Present => Resolve();
+        internal static bool TradeSalesOn => Resolve() && _tradeSalesOn;
 
         private static bool Resolve()
         {
@@ -65,7 +67,11 @@ namespace SailwindCoop.Sync
             try
             {
                 if (BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(Guid, out BepInEx.PluginInfo info) && info?.Instance != null)
+                {
                     _assembly = info.Instance.GetType().Assembly;
+                    _tradeSalesOn = info.Metadata.Version == new Version(1, 2, 0) ||
+                                    _assembly.GetName().Version == new Version(1, 2, 0, 0);
+                }
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[EconomyOverhaul] lookup failed: " + e.Message); }
             return _assembly != null;
@@ -173,7 +179,7 @@ namespace SailwindCoop.Sync
             try
             {
                 harmony.Patch(AccessTools.Method(typeof(ShipItem), nameof(ShipItem.DestroyItem)),
-                    prefix: new HarmonyMethod(typeof(EconomyOverhaulCompat), nameof(TradeDestroy)));
+                    prefix: Hook(nameof(BeforeTradeDestroy)), postfix: Hook(nameof(AfterTradeDestroy)));
                 ok++;
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[EconomyOverhaul] ShipItem.DestroyItem: " + e.Message); }
@@ -415,7 +421,15 @@ namespace SailwindCoop.Sync
         private static MethodInfo _tradeQuote;
         private static FieldInfo _tradeUnits, _tradeCargo;
         private static bool _inTrade;
+        private static bool _tradeSelling;
+        private static readonly List<TradeDestroyedItem> TradeDestroyed = new List<TradeDestroyedItem>();
         private static HashSet<int> _tradeIds;
+
+        private struct TradeDestroyedItem
+        {
+            internal ShipItem Item;
+            internal int Id, Prefab;
+        }
 
         private static bool TradeBegin(object[] __args)
         {
@@ -451,10 +465,12 @@ namespace SailwindCoop.Sync
                         if (save != null && save.instanceId > 0) _tradeIds.Add(save.instanceId);
                     }
                 }
+                _tradeSelling = action == TradeSell;
+                TradeDestroyed.Clear();
                 _inTrade = true;
                 MarketSync.Instance?.BeginTrade();
             }
-            catch (Exception e) { Fault("trade start", e); _inTrade = false; }
+            catch (Exception e) { Fault("trade start", e); _inTrade = false; _tradeSelling = false; TradeDestroyed.Clear(); }
             return true;
         }
 
@@ -465,11 +481,18 @@ namespace SailwindCoop.Sync
             catch (Exception e) { Fault("publish financed cargo", e); }
             if (!_inTrade) return __exception;
             _inTrade = false;
+            _tradeSelling = false;
             try { MarketSync.Instance?.EndTrade(); }
             catch (Exception e) { Fault("trade book market", e); }
             try
             {
                 var sync = ItemSync.Instance;
+                if (sync != null && TradeDestroyed.Count > 0)
+                {
+                    foreach (var sale in TradeDestroyed)
+                        sync.NotifySold(sale.Item, sale.Id, sale.Prefab, saveTradeSale: false);
+                    sync.FlushTradeSales();
+                }
                 if (sync == null || _tradeIds == null) return __exception;
                 foreach (var item in ShipItemRegistry.Active())
                 {
@@ -481,7 +504,7 @@ namespace SailwindCoop.Sync
                 }
             }
             catch (Exception e) { Fault("trade end", e); }
-            finally { _tradeIds = null; }
+            finally { _tradeIds = null; TradeDestroyed.Clear(); }
             return __exception;
         }
 
@@ -494,14 +517,22 @@ namespace SailwindCoop.Sync
         }
 
         // Runs for every DestroyItem; only a client inside a trade book action does anything.
-        private static void TradeDestroy(ShipItem __instance)
+        private static void BeforeTradeDestroy(ShipItem __instance, out TradeDestroyedItem __state)
         {
-            if (!_inTrade || __instance == null) return;
+            __state = default(TradeDestroyedItem);
+            if (!_inTrade || !_tradeSelling || __instance == null) return;
             try
             {
                 var save = __instance.GetComponent<SaveablePrefab>();
-                if (save != null) ItemSync.Instance?.NotifySold(save.instanceId, save.prefabIndex);
+                if (save != null) __state = new TradeDestroyedItem { Item = __instance, Id = save.instanceId, Prefab = save.prefabIndex };
             }
+            catch (Exception e) { Fault("trade sale", e); }
+        }
+
+        private static void AfterTradeDestroy(bool __runOriginal, TradeDestroyedItem __state)
+        {
+            if (!__runOriginal || ReferenceEquals(__state.Item, null)) return;
+            try { TradeDestroyed.Add(__state); }
             catch (Exception e) { Fault("trade sale", e); }
         }
 

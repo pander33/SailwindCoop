@@ -241,6 +241,8 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client) return;
             _net.HostModFeatures = msg.Features;
+            if (!PostalExpansionCompat.MatchesHost(msg.Mods))
+                _net.HostModFeatures &= ~ModFeatures.PostalExpansion;
             try
             {
                 var mods = new List<ModEntry>(msg.Mods);
@@ -337,7 +339,7 @@ namespace SailwindCoop.Sync
                     Decision = decision,
                     Missing = (byte)Math.Min(missing, 255),
                     Different = (byte)Math.Min(different, 255),
-                    Features = LocalFeatures,
+                    Features = LocalFeatures & (_net.HostModFeatures | ~ModFeatures.PostalExpansion),
                 }, DeliveryMethod.ReliableOrdered);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[Mods] role=Client answer not sent: " + e.Message); }
@@ -450,8 +452,13 @@ namespace SailwindCoop.Sync
         private bool _economyOnlyHere;
         private static ModFeatures LocalFeatures =>
             (EconomyOverhaulCompat.Present ? ModFeatures.EconomyOverhaul : ModFeatures.None) |
+            (EconomyOverhaulCompat.TradeSalesOn ? ModFeatures.EconomyTradeSales : ModFeatures.None) |
             (EconomyOverhaulCompat.MarketsOn ? ModFeatures.SharedMarkets : ModFeatures.None) |
-            (ShipyardExpansionRig.Present ? ModFeatures.ShipyardExpansion : ModFeatures.None);
+            (ShipyardExpansionRig.Present ? ModFeatures.ShipyardExpansion : ModFeatures.None) |
+            (HooksHangMoreCompat.SyncEnabled ? ModFeatures.HooksHangMore : ModFeatures.None) |
+            (SailDamageCompat.SyncEnabled ? ModFeatures.SailDamage : ModFeatures.None) |
+            (FurstMateCompat.SyncEnabled ? ModFeatures.FurstMate : ModFeatures.None) |
+            (PostalExpansionCompat.SyncEnabled ? ModFeatures.PostalExpansion : ModFeatures.None);
 
         private static bool HasPlugin(List<LoadedPlugin> plugins, string guid)
         {

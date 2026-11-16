@@ -67,16 +67,16 @@ namespace SailwindCoop.Sync
             }
         }
 
-        /// <summary>Host: the office state as bytes; null while there is none (the save keeps none
-        /// until an office exists) or on a failure.</summary>
+        /// <summary>Host: empty bytes clear the office mirror. Null means no state could be read.</summary>
         internal static byte[] ReadOffice()
         {
             if (!ResolveOffice()) return null;
             try
             {
                 var state = _state.GetValue(null);
-                var office = state != null ? _officeField.GetValue(state) : null;
-                if (office == null) return null;
+                if (state == null) return null;
+                var office = _officeField.GetValue(state);
+                if (office == null) return Array.Empty<byte>();
                 var w = new NetDataWriter();
                 w.Put(OfficeWireVersion);
                 w.Put((byte)_officeFields.Length);
@@ -116,6 +116,14 @@ namespace SailwindCoop.Sync
             {
                 var state = _state.GetValue(null);
                 if (state == null) return;
+                if (data.Length == 0)
+                {
+                    if (_officeField.GetValue(state) == null) return;
+                    _officeField.SetValue(state, null);
+                    AccessTools.Method(T("OfficeSites"), "Clear")?.Invoke(null, null);
+                    AccessTools.Method(T("OfficeCarts"), "Restore")?.Invoke(null, null);
+                    return;
+                }
                 var r = new NetDataReader(data);
                 if (r.GetByte() != OfficeWireVersion) return;
                 int count = r.GetByte();

@@ -1,6 +1,6 @@
 # Документация SailwindCoop
 
-Карта актуализирована 2026-11-08. Plugin 0.8.0, Protocol 107, игра 0.40 / 0.40.1.
+Plugin 0.9.0, Protocol 111, игра 0.40 / 0.40.1.
 
 ## Точки входа
 
@@ -26,7 +26,7 @@
 - [ОПТИМИЗАЦИЯ.md](../ОПТИМИЗАЦИЯ.md) — исторические замеры A–F.
 - [PERFORMANCE_ANALYSIS_2026-11-06.md](../PERFORMANCE_ANALYSIS_2026-11-06.md) — исходные находки и последующие результаты Protocol 106.
 - [MOD_COMPAT_PLAN.md](../MOD_COMPAT_PLAN.md) и [ECONOMY_OVERHAUL_PLAN.md](../ECONOMY_OVERHAUL_PLAN.md) — анализ, принятые решения, оставшиеся проверки.
-- [MOD_COMPAT_REVIEW_2026-11-07.md](../MOD_COMPAT_REVIEW_2026-11-07.md) — R11 исправлен, R12/R13 отложены; раздел о производительности описывает старый срез 105, последующая реализация 106 отражена в анализе производительности.
+- [MOD_COMPAT_REVIEW_2026-11-07.md](../MOD_COMPAT_REVIEW_2026-11-07.md) — историческое ревью. Исправления R12/R13 в Protocol 111 описаны в `RUNTIME_REFERENCE.md`.
 - [MOD_COMPAT_AUDIT_2026-11-08.md](../MOD_COMPAT_AUDIT_2026-11-08.md) — свежий целевой аудит, не заменяет полный аудит префиксов и Unity-приёмку.
 - [MOD_COMPAT_ROADMAP_2026-11-08.md](../MOD_COMPAT_ROADMAP_2026-11-08.md) — порядок работ по совместимости, объём этапов и критерии приёмки; статус выполнения — в СОСТОЯНИЕ.md §4 п.31.
 - [DevConsole](../Tools/DevConsole/README.md) — инструмент разработчика.

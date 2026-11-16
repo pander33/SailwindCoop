@@ -49,6 +49,9 @@ namespace SailwindCoop.Net
                 case MsgType.WalletDelta:
                 case MsgType.EconomyDelta:
                 case MsgType.DiceRequest:
+                case MsgType.PetRequest:
+                case MsgType.PostalBoardRequest:
+                case MsgType.TradeSale:
                     return MsgFlow.ToHost;
 
                 case MsgType.HelloAck:
@@ -95,10 +98,13 @@ namespace SailwindCoop.Net
                 case MsgType.EconomyState:
                 case MsgType.FinancedCargo:
                 case MsgType.OfficeState:
+                case MsgType.TradeSaleReceipt:
                 case MsgType.DiceState:
                 case MsgType.DiceResult:
                 case MsgType.DiceBaseline:
                 case MsgType.DiceJournal:
+                case MsgType.PetState:
+                case MsgType.PostalBoard:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.
@@ -117,6 +123,9 @@ namespace SailwindCoop.Net
                 case MsgType.ForageTaken:
                 case MsgType.BeltState:
                 case MsgType.PumpStroke:
+                case MsgType.CrewNote:
+                case MsgType.HookAttachment:
+                case MsgType.SailDamage:
                     return MsgFlow.Both;
 
                 default:

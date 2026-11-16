@@ -22,8 +22,10 @@ namespace SailwindCoop.Sync
         /// frame of that player's poses (<see cref="ApplyWirePose"/>), not the game's embark trigger:
         /// the copy's root collider is off, so the game never sees it inside the boat and would take
         /// it out of the boat two physics steps after every boat-frame pose.</summary>
-        internal bool HeldByRemotePlayer(ShipItem item)
-            => item != null && _localHeld.TryGetValue(item, out uint actor) && actor != 0 && actor != _net.MyNetId;
+        internal bool HeldByRemotePlayer(ShipItem item, uint actor = 0)
+            => item != null && _byItem.TryGetValue(item, out var entry) &&
+                entry.HolderNetId != 0 && entry.HolderNetId != _net.MyNetId &&
+                (actor == 0 || entry.HolderNetId == actor);
 
         private sealed class ItemEntry
         {
@@ -290,6 +292,7 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            TickTradeSales();
             if (_net.State != LinkState.Connected) return;
             RefreshItems(dt);
             if (_net.Role == Role.Client && _baselineReady && _pendingSpawns.Count != 0)
@@ -2720,15 +2723,15 @@ namespace SailwindCoop.Sync
         {
             if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item || _tombstones.Contains(msg.InstanceId)) return;
             if (_pendingClientItems.TakeSoldBeforeBind(msg.AuthorRequester, _net.MyNetId, msg.AuthorRequestId,
-                msg.PrefabIndex, msg.InstanceId))
+                msg.PrefabIndex, msg.InstanceId, out bool durableSale))
             {
                 // This is the receipt for a purchase already sold locally. Suppress the echo before
-                // binding or spawning and finish the sale using the host's actual item id.
+                // binding or spawning. A journalled sale already names the original author.
                 _tombstones.Add(msg.InstanceId);
                 _pendingSpawns.Remove(msg.InstanceId);
                 _pendingStates.Remove(msg.InstanceId);
                 _spawnWait.Remove(msg.InstanceId);
-                SendSold(msg.InstanceId, msg.PrefabIndex);
+                if (!durableSale) SendSold(msg.InstanceId, msg.PrefabIndex);
                 return;
             }
             if (!_baselineReady) { _pendingSpawns[msg.InstanceId] = msg; return; }
@@ -3668,6 +3671,11 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client && !_hostIds.Contains(entry.InstanceId)) return false;
             id = entry.InstanceId; prefab = entry.PrefabIndex; return true;
         }
+        internal ShipItem FindSharedItem(int id, int prefab)
+        {
+            if (_net.Role == Role.Client && !_hostIds.Contains(id)) return null;
+            return HostLookup(id, prefab)?.Item;
+        }
         internal IEnumerable<MapChart> SharedMaps()
         {
             foreach (var entry in _items)
@@ -4129,14 +4137,17 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private void RemoveCachedLocalItem(int instanceId)
+        private void RemoveCachedLocalItem(int instanceId) => TryRemoveCachedLocalItem(instanceId, -1, out _);
+
+        private bool TryRemoveCachedLocalItem(int instanceId, int prefabIndex, out bool removed)
         {
-            if (instanceId <= 0) return;
+            removed = false;
+            if (instanceId <= 0) return false;
             try
             {
                 if (_fBoatCachedItems == null)
                     _fBoatCachedItems = typeof(BoatLocalItems).GetField("cachedItems", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (_fBoatCachedItems == null) return;
+                if (_fBoatCachedItems == null) return false;
 
                 var caches = _receivingClientLifecycle
                     ? _receiveBoatCaches ?? (_receiveBoatCaches = UnityEngine.Object.FindObjectsOfType<BoatLocalItems>())
@@ -4148,16 +4159,22 @@ namespace SailwindCoop.Sync
                     if (list == null) continue;
                     for (int i = list.Count - 1; i >= 0; i--)
                     {
-                        if (list[i] != null && list[i].instanceId == instanceId)
+                        if (list[i] != null && list[i].instanceId == instanceId &&
+                            (prefabIndex < 0 || list[i].prefabIndex == prefabIndex))
+                        {
                             list.RemoveAt(i);
+                            removed = true;
+                        }
                     }
                     if (list.Count == 0) _fBoatCachedItems.SetValue(localItems, null);
                 }
+                return true;
             }
             catch (Exception e)
             {
                 Plugin.Logger.LogWarning("[ItemSync] Failed to remove cached item id=" + instanceId + ": " + e.Message);
             }
+            return false;
         }
 
         private static uint NetIdFor(int instanceId)
@@ -4210,12 +4227,14 @@ namespace SailwindCoop.Sync
             if (_hostIds.Contains(currentId) && !_tombstones.Contains(currentId)) return;
             uint requestId = ++_nextRequest;
             if (requestId == 0) requestId = ++_nextRequest;
-            _pendingClientItems.Add(requestId, item, PrefabIndexOf(item));
+            Guid tradeAuthor = CanSendTradeSales ? Guid.NewGuid() : Guid.Empty;
+            _pendingClientItems.Add(requestId, item, PrefabIndexOf(item), tradeAuthor);
             BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
             {
                 RequestId = requestId,
+                TradeAuthor = tradeAuthor == Guid.Empty ? "" : tradeAuthor.ToString("N"),
                 PrefabIndex = PrefabIndexOf(item),
                 Frame = frame,
                 BoatIndex = boatIndex,
@@ -4273,15 +4292,25 @@ namespace SailwindCoop.Sync
         public void NotifySold(int instanceId, int prefabIndex)
             => NotifySold(null, instanceId, prefabIndex);
 
-        internal void NotifySold(ShipItem item, int instanceId, int prefabIndex)
+        internal void NotifySold(ShipItem item, int instanceId, int prefabIndex, bool saveTradeSale = true)
         {
             if (InteractionContext.Suppressed) return;
             if (ItemOperationCapture.Absorb()) return;
             if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (prefabIndex <= 0) return;
             // Check the object first: its temporary id can even match an unrelated host item.
-            if (_pendingClientItems.MarkSoldBeforeBind(item, prefabIndex)) return;
+            bool durable = !ReferenceEquals(item, null) && CanSendTradeSales;
+            if (_pendingClientItems.MarkSoldBeforeBind(item, prefabIndex, durable, out var author))
+            {
+                if (durable && author != Guid.Empty) QueueTradeSale(0, prefabIndex, author, saveTradeSale);
+                return;
+            }
             if (instanceId <= 0 || !_hostIds.Contains(instanceId)) return;
+            if (durable)
+            {
+                QueueTradeSale(instanceId, prefabIndex, Guid.Empty, saveTradeSale);
+                return;
+            }
             SendSold(instanceId, prefabIndex);
         }
 
@@ -4426,6 +4455,13 @@ namespace SailwindCoop.Sync
                     rot = msg.Rot;
                 }
 
+                Guid tradeAuthor = Guid.Empty;
+                if (PeerTrades(fromPeer))
+                    Guid.TryParseExact(msg.TradeAuthor, "N", out tradeAuthor);
+                Guid tradeWorld = tradeAuthor != Guid.Empty ? HostTradeWorld() : Guid.Empty;
+                if (tradeAuthor != Guid.Empty && TradeSaleJournal.FindAuthor(GameState.modData, tradeWorld, tradeAuthor) < 0)
+                    return; // The matching sale arrived on a reconnected peer before this author request.
+
                 var retained = new List<ItemEntry>();
                 if (!_authoredResults.TryBegin(actor, msg.RequestId, retained, out var previous))
                 {
@@ -4455,6 +4491,8 @@ namespace SailwindCoop.Sync
                     missions[msg.MissionIndex] != null && MissionNamesProduct(item, msg.MissionIndex))
                     good.RegisterToMission(msg.MissionIndex, missions[msg.MissionIndex].dueDay);
                 _pendingAuthored.Add(item, retained);
+                if (tradeAuthor != Guid.Empty)
+                    TradeSaleJournal.RecordAuthor(GameState.modData, tradeWorld, tradeAuthor, saveable.instanceId);
                 _authoringItem = null;
                 if (!_receivingBatch) FlushReceivedItems();
                 Remember("in fish catch prefab=" + msg.PrefabIndex + " id=" + saveable.instanceId);
@@ -4510,6 +4548,7 @@ namespace SailwindCoop.Sync
             _spawnWait.Clear();
             _pendingMissionGoods.Clear();
             _nextRequest = 0;
+            ClearTradeSaleSession();
             ClearOperations();
             _puppetAwaitingStart.Clear();
             ItemComponents.Clear();

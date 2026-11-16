@@ -54,6 +54,94 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("early trade sale retains the original author and suppresses a second consume when the spawn arrives", () => {
+                var items = new ItemAuthoring<object>();
+                var item = new object();
+                var author = Guid.NewGuid();
+                items.Add(18, item, 82, author);
+                Assert(items.MarkSoldBeforeBind(item, 82, true, out var saleAuthor) && saleAuthor == author, "sale lost author identity");
+                Assert(!items.TakeSoldBeforeBind(5, 3, 18, 82, 402, out _), "other actor matched the sale");
+                Assert(items.TakeSoldBeforeBind(3, 3, 18, 82, 402, out bool durable) && durable,
+                    "spawn receipt would issue a second deletion");
+            });
+            Test("trade sale outbox and outcome use the same world and survive profile reload", () => {
+                var world = Guid.NewGuid();
+                var other = Guid.NewGuid();
+                var author = Guid.NewGuid();
+                var operation = Guid.NewGuid();
+                var profile = new Dictionary<string, string>();
+                var host = new Dictionary<string, string>();
+                var journal = new TradeSaleJournal();
+                journal.Pending.Add(operation, new TradeSaleJournal.Sale { World = world, Author = author, Prefab = 82 });
+                journal.SaveProfile(profile);
+                journal.LoadProfile(profile);
+                var sale = journal.Pending[operation];
+                Assert(sale.World == world && sale.Author == author && sale.Prefab == 82 && sale.Instance == 0,
+                    "an early sale did not survive reconnect");
+                TradeSaleJournal.RecordAuthor(host, world, author, 609);
+                Assert(TradeSaleJournal.FindAuthor(host, sale.World, sale.Author) == 609, "host lost the exact authored cargo");
+                Assert(TradeSaleJournal.FindAuthor(host, other, sale.Author) == 0, "author crossed worlds");
+                TradeSaleJournal.RecordAuthor(host, world, author, -1);
+                TradeSaleJournal.Complete(host, world, operation);
+                var reloadedHost = new Dictionary<string, string>(host);
+                Assert(TradeSaleJournal.IsComplete(reloadedHost, world, operation) &&
+                    TradeSaleJournal.FindAuthor(reloadedHost, world, author) == -1, "lost reply would repeat the sale");
+                Assert(!TradeSaleJournal.IsComplete(reloadedHost, other, operation), "receipt crossed worlds");
+            });
+            Test("dog purchase profile and host result survive reconnect and stay scoped to their world", () => {
+                var world = Guid.NewGuid();
+                var otherWorld = Guid.NewGuid();
+                var purchase = Guid.NewGuid();
+                var profile = new Dictionary<string, string>();
+                var host = new Dictionary<string, string>();
+                var journal = new DogPurchaseJournal();
+                journal.Pending.Add(world, new DogPurchaseJournal.Charge { Purchase = purchase, Currency = new[] { -3, 40 } });
+                journal.SaveProfile(profile);
+                DogPurchaseJournal.RecordResult(host, world, purchase, true, "bought");
+                DogPurchaseJournal.RecordResult(host, world, Guid.NewGuid(), false, "did not reach host");
+
+                var reconnect = new DogPurchaseJournal();
+                reconnect.LoadProfile(profile);
+                var resumed = reconnect.Pending[world];
+                Assert(resumed.Purchase == purchase && resumed.Currency.SequenceEqual(new[] { -3, 40 }), "charged currency was lost");
+                Assert(!reconnect.Pending.ContainsKey(otherWorld), "an unrelated world would settle escrow");
+                var reloadedHost = new Dictionary<string, string>(host);
+                Assert(DogPurchaseJournal.GetResult(reloadedHost, world, resumed.Purchase) == "1bought", "accepted purchase was lost");
+                Assert(DogPurchaseJournal.GetResult(reloadedHost, otherWorld, resumed.Purchase) == null, "receipt crossed worlds");
+                reconnect.Pending.Remove(world);
+                var settledProfile = new Dictionary<string, string>();
+                reconnect.SaveProfile(settledProfile);
+                journal.LoadProfile(settledProfile);
+                Assert(journal.Pending.Count == 0, "settled purchase would be restored");
+            });
+            Test("sail repair preserves clipped changes and separates concurrent snapshots from acknowledgements", () => {
+                var repair = new SailRepairQueue(new float[6]);
+                float[] Damage(float amount) => new[] { amount, 0f, 0f, 0f, 0f, 0f };
+                repair.UpdateAuthority(Damage(0.8f), false);
+                repair.MarkDisplayed(repair.Preview());
+                repair.Observe(Damage(0.6f));
+                repair.UpdateAuthority(Damage(0.05f), false);
+                var clipped = repair.Preview();
+                Assert(clipped[0] == 0f, "preview should be clipped");
+                repair.MarkDisplayed(clipped);
+                repair.Observe(clipped);
+                Assert(repair.TrySend(true, out var delta, out _) && Math.Abs(delta[0] + 0.2f) < 0.0001f, "clipping lost paid repair");
+                repair.UpdateAuthority(Damage(0.5f), false);
+                Assert(Math.Abs(repair.Preview()[0] - 0.3f) < 0.0001f, "snapshot erased in-flight repair");
+                repair.MarkDisplayed(repair.Preview());
+                repair.Observe(Damage(0.2f));
+                Assert(!repair.TrySend(true, out _, out _), "repair overtook unacknowledged request");
+                repair.UpdateAuthority(Damage(0.3f), true);
+                Assert(Math.Abs(repair.Preview()[0] - 0.2f) < 0.0001f, "acknowledgement reapplied or discarded repair");
+                Assert(repair.TrySend(true, out delta, out _) && Math.Abs(delta[0] + 0.1f) < 0.0001f, "next repair was lost");
+
+                repair.Mend(Damage(0f));
+                Assert(repair.Preview()[0] == 0f && !repair.TrySend(false, out _, out _), "mend overtook preceding repair");
+                repair.UpdateAuthority(Damage(0.25f), true);
+                Assert(repair.Preview()[0] == 0f && repair.TrySend(false, out _, out bool mend) && mend, "mend lost after the previous ack");
+                repair.UpdateAuthority(Damage(0f), true);
+                Assert(!repair.TrySend(false, out _, out _), "mend repeated after acknowledgement");
+            });
             Test("LAN join input normalizes optional address and rejects malformed endpoints", () => {
                 JoinTarget target;
                 Assert(JoinPreferences.TryParseLan("  ", "7777", "  Sailor ", out target), "empty address should use localhost");

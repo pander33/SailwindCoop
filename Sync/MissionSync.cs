@@ -101,6 +101,13 @@ namespace SailwindCoop.Sync
                         DeliveredGoods = d.deliveredGoods,
                         DueDay = d.dueDay,
                     });
+                    if (PostalExpansionCompat.SyncEnabled)
+                    {
+                        var entry = list[list.Count - 1];
+                        PostalExpansionCompat.Describe(m, out entry.PostalKind, out entry.PostalLetterId);
+                        list[list.Count - 1] = entry;
+                        sb.Append(entry.PostalKind).Append(':').Append(entry.PostalLetterId).Append(':');
+                    }
                     if (includeMod && EconomyOverhaulCompat.ReadRecord(d.missionIndex, out int modifiers, out bool world, out int offered))
                     {
                         var withMod = list[list.Count - 1];
@@ -131,6 +138,7 @@ namespace SailwindCoop.Sync
             // Always applied: the host sends only a change or the post-load baseline, and a world load
             // may have replaced the local journal since the previous one.
             ApplyJournal(msg.Missions);
+            if (PostalExpansionCompat.GuestBoard) PostalExpansionCompat.RefreshGuestBoard();
             MissionText = msg.Missions.Length + " missions (mirror)";
         }
 
@@ -146,12 +154,16 @@ namespace SailwindCoop.Sync
                 foreach (var e in entries)
                 {
                     if (e.MissionIndex >= missions.Length) continue;
+                    if (e.PostalKind != PostalExpansionCompat.KindNone && !PostalExpansionCompat.GuestBoard) continue;
                     try
                     {
                         var data = new SaveMissionData((int)e.MissionIndex, e.OriginPort, e.DestinationPort,
                             e.GoodPrefabIndex, e.GoodCount, e.TotalPrice, e.InsuranceLevel, e.Distance,
                             e.DeliveredGoods, e.DueDay);
-                        missions[e.MissionIndex] = new Mission(data);
+                        var mission = new Mission(data);
+                        if (PostalExpansionCompat.GuestBoard)
+                            PostalExpansionCompat.Attach(mission, e.PostalKind, e.PostalLetterId);
+                        missions[e.MissionIndex] = mission;
                     }
                     catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] mission " + e.MissionIndex + ": " + ex.Message); }
                 }
@@ -186,6 +198,14 @@ namespace SailwindCoop.Sync
                 Distance = d.distance,
                 DueDay = d.dueDay,
             };
+            PostalExpansionCompat.Describe(mission, out entry.PostalKind, out entry.PostalLetterId);
+            if (PostalExpansionCompat.SyncEnabled && GameState.inPortMissionList)
+                entry.PostalTab = PostalExpansionCompat.CurrentTab(MissionListUI.instance?.worldMissions == true);
+            if ((entry.PostalKind != PostalExpansionCompat.KindNone || entry.PostalTab == 2) && !PostalExpansionCompat.GuestBoard)
+            {
+                NotificationUi.instance?.ShowNotification("Postal missions require the same Postal Expansion version as the host.");
+                return true;
+            }
             // Economy Overhaul rolls modifiers per offer object on this machine; the host builds a new one.
             if ((_net.HostModFeatures & ModFeatures.EconomyOverhaul) != 0 &&
                 EconomyOverhaulCompat.ReadOffer(mission, out int modifiers, out bool world, out int offered))
@@ -215,11 +235,23 @@ namespace SailwindCoop.Sync
             try
             {
                 var e = msg.Mission;
+                bool postal = e.PostalKind != PostalExpansionCompat.KindNone || e.PostalTab == 2;
+                if (postal && (!PostalExpansionCompat.SyncEnabled ||
+                    (_net.FeaturesOf(fromPeer) & ModFeatures.PostalExpansion) == 0)) return;
                 var data = new SaveMissionData(-1, e.OriginPort, e.DestinationPort, e.GoodPrefabIndex,
                     e.GoodCount, e.TotalPrice, e.InsuranceLevel, e.Distance, 0, e.DueDay);
-                var mission = new Mission(data);
+                var mission = postal
+                    ? PostalExpansionCompat.FindOffer(PostalExpansionCompat.PortAt(e.OriginPort), e.PostalTab, e)
+                    : new Mission(data);
+                if (mission == null) return;
+                if (postal)
+                {
+                    mission.goodCount = e.GoodCount;
+                    mission.totalPrice = e.TotalPrice;
+                }
                 if ((e.ModFlags & 1) != 0) EconomyOverhaulCompat.WriteOffer(mission, e.ModModifiers, (e.ModFlags & 2) != 0, e.ModOffered);
                 PlayerMissions.AcceptMission(mission);   // host vanilla: assigns slot, spawns goods, reduces demand
+                if (postal && GameState.inPortMissionList) PostalExpansionCompat.RefreshHostBoard(MissionListUI.instance);
                 Plugin.Logger.LogInfo("[MissionSync] in accept dest=" + e.DestinationPort + " good=" + e.GoodPrefabIndex);
             }
             catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionAccept: " + ex.Message); }
@@ -252,18 +284,23 @@ namespace SailwindCoop.Sync
         public bool IsConnectedClient => _net.Role == Role.Client && _net.State == LinkState.Connected;
 
         /// <summary>Client: forward a delivery trigger, only for goods we carry.</summary>
-        public void RequestDeliver(ShipItem item, int portIndex)
+        public bool RequestDeliver(ShipItem item, int portIndex, bool postalDropOff = false, uint requestId = 0)
         {
-            if (!IsConnectedClient || item == null) return;
+            if (!IsConnectedClient || item == null) return false;
             var items = ItemSync.Instance;
-            if (items == null || !items.TryGetLocallyHeldKey(item, out int id, out int prefab)) return;
+            if (items == null) return false;
+            int id, prefab;
+            if (!(postalDropOff ? items.TrySharedIdentity(item, out id, out prefab)
+                                : items.TryGetLocallyHeldKey(item, out id, out prefab))) return false;
             // The trigger fires repeatedly for the same crate.
-            if (id == _lastDeliverId && Time.realtimeSinceStartup - _lastDeliverAt < 1f) return;
+            if (id == _lastDeliverId && Time.realtimeSinceStartup - _lastDeliverAt < 1f) return false;
             _lastDeliverId = id;
             _lastDeliverAt = Time.realtimeSinceStartup;
-            _net.Broadcast(new MissionDeliverMsg { InstanceId = id, PrefabIndex = prefab, PortIndex = portIndex },
+            _net.Broadcast(new MissionDeliverMsg { InstanceId = id, PrefabIndex = prefab, PortIndex = portIndex,
+                           PostalDropOff = postalDropOff, RequestId = requestId },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
             Plugin.Logger.LogInfo("[MissionSync] out deliver item=" + id + " port=" + portIndex);
+            return true;
         }
 
         public void OnMissionDeliver(MissionDeliverMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -274,40 +311,58 @@ namespace SailwindCoop.Sync
                 var ports = Port.ports;
                 Port port = ports != null && msg.PortIndex >= 0 && msg.PortIndex < ports.Length ? ports[msg.PortIndex] : null;
                 ShipItem item = ItemSync.Instance?.HostFindItem(msg.InstanceId, msg.PrefabIndex);
-                Good good = item != null ? item.GetComponent<Good>() : null;
+                Good good = item != null && item.CompareTag("Good") ? item.GetComponent<Good>() : null;
                 Mission mission = good != null ? good.GetAssignedMission() : null;
                 if (port == null || mission == null)
                 {
                     // Duplicate request or not a mission good.
                     Plugin.Logger.LogInfo("[MissionSync] in deliver ignored item=" + msg.InstanceId + " port=" + msg.PortIndex);
+                    if (msg.PostalDropOff) ReplyDelivery(fromPeer, msg, false, "This letter is no longer available for delivery.");
                     return;
                 }
 
                 // Same checks as vanilla PortDude.OnTriggerEnter.
                 if (mission.destinationPort == port)
                 {
-                    string text = "Delivered " + mission.goodPrefab.GetComponent<ShipItem>().name +
+                    bool letter = PostalExpansionCompat.IsLetter(item.GetComponent<SaveablePrefab>());
+                    if (msg.PostalDropOff != letter || (letter &&
+                        (_net.FeaturesOf(fromPeer) & ModFeatures.PostalExpansion) == 0))
+                    {
+                        if (msg.PostalDropOff) ReplyDelivery(fromPeer, msg, false, "This letter cannot be delivered here.");
+                        return;
+                    }
+                    if (letter && !PostalExpansionCompat.HostMayDeliver(mission, out string refusal))
+                    {
+                        ReplyDelivery(fromPeer, msg, false, refusal);
+                        return;
+                    }
+                    string text = "Delivered " + (PostalExpansionCompat.DisplayName(mission) ?? mission.goodPrefab.GetComponent<ShipItem>().name) +
                                   "\n( " + (mission.GetDeliveredCount() + 1) + " / " + mission.goodCount + " )";
                     good.Deliver();                          // reward reaches clients via PostDeliver
                     ItemSync.Instance?.HostRefreshNextTick(); // despawn on clients
-                    fromPeer?.Send(new MissionDeliverResultMsg { Delivered = true, Text = text },
-                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    ReplyDelivery(fromPeer, msg, true, text);
                     Plugin.Logger.LogInfo("[MissionSync] in deliver ok item=" + msg.InstanceId + " port=" + msg.PortIndex);
                 }
-                else if (mission.originPort != port)
-                {
-                    fromPeer?.Send(new MissionDeliverResultMsg { Delivered = false, Text = "You are at the wrong port!" },
-                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
-                }
+                else if (msg.PostalDropOff || mission.originPort != port)
+                    ReplyDelivery(fromPeer, msg, false, "You are at the wrong port!");
             }
-            catch (Exception ex) { Plugin.Logger.LogWarning("[MissionSync] OnMissionDeliver: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning("[MissionSync] OnMissionDeliver: " + ex.Message);
+                if (msg.PostalDropOff) ReplyDelivery(fromPeer, msg, false, "The host could not complete this delivery.");
+            }
         }
+
+        private static void ReplyDelivery(LiteNetLib.NetPeer peer, MissionDeliverMsg request, bool delivered, string text)
+            => peer?.Send(new MissionDeliverResultMsg { Delivered = delivered, Text = text, RequestId = request.RequestId },
+                          LiteNetLib.DeliveryMethod.ReliableOrdered);
 
         public void OnMissionDeliverResult(MissionDeliverResultMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client) return;
             try
             {
+                if (msg.RequestId != 0 && !PostalExpansionCompat.CompleteLetterDelivery(msg.RequestId, msg.Delivered)) return;
                 if (!string.IsNullOrEmpty(msg.Text)) NotificationUi.instance?.ShowNotification(msg.Text);
                 if (msg.Delivered) UISoundPlayer.instance?.PlayGoldSound();
             }
@@ -322,7 +377,7 @@ namespace SailwindCoop.Sync
         public void ForwardReward(MissionRewardMsg reward)
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
-            if (reward == null || reward.Amount <= 0 || reward.Region < 0) return;
+            if (reward == null || (reward.Amount <= 0 && !reward.PostalLetter) || reward.Region < 0) return;
             uint[] guests = _net.ReadyClientIds();
             if (guests.Length == 0) return;
             if (WalletSync.Instance != null && WalletSync.Instance.Shared)
@@ -359,12 +414,22 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client) return;
             try
             {
-                if (PlayerGold.currency != null && msg.Region >= 0 && msg.Region < PlayerGold.currency.Length && msg.Amount > 0)
+                if (PlayerGold.currency != null && msg.Region >= 0 && msg.Region < PlayerGold.currency.Length &&
+                    (msg.Amount > 0 || msg.PostalLetter))
                 {
                     // With a shared wallet the money is already in it and arrives as its new balance.
                     bool shared = WalletSync.Instance != null && WalletSync.Instance.Shared;
                     if (!shared) PlayerGold.currency[msg.Region] += msg.Amount;
-                    if (msg.RepAmount != 0)
+                    if (msg.PostalLetter)
+                    {
+                        if (msg.OriginRegion >= 0 && msg.PostalOriginRep != 0)
+                            PlayerReputation.ChangeReputation(msg.PostalOriginRep, (PortRegion)msg.OriginRegion);
+                        if (msg.DestinationRegion >= 0 && msg.PostalDestinationRep != 0)
+                            PlayerReputation.ChangeReputation(msg.PostalDestinationRep, (PortRegion)msg.DestinationRegion);
+                        if (msg.PostalOriginRep != 0 || msg.PostalDestinationRep != 0)
+                            ReputationNotifUI.instance?.ShowNotif();
+                    }
+                    else if (msg.RepAmount != 0)
                     {
                         if (msg.OriginRegion >= 0) PlayerReputation.ChangeReputation(msg.RepAmount, (PortRegion)msg.OriginRegion);
                         if (msg.DestinationRegion >= 0 && msg.DestinationRegion != msg.OriginRegion)
@@ -383,7 +448,8 @@ namespace SailwindCoop.Sync
                             DayLogs.instance.dayLogs[msg.Region].LogMissionDelivery(msg.ExpectedReward, msg.Amount);
                     }
                     catch { }
-                    try { MoneyNotification.instance?.PlayNotif(msg.Amount, msg.Region); } catch { }
+                    if (msg.Amount > 0)
+                        try { MoneyNotification.instance?.PlayNotif(msg.Amount, msg.Region); } catch { }
                     Plugin.Logger.LogInfo("[MissionSync] in reward +" + msg.Amount + " region=" + msg.Region);
                     SaveGuestProfileNow("mission reward");
                 }
@@ -431,6 +497,7 @@ namespace SailwindCoop.Sync
             public int GoodPrefabIndex;
             public string DestinationName;
             public int ExpectedReward;
+            public bool PostalLetter;
         }
 
         public static void Apply(Harmony harmony)
@@ -480,7 +547,8 @@ namespace SailwindCoop.Sync
                 {
                     var port = _fPortDudePort != null ? _fPortDudePort.GetValue(__instance) as Port : null;
                     var item = other.GetComponent<ShipItem>();
-                    if (port != null && item != null) s.RequestDeliver(item, port.portIndex);
+                    if (port != null && item != null && !PostalExpansionCompat.IsLetter(item.GetComponent<SaveablePrefab>()))
+                        s.RequestDeliver(item, port.portIndex);
                 }
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PrePortDudeTrigger: " + e.Message); }
@@ -553,7 +621,8 @@ namespace SailwindCoop.Sync
             try
             {
                 if (__instance == null || __instance.destinationPort == null) return;
-                int region = (int)__instance.destinationPort.region;
+                bool letter = PostalExpansionCompat.IsLetterMission(__instance);
+                int region = letter ? (int)Currency.gold : (int)__instance.destinationPort.region;
                 if (PlayerGold.currency == null || region < 0 || region >= PlayerGold.currency.Length) return;
                 var data = __instance.PrepareSaveData();
                 int originRegion = __instance.originPort != null ? (int)__instance.originPort.region : -1;
@@ -569,6 +638,7 @@ namespace SailwindCoop.Sync
                     GoodPrefabIndex = data.goodPrefabIndex,
                     DestinationName = __instance.destinationPort.GetPortName(),
                     ExpectedReward = data.goodCount > 0 ? data.totalPrice / data.goodCount : 0,
+                    PostalLetter = letter,
                 };
             }
             catch { __state = null; }
@@ -580,22 +650,24 @@ namespace SailwindCoop.Sync
             {
                 if (__state == null) return;
                 int delta = PlayerGold.currency[__state.Region] - __state.CurrencyBefore;
-                if (delta <= 0) return;
-                int repDelta = 0;
-                if (__state.OriginRegion >= 0)
-                    repDelta = Math.Max(repDelta, PlayerReputation.GetRep(__state.OriginRegion) - __state.OriginRepBefore);
-                if (__state.DestinationRegion >= 0)
-                    repDelta = Math.Max(repDelta, PlayerReputation.GetRep(__state.DestinationRegion) - __state.DestinationRepBefore);
+                if (delta <= 0 && !__state.PostalLetter) return;
+                int origin = __state.OriginRegion >= 0 ? PlayerReputation.GetRep(__state.OriginRegion) - __state.OriginRepBefore : 0;
+                int destination = __state.DestinationRegion >= 0 ? PlayerReputation.GetRep(__state.DestinationRegion) - __state.DestinationRepBefore : 0;
                 MissionSync.Instance?.ForwardReward(new MissionRewardMsg
                 {
                     Region = __state.Region,
                     Amount = delta,
                     OriginRegion = __state.OriginRegion,
                     DestinationRegion = __state.DestinationRegion,
-                    RepAmount = repDelta,
+                    RepAmount = __state.PostalLetter
+                        ? (Math.Abs(origin) >= Math.Abs(destination) ? origin : destination)
+                        : Math.Max(0, Math.Max(origin, destination)),
                     GoodPrefabIndex = __state.GoodPrefabIndex,
                     DestinationName = __state.DestinationName,
                     ExpectedReward = __state.ExpectedReward,
+                    PostalLetter = __state.PostalLetter,
+                    PostalOriginRep = __state.PostalLetter ? origin : 0,
+                    PostalDestinationRep = __state.PostalLetter && __state.OriginRegion != __state.DestinationRegion ? destination : 0,
                 });
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[MissionPatches] PostDeliver: " + e.Message); }

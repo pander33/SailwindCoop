@@ -511,6 +511,31 @@ namespace SailwindCoop.Sync
         /// </summary>
         public Transform LocalBoat => _lastLocalBoat;
 
+        internal bool TryGetNearestCrewFeet(Transform frame, Vector3 near, float shoreRadius, Transform boat, out Vector3 feet)
+        {
+            feet = Vector3.zero;
+            float best = float.PositiveInfinity;
+            ushort boatIndex = BoatLocator.IndexOf(boat);
+            foreach (var avatar in _remotes.Values)
+            {
+                var pose = avatar.RenderedPose;
+                if (avatar.Go == null || pose == null || avatar.WaitingForFirstPose) continue;
+                if (boat != null ? pose.Frame != CoordFrame.Boat || pose.BoatIndex != boatIndex : pose.Frame == CoordFrame.Boat)
+                    continue;
+                Vector3 position = avatar.Go.transform.position;
+                if (boat == null)
+                {
+                    Vector3 local = frame.InverseTransformPoint(position);
+                    if (local.x * local.x + local.z * local.z > shoreRadius * shoreRadius) continue;
+                }
+                float distance = (position - near).sqrMagnitude;
+                if (distance >= best) continue;
+                best = distance;
+                feet = position;
+            }
+            return best < float.PositiveInfinity;
+        }
+
         /// <summary>Where another player stands on this deck, in the hull's own space.</summary>
         public bool TryGetCrewDeckPos(Transform boat, out Vector3 localPos)
         {

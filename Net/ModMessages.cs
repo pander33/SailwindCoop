@@ -4,6 +4,128 @@ using LiteNetLib.Utils;
 
 namespace SailwindCoop.Net
 {
+    public enum CrewNoteKind : byte { Strike, Voice, Horn }
+
+    public enum HookAttachmentKind : byte { Item, Anchor, ClearAll }
+
+    public sealed class HookAttachmentMsg : INetMessage
+    {
+        public HookAttachmentKind Kind;
+        public bool Attached;
+        public ushort BoatIndex;
+        public int HookId, HookPrefab, ItemId, ItemPrefab;
+        public MsgType Type => MsgType.HookAttachment;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind); w.Put(Attached); w.Put(BoatIndex);
+            w.Put(HookId); w.Put(HookPrefab); w.Put(ItemId); w.Put(ItemPrefab);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (HookAttachmentKind)r.GetByte(); Attached = r.GetBool(); BoatIndex = r.GetUShort();
+            HookId = r.GetInt(); HookPrefab = r.GetInt(); ItemId = r.GetInt(); ItemPrefab = r.GetInt();
+        }
+    }
+
+    public sealed class SailDamageMsg : INetMessage
+    {
+        public bool ReplaceAll;
+        public bool RepairAck;
+        public SailDamageEntry[] Entries = Array.Empty<SailDamageEntry>();
+        public MsgType Type => MsgType.SailDamage;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(ReplaceAll);
+            w.Put(RepairAck);
+            w.Put(checked((ushort)Entries.Length));
+            foreach (var entry in Entries)
+            {
+                w.Put(entry.Key);
+                w.Put(entry.Mend);
+                for (int i = 0; i < SailDamageEntry.ValueCount; i++) w.Put(entry.Values[i]);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            ReplaceAll = r.GetBool();
+            RepairAck = r.GetBool();
+            int count = r.GetUShort();
+            if (count * (sizeof(ushort) + sizeof(byte) + SailDamageEntry.ValueCount * sizeof(float)) > r.AvailableBytes)
+                throw new InvalidDataException("Truncated sail damage entries");
+            Entries = new SailDamageEntry[count];
+            for (int i = 0; i < count; i++)
+            {
+                var entry = new SailDamageEntry { Key = r.GetString(512), Mend = r.GetBool() };
+                for (int j = 0; j < SailDamageEntry.ValueCount; j++) entry.Values[j] = r.GetFloat();
+                Entries[i] = entry;
+            }
+        }
+    }
+
+    public sealed class SailDamageEntry
+    {
+        public const int ValueCount = 6;
+        public string Key = "";
+        public bool Mend;
+        public float[] Values = new float[ValueCount];
+    }
+
+    public abstract class PetMessage : INetMessage
+    {
+        public byte[] Data = Array.Empty<byte>();
+        public abstract MsgType Type { get; }
+        public void Serialize(NetDataWriter w) => w.PutBytesWithLength(Data);
+        public void Deserialize(NetDataReader r) => Data = r.GetBytesWithLength();
+    }
+
+    public sealed class PetStateMsg : PetMessage { public override MsgType Type => MsgType.PetState; }
+    public sealed class PetRequestMsg : PetMessage { public override MsgType Type => MsgType.PetRequest; }
+
+    public sealed class PostalBoardRequestMsg : INetMessage
+    {
+        public uint Request;
+        public int Port, Page;
+        public byte Tab;
+        public MsgType Type => MsgType.PostalBoardRequest;
+        public void Serialize(NetDataWriter w) { w.Put(Request); w.Put(Port); w.Put(Page); w.Put(Tab); }
+        public void Deserialize(NetDataReader r) { Request = r.GetUInt(); Port = r.GetInt(); Page = r.GetInt(); Tab = r.GetByte(); }
+    }
+
+    public sealed class PostalBoardMsg : INetMessage
+    {
+        public PostalBoardRequestMsg Address = new PostalBoardRequestMsg();
+        public MissionJournalMsg Offers = new MissionJournalMsg();
+        public int Total;
+        public MsgType Type => MsgType.PostalBoard;
+        public void Serialize(NetDataWriter w) { Address.Serialize(w); w.Put(Total); Offers.Serialize(w); }
+        public void Deserialize(NetDataReader r) { Address.Deserialize(r); Total = r.GetInt(); Offers.Deserialize(r); }
+    }
+
+    public sealed class CrewNoteMsg : INetMessage
+    {
+        public CrewNoteKind Kind;
+        public int ItemInstanceId, PrefabIndex, Note;
+        public bool Playing;
+        public uint Actor;
+        public MsgType Type => MsgType.CrewNote;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind); w.Put(ItemInstanceId); w.Put(PrefabIndex);
+            w.Put(Note); w.Put(Playing); w.Put(Actor);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (CrewNoteKind)r.GetByte(); ItemInstanceId = r.GetInt(); PrefabIndex = r.GetInt();
+            Note = r.GetInt(); Playing = r.GetBool(); Actor = r.GetUInt();
+        }
+    }
+
     [Flags]
     public enum ModFeatures : byte
     {
@@ -11,6 +133,45 @@ namespace SailwindCoop.Net
         EconomyOverhaul = 1,
         SharedMarkets = 2,
         ShipyardExpansion = 4,
+        HooksHangMore = 8,
+        SailDamage = 16,
+        FurstMate = 32,
+        PostalExpansion = 64,
+        EconomyTradeSales = 128,
+    }
+
+    public sealed class TradeSaleMsg : INetMessage
+    {
+        public Guid World, Sale, Author;
+        public int Instance, Prefab;
+        public MsgType Type => MsgType.TradeSale;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(World.ToByteArray()); w.Put(Sale.ToByteArray()); w.Put(Author.ToByteArray());
+            w.Put(Instance); w.Put(Prefab);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            World = ReadId(r); Sale = ReadId(r); Author = ReadId(r);
+            Instance = r.GetInt(); Prefab = r.GetInt();
+        }
+
+        internal static Guid ReadId(NetDataReader r)
+        {
+            var bytes = new byte[16];
+            r.GetBytes(bytes, bytes.Length);
+            return new Guid(bytes);
+        }
+    }
+
+    public sealed class TradeSaleReceiptMsg : INetMessage
+    {
+        public Guid World, Sale;
+        public MsgType Type => MsgType.TradeSaleReceipt;
+        public void Serialize(NetDataWriter w) { w.Put(World.ToByteArray()); w.Put(Sale.ToByteArray()); }
+        public void Deserialize(NetDataReader r) { World = TradeSaleMsg.ReadId(r); Sale = TradeSaleMsg.ReadId(r); }
     }
 
     // ---------------------------------------------------------------------
