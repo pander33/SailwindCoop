@@ -28,12 +28,19 @@ namespace SailwindCoop.Sync
         private const float MaxExtrapolateMs = 250f;
         private const float MaxAngularExtrapolateMs = 100f;
         private const float RecoveryMs = 80f;
+        private const float MaxStalledPositionError = 2.5f; // metres relative to the same support
+        private const float StalledRecoveryMsPerMetre = 120f;
         private long _lastRenderTick, _recoveryTick;
         private bool _wasExtrapolating, _recovering;
         private Snap _lastPredictionStart, _lastPredictionEnd;
         private Vector3 _recoveryPosition;
         private Quaternion _recoveryRotation;
+        private float _positionRecoveryMs;
+        private long _stalledSourceTick;
+        private Vector3 _stalledAnchor;
+        private Vector3 _displayedPosition;
         internal bool SmoothUnderruns;
+        internal bool RecoverStalledPosition;
 
         /// <summary>Interpolation delay in ms (config). Larger = smoother but more lag.</summary>
         public float InterpDelayMs = 100f;
@@ -53,6 +60,7 @@ namespace SailwindCoop.Sync
         /// </summary>
         public System.Func<Vector3, Vector3> ToWorldPos = CoordSpace.RealToLocal;
         public System.Func<Quaternion, Quaternion> ToWorldRot = q => q;
+        internal System.Func<Vector3, Vector3> ToWorldOffset;
 
         /// <summary>Feed a snapshot (real space). Out-of-order packets are inserted in order.</summary>
         public void Push(long tick, Vector3 realPos, Quaternion rot, Vector3 realVel = default)
@@ -72,23 +80,57 @@ namespace SailwindCoop.Sync
         public void Apply(Transform t, long serverTickNow)
             => ApplyAt(t, serverTickNow - (long)InterpDelayMs);
 
-        internal void ApplyAt(Transform t, long renderTick)
+        internal void ApplyAt(Transform t, long renderTick, NetTransform carrier = null)
         {
             if (t == null) return;
-            if (!SampleAt(renderTick, out Vector3 pos, out Quaternion rot, out _)) return;
-            t.position = pos;
+            Vector3 offset = Vector3.zero;
+            bool shared = _buf.Count > 0 && carrier != null &&
+                carrier.TryGetCarriedOffset(renderTick, _buf[_buf.Count - 1].Tick, out offset);
+            if (!SampleAt(renderTick, out Vector3 pos, out Quaternion rot, out _, usePositionRecovery: !shared)) return;
+            t.position = _displayedPosition = pos + offset;
             t.rotation = rot;
         }
 
         /// <summary>Bridge nearby samples in different supports after converting each to local world space.</summary>
-        internal bool TryApplyTransition(Transform target, NetTransform next, long fromTick, long toTick, long renderTick)
+        internal bool TryApplyTransition(Transform target, NetTransform next, long fromTick, long toTick, long renderTick,
+                                         NetTransform carrier = null)
         {
             if (renderTick <= fromTick || renderTick >= toTick || toTick - fromTick > 200 ||
-                !SampleAt(fromTick, out var fromPos, out var fromRot, out _) ||
-                !next.SampleAt(toTick, out var toPos, out var toRot, out _) || (toPos - fromPos).sqrMagnitude > 4f) return false;
+                !SampleAt(fromTick, out var fromPos, out var fromRot, out _, trackRecovery: false) ||
+                !next.SampleAt(toTick, out var toPos, out var toRot, out _, trackRecovery: false) ||
+                (toPos - fromPos).sqrMagnitude > 4f) return false;
             float blend = (float)(renderTick - fromTick) / (toTick - fromTick);
-            target.SetPositionAndRotation(Vector3.Lerp(fromPos, toPos, blend), Quaternion.Slerp(fromRot, toRot, blend));
+            Vector3 pos = Vector3.Lerp(fromPos, toPos, blend);
+            if (RecoverStalledPosition)
+            {
+                // Advance the current support at the actual render tick. Endpoint reads above
+                // must not rewind either buffer's state of the recovery.
+                SampleAt(renderTick, out _, out _, out _);
+                pos += StalledWorldOffset(renderTick);
+            }
+            else if (carrier != null && carrier.TryGetCarriedOffset(renderTick, toTick, out var offset))
+                pos += offset;
+            _displayedPosition = pos;
+            target.SetPositionAndRotation(pos, Quaternion.Slerp(fromRot, toRot, blend));
             return true;
+        }
+
+        internal void ContinueStalledRecovery(NetTransform previous, Transform support, long tick)
+        {
+            if (!previous.HasStalledRecovery(tick) ||
+                !previous.SampleAt(tick, out var before, out _, out _, trackRecovery: false) ||
+                !SampleAt(tick, out var after, out _, out _, trackRecovery: false) ||
+                (after - before).sqrMagnitude > MaxStalledPositionError * MaxStalledPositionError) return;
+
+            Vector3 worldOffset = previous.WorldOffset(previous._recoveryPosition);
+            Vector3 worldAnchor = previous.ToWorldPos(previous._stalledAnchor);
+            _recoveryPosition = support != null ? support.InverseTransformVector(worldOffset) : worldOffset;
+            _stalledAnchor = support != null ? support.InverseTransformPoint(worldAnchor) : CoordSpace.LocalToReal(worldAnchor);
+            _stalledSourceTick = previous._stalledSourceTick;
+            _recoveryTick = previous._recoveryTick;
+            _positionRecoveryMs = previous._positionRecoveryMs;
+            _recoveryRotation = Quaternion.identity;
+            _recovering = true;
         }
 
         /// <summary>
@@ -99,7 +141,8 @@ namespace SailwindCoop.Sync
         public bool Sample(long serverTickNow, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
             => SampleAt(serverTickNow - (long)InterpDelayMs, out pos, out rot, out realVel);
 
-        internal bool SampleAt(long renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel)
+        internal bool SampleAt(long renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel,
+                               bool trackRecovery = true, bool usePositionRecovery = true)
         {
             pos = Vector3.zero; rot = Quaternion.identity; realVel = Vector3.zero;
             if (_buf.Count == 0) return false;
@@ -107,7 +150,7 @@ namespace SailwindCoop.Sync
             // Before the oldest sample: snap to oldest.
             if (renderTick <= _buf[0].Tick)
             {
-                ConvertSample(renderTick, _buf[0].RealPos, _buf[0].Rot, out pos, out rot);
+                ConvertSample(renderTick, _buf[0].RealPos, _buf[0].Rot, out pos, out rot, trackRecovery, usePositionRecovery);
                 realVel = _buf[0].RealVel;
                 return true;
             }
@@ -118,7 +161,7 @@ namespace SailwindCoop.Sync
             {
                 var previous = SmoothUnderruns && _buf.Count >= 2 ? _buf[_buf.Count - 2] : last;
                 Predict(previous, last, renderTick, out var predictedPosition, out var predictedRotation);
-                ConvertSample(renderTick, predictedPosition, predictedRotation, out pos, out rot);
+                ConvertSample(renderTick, predictedPosition, predictedRotation, out pos, out rot, trackRecovery, usePositionRecovery);
                 realVel = last.RealVel;
                 return true;
             }
@@ -133,7 +176,7 @@ namespace SailwindCoop.Sync
                     float span = b.Tick - a.Tick;
                     float f = span > 0 ? (renderTick - a.Tick) / span : 0f;
                     ConvertSample(renderTick, Vector3.Lerp(a.RealPos, b.RealPos, f), Quaternion.Slerp(a.Rot, b.Rot, f),
-                            out pos, out rot);
+                            out pos, out rot, trackRecovery, usePositionRecovery);
                     realVel = Vector3.Lerp(a.RealVel, b.RealVel, f);
                     return true;
                 }
@@ -158,36 +201,82 @@ namespace SailwindCoop.Sync
             rotation = Quaternion.SlerpUnclamped(previous.Rot, last.Rot, 1f + fraction);
         }
 
+        private bool HasStalledRecovery(long tick) =>
+            _recovering && _positionRecoveryMs > RecoveryMs && tick >= _recoveryTick &&
+            tick - _recoveryTick < _positionRecoveryMs;
+
+        private Vector3 WorldOffset(Vector3 offset) => ToWorldOffset != null ? ToWorldOffset(offset) : offset;
+
+        private Vector3 StalledWorldOffset(long tick) =>
+            HasStalledRecovery(tick) ? WorldOffset(_recoveryPosition * RecoveryWeight(tick)) : Vector3.zero;
+
+        private bool TryGetCarriedOffset(long tick, long newestTick, out Vector3 offset)
+        {
+            offset = Vector3.zero;
+            if (!HasStalledRecovery(tick)) return false;
+            // If the carried stream is still stalled, its own pose is already behind. Move
+            // it with the carrier from the old anchor until the carried stream catches up.
+            offset = newestTick <= _stalledSourceTick
+                ? _displayedPosition - ToWorldPos(_stalledAnchor)
+                : StalledWorldOffset(tick);
+            return true;
+        }
+
+        private float RecoveryWeight(long tick)
+        {
+            float fraction = (tick - _recoveryTick) / _positionRecoveryMs;
+            if (_positionRecoveryMs > RecoveryMs) fraction = fraction * fraction * (3f - 2f * fraction);
+            return 1f - fraction;
+        }
+
         private void ApplyRecovery(long tick, ref Vector3 position, ref Quaternion rotation)
         {
             if (!_recovering) return;
             float elapsed = tick - _recoveryTick;
-            if (elapsed < 0f || elapsed >= RecoveryMs) return;
+            if (elapsed < 0f || elapsed >= _positionRecoveryMs) return;
 
-            float weight = 1f - elapsed / RecoveryMs;
-            position += _recoveryPosition * weight;
-            rotation *= Quaternion.Slerp(Quaternion.identity, _recoveryRotation, weight);
+            position += _recoveryPosition * RecoveryWeight(tick);
+            if (elapsed < RecoveryMs)
+                rotation *= Quaternion.Slerp(Quaternion.identity, _recoveryRotation, 1f - elapsed / RecoveryMs);
         }
 
-        private void ConvertSample(long tick, Vector3 storedPos, Quaternion storedRot, out Vector3 pos, out Quaternion rot)
+        private void ConvertSample(long tick, Vector3 storedPos, Quaternion storedRot, out Vector3 pos, out Quaternion rot,
+                                   bool trackRecovery, bool usePositionRecovery)
         {
-            if (SmoothUnderruns)
+            if (SmoothUnderruns && trackRecovery)
             {
                 var newest = _buf[_buf.Count - 1];
-                if (_recovering && (tick < _recoveryTick || tick - _recoveryTick >= RecoveryMs))
+                if (_recovering && (tick < _recoveryTick || tick - _recoveryTick >= _positionRecoveryMs))
                     _recovering = false;
                 // Compare the two paths at the current render tick, including any previous correction.
+                bool stalled = RecoverStalledPosition && tick - _lastPredictionEnd.Tick >= MaxExtrapolateMs;
+                bool shortFrame = tick - _lastRenderTick <= RecoveryMs;
                 if (_wasExtrapolating && newest.Tick > _lastPredictionEnd.Tick && tick >= _lastRenderTick &&
-                    tick - _lastRenderTick <= RecoveryMs)
+                    (shortFrame || stalled))
                 {
                     Predict(_lastPredictionStart, _lastPredictionEnd, tick, out var oldPosition, out var oldRotation);
                     ApplyRecovery(tick, ref oldPosition, ref oldRotation);
                     _recoveryPosition = oldPosition - storedPos;
                     _recoveryRotation = Quaternion.Inverse(storedRot) * oldRotation;
-                    _recovering = _recoveryPosition.sqrMagnitude <= 1f &&
-                        Quaternion.Angle(Quaternion.identity, _recoveryRotation) <= 35f;
+                    float errorSquared = _recoveryPosition.sqrMagnitude;
+                    bool canBlendRotation = shortFrame && Quaternion.Angle(Quaternion.identity, _recoveryRotation) <= 35f;
+                    _positionRecoveryMs = RecoveryMs;
+                    _recovering = errorSquared <= 1f && canBlendRotation;
+                    // After walking prediction has stopped, ease back to the live pose. A large
+                    // discontinuity still takes effect immediately (for example, a teleport).
+                    if (stalled && errorSquared <= MaxStalledPositionError * MaxStalledPositionError)
+                    {
+                        _recovering = true;
+                        _positionRecoveryMs += StalledRecoveryMsPerMetre * Mathf.Sqrt(errorSquared);
+                        _stalledSourceTick = _lastPredictionEnd.Tick;
+                        _stalledAnchor = oldPosition;
+                        if (!canBlendRotation) _recoveryRotation = Quaternion.identity;
+                    }
                     _recoveryTick = tick;
                 }
+                // The shared correction replaces the carried buffer's positional easing.
+                // Drop that residual so it cannot reappear when the avatar finishes easing.
+                if (!usePositionRecovery) _recoveryPosition = Vector3.zero;
                 ApplyRecovery(tick, ref storedPos, ref storedRot);
                 _wasExtrapolating = tick > newest.Tick;
                 if (_wasExtrapolating)

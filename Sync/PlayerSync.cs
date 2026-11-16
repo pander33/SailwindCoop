@@ -27,6 +27,7 @@ namespace SailwindCoop.Sync
             public readonly SupportHistory<PlayerStateMsg> History = new SupportHistory<PlayerStateMsg>(m => m.Tick,
                 (a, b) => a.Frame == b.Frame && (a.Frame != CoordFrame.Boat || a.BoatIndex == b.BoatIndex));
             public PoseSegment RenderedPose;
+            public int PoseAppliedFrame = -1;
             public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
             public int PlaybackFrame = -1;
             public long PlaybackTick;
@@ -77,7 +78,7 @@ namespace SailwindCoop.Sync
             public long Start { get; private set; }
             public long LastTick;
             public Transform Boat;
-            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
+            public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true, RecoverStalledPosition = true };
             public readonly SnapshotBuffer<PlayerStateMsg> Details = new SnapshotBuffer<PlayerStateMsg>(m => m.Tick, 32);
 
             public PoseSegment(PlayerStateMsg first)
@@ -106,6 +107,7 @@ namespace SailwindCoop.Sync
                     Boat = boat;
                     Net.ToWorldPos = boat.TransformPoint;
                     Net.ToWorldRot = q => boat.rotation * q;
+                    Net.ToWorldOffset = boat.TransformVector;
                 }
                 return true;
             }
@@ -433,7 +435,7 @@ namespace SailwindCoop.Sync
         private bool _dumped;
         private float _sendTimer;
         private Vector3 _lastRealPos;
-        private long _lastRealTick;
+        private long _lastCaptureTick;
         private bool _haveLast;
         private CoordFrame _lastFrame;
         private Transform _lastFrameBoat;
@@ -679,20 +681,26 @@ namespace SailwindCoop.Sync
         // Outbound: send my pose
         // -----------------------------------------------------------------
 
-        public void Tick(float dt)
+        internal void SendLocalPose(float unscaledDt)
         {
             if (_net.State != LinkState.Connected) return;
+            if (GameState.currentlyLoading)
+            {
+                _haveLast = false;
+                return;
+            }
             if (!CoordSpace.Ready) return;
 
             EnsureLocalPlayer();
             if (_localPlayer == null) return;
 
             float interval = 1f / Mathf.Max(1, SnapshotHz);
-            _sendTimer += dt;
+            _sendTimer += unscaledDt;
             if (_sendTimer < interval) return;
             _sendTimer %= interval;
 
-            long tick = _net.Clock.ServerTick;
+            long captureTick = _net.Clock.LocalTick;
+            long tick = captureTick + (long)_net.Clock.OffsetMs;
             Transform pl = _localPlayer;
             Transform boat = CurrentBoat();
             ushort boatIndex = BoatLocator.NoBoat;
@@ -731,11 +739,11 @@ namespace SailwindCoop.Sync
             Vector3 vel = Vector3.zero;
             if (_haveLast && _lastFrame == frame && _lastFrameBoat == boat)
             {
-                float secs = (tick - _lastRealTick) / 1000f;
+                float secs = (captureTick - _lastCaptureTick) / 1000f;
                 if (secs > 0.0001f) vel = (pos - _lastRealPos) / secs;
             }
             _lastRealPos = pos;
-            _lastRealTick = tick;
+            _lastCaptureTick = captureTick;
             _lastFrame = frame;
             _lastFrameBoat = boat;
             _haveLast = true;
@@ -1131,8 +1139,11 @@ namespace SailwindCoop.Sync
                 var pose = a.Poses[index];
                 if (!pose.Resolve()) continue;
                 if (index != 0) a.Poses.RemoveRange(0, index);
-                if (a.RenderedPose == null || a.RenderedPose.Frame != pose.Frame ||
-                    (pose.Frame == CoordFrame.Boat && a.RenderedPose.BoatIndex != pose.BoatIndex)) a.HasAnimSnapshot = false;
+                var previous = a.RenderedPose;
+                if (previous == null || previous.Frame != pose.Frame ||
+                    (pose.Frame == CoordFrame.Boat && previous.BoatIndex != pose.BoatIndex)) a.HasAnimSnapshot = false;
+                if (previous != null && previous != pose && previous.Resolve())
+                    pose.Net.ContinueStalledRecovery(previous.Net, pose.Boat, renderTick);
                 a.RenderedPose = pose;
                 a.History.Prune(renderTick);
                 ApplyPoseDetails(a, pose, renderTick);
@@ -1142,6 +1153,7 @@ namespace SailwindCoop.Sync
                 if (next == null || renderTick <= pose.LastTick || !next.Resolve() ||
                     !pose.Net.TryApplyTransition(a.Go.transform, next.Net, pose.LastTick, next.Start, renderTick))
                     pose.Net.ApplyAt(a.Go.transform, renderTick);
+                a.PoseAppliedFrame = Time.frameCount;
                 if (a.WaitingForFirstPose)
                 {
                     a.WaitingForFirstPose = false;
@@ -1162,13 +1174,7 @@ namespace SailwindCoop.Sync
         }
 
         internal bool TryGetRenderTick(uint netId, long localNow, long serverNow, out long tick)
-        {
-            tick = 0;
-            if (!_remotes.TryGetValue(netId, out var avatar) || !avatar.HasPoseFrame || avatar.Go == null)
-                return false;
-            tick = RenderTick(avatar, localNow, serverNow);
-            return true;
-        }
+            => TryGetCarriedPlayback(netId, localNow, serverNow, out tick, out _);
 
         private long RenderTick(RemoteAvatar avatar, long localNow, long serverNow)
         {
@@ -1181,11 +1187,24 @@ namespace SailwindCoop.Sync
             return avatar.PlaybackTick;
         }
 
-        internal static void ApplyCarriedPose(NetTransform pose, Transform target, uint holder, long localNow, long serverNow)
+        private bool TryGetCarriedPlayback(uint holder, long localNow, long serverNow, out long tick, out NetTransform carrier)
+        {
+            tick = 0;
+            carrier = null;
+            if (!_remotes.TryGetValue(holder, out var avatar) || !avatar.HasPoseFrame || avatar.Go == null)
+                return false;
+            tick = RenderTick(avatar, localNow, serverNow);
+            if (avatar.PoseAppliedFrame == Time.frameCount) carrier = avatar.RenderedPose.Net;
+            return true;
+        }
+
+        internal static void ApplyCarriedPose(NetTransform pose, Transform target, uint holder, long localNow, long serverNow,
+                                              bool followCarrierPosition = true)
         {
             var players = CoopBehaviour.Instance?.Players;
-            if (holder != 0 && players != null && players.TryGetRenderTick(holder, localNow, serverNow, out long tick))
-                pose.ApplyAt(target, tick);
+            if (holder != 0 && players != null &&
+                players.TryGetCarriedPlayback(holder, localNow, serverNow, out long tick, out var carrier))
+                pose.ApplyAt(target, tick, followCarrierPosition ? carrier : null);
             else
                 pose.Apply(target, serverNow);
         }
@@ -1193,8 +1212,9 @@ namespace SailwindCoop.Sync
         internal static void ApplyCarriedPose(SupportPoseBuffer pose, Transform target, uint holder, long localNow, long serverNow)
         {
             var players = CoopBehaviour.Instance?.Players;
-            if (holder != 0 && players != null && players.TryGetRenderTick(holder, localNow, serverNow, out long tick))
-                pose.ApplyAt(target, tick);
+            if (holder != 0 && players != null &&
+                players.TryGetCarriedPlayback(holder, localNow, serverNow, out long tick, out var carrier))
+                pose.ApplyAt(target, tick, carrier);
             else pose.Apply(target, serverNow);
         }
 
@@ -1310,6 +1330,7 @@ namespace SailwindCoop.Sync
             _lastLocalBoatSeenAt = 0f;
             _boatSurfaceValidUntil = 0f;
             _localCrouching = null;
+            _sendTimer = 0f;
             _haveLast = false;
             _handProbe.Clear();
             _emote = EmoteId.None;
@@ -1348,7 +1369,7 @@ namespace SailwindCoop.Sync
             if (_localPlayer != null && _emb != null) return;
 
             // At most one scene scan per frame. This is now reached from three places in the same frame
-            // (Tick, ResolveLocalBoatNow, ResolveLocalPlayerBodyNow) and FindObjectOfType walks every
+            // (SendLocalPose, ResolveLocalBoatNow, ResolveLocalPlayerBodyNow) and FindObjectOfType walks every
             // loaded object — the same hot-path cost BoatLocator was rewritten to remove.
             if (_embScanFrame == Time.frameCount) return;
             _embScanFrame = Time.frameCount;

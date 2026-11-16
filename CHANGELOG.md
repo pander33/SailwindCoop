@@ -2,6 +2,13 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Remote players recover more smoothly after delayed snapshots, including when boarding or
+  stepping ashore. Held items follow the player's position correction.
+
 ## [0.9.0] - 2026-11-16
 
 Everyone must update to wire protocol 111. Requires Sailwind 0.40; 0.40.1 is supported.

@@ -466,8 +466,8 @@ namespace SailwindCoop.Sync
             // this very deck — never by proximity, which dragged guests off piers and out of the water.
             //
             // The confirmation is requested on demand rather than read from the latch, because the latch
-            // is refreshed in Players.Tick (step 19 of the frame) while this runs from Boats.ApplyRemote
-            // (step 3): on a fresh join the boat engages before Tick has ever latched anything, so
+            // is refreshed when the avatar pose is sent in LateUpdate. On a fresh join the boat
+            // engages in Update before a snapshot has ever latched anything, so
             // reading the latch alone would leave carry permanently false on the one frame it exists for.
             // Resolve the deck FIRST: that call is what forces PlayerSync to find the embarker this
             // frame, and the player transform hangs off the same embarker. Read in the other order and

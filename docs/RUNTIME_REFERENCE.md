@@ -280,6 +280,12 @@ Domain notes:
 - **Teleport to boat:** `Sync/BoatTeleport.cs`, the F8 button. Local only, no message: it boards
   through `PlayerEmbarkerNew` (private `currentBoat`, `TeleportToWalkCol`, `PlayerEmbark`) and the
   pose goes out through `PlayerSync`.
+- **Avatar motion:** `Runtime/AvatarSnapshotSender.cs` captures the local observer after the
+  game's pose update in `LateUpdate` and sends on an unscaled timer. A remote avatar still renders
+  on its buffered timeline in `Update` after the boats and before the held objects. When extrapolation
+  has run out, the avatar can blend a correction of up to 2.5 m, including after a long render frame.
+  Nearby support changes carry the remaining correction into the new frame. Held poses use the
+  carrier's correction for the current frame.
 - **Avatar arms:** `Sync/PlayerHands.cs`. The sender's `LocalHandProbe` reads
   the held item and the held control from its own `GoPointer` and puts grip points into
   `PlayerState` (`Hands` flags plus `HandR`/`HandL`, in the frame of the transmitted player pose).

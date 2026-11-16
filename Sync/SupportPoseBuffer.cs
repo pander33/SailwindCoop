@@ -82,7 +82,7 @@ namespace SailwindCoop.Sync
             }
             return true;
         }
-        internal void ApplyAt(Transform target, long tick)
+        internal void ApplyAt(Transform target, long tick, NetTransform carrier = null)
         {
             if (_segments.Count == 0) return;
             int index = 0;
@@ -91,8 +91,8 @@ namespace SailwindCoop.Sync
             if (!current.Resolve()) return;
             var next = index + 1 < _segments.Count ? _segments[index + 1] : null;
             if (next == null || !next.Resolve() ||
-                !current.Net.TryApplyTransition(target, next.Net, current.Last.Tick, next.First.Tick, tick))
-                current.Net.ApplyAt(target, tick);
+                !current.Net.TryApplyTransition(target, next.Net, current.Last.Tick, next.First.Tick, tick, carrier))
+                current.Net.ApplyAt(target, tick, carrier);
             if (index > 0) _segments.RemoveRange(0, index);
             _history.Prune(tick);
         }

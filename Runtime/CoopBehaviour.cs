@@ -208,7 +208,7 @@ namespace SailwindCoop.Runtime
                 // through the deck. Sync layers stay decoupled: BoatSync asks, it doesn't reach in.
                 //
                 // The RESOLVING variant, not the plain LocalPlayerBody property: BoatSync asks on the
-                // very first engage frame, which on a fresh join happens before Players.Tick (step 19)
+                // very first engage frame, which on a fresh join happens before the pose sender
                 // has ever run, so the property would still be reading a null embarker and the carry
                 // would no-op on exactly the one frame it exists for. Body, not LocalPlayer — the
                 // latter can be the camera transform.
@@ -397,6 +397,7 @@ namespace SailwindCoop.Runtime
             _menuUI.PageOpen = () => _gameMenu.Open;
 
             BuildSteps();
+            gameObject.AddComponent<AvatarSnapshotSender>().Owner = this;
             StartCoroutine(AfterPhysicsSteps());
         }
 
@@ -458,7 +459,7 @@ namespace SailwindCoop.Runtime
         /// Each step is invoked behind its own try/catch. The mod patches and drives a live game, so a
         /// single subsystem hitting a destroyed object must degrade to "that subsystem is broken" and
         /// not "every subsystem after it stopped running this frame" — which is what a bare list of
-        /// calls did, with Players.ApplyRemotes (last) failing first and most visibly.
+        /// calls did, with remote avatars failing most visibly.
         /// </summary>
         private void BuildSteps()
         {
@@ -496,6 +497,8 @@ namespace SailwindCoop.Runtime
                 new SyncStep("Offices.Tick", () => Offices.Tick()),
                 new SyncStep("Controls.Tick", () => Controls.Tick(SendDt)),
                 new SyncStep("Controls.ApplyClient", () => Controls.ApplyClient(_dt)),
+                // Held items, anchors, lines and orbs read the carrier's correction for this frame.
+                new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
                 new SyncStep("Anchor.Tick", () => Anchor.Tick(SendDt)),
                 new SyncStep("Anchor.ApplyRemote", () => Anchor.ApplyRemote()),
                 new SyncStep("Mooring.Tick", () => Mooring.Tick(SendDt)),
@@ -513,12 +516,9 @@ namespace SailwindCoop.Runtime
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
                 new SyncStep("HouseDoors.Tick", () => HouseDoors.Tick(_dt)),
                 new SyncStep("Interactions.Tick", () => Interactions.Tick(_dt)),
-                // Before Players.Tick, so the new place goes out in this frame's pose.
+                // Teleport and knockdown settle before the local pose is sent in LateUpdate.
                 new SyncStep("Teleport.Tick", () => Teleport.Tick()),
-                // Before Players.Tick too: a fallen player's place and the Lying flag go out in this frame.
                 new SyncStep("Knockdown.Tick", () => Knockdown.Tick()),
-                new SyncStep("Players.Tick", () => Players.Tick(_dt)),
-                new SyncStep("Players.ApplyRemotes", () => Players.ApplyRemotes()),
                 // After the avatars are placed: the belt copies hang at their hips.
                 new SyncStep("Belts.Tick", () => Belts.Tick(_dt)),
                 new SyncStep("Dice.Tick", () => Dice.Tick()),

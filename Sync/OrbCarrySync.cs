@@ -163,7 +163,8 @@ namespace SailwindCoop.Sync
                 {
                     SlaveOrb(carry);
                     PlayerSync.ApplyCarriedPose(carry.Pose, carry.Orb.transform, carry.Holder, localNow, serverNow);
-                    PlayerSync.ApplyCarriedPose(carry.ParentPose, carry.Orb.totem, carry.Holder, localNow, serverNow);
+                    PlayerSync.ApplyCarriedPose(carry.ParentPose, carry.Orb.totem, carry.Holder, localNow, serverNow,
+                                                followCarrierPosition: false);
                     OrbVisual(carry);
                 }
                 if (!send) continue;
