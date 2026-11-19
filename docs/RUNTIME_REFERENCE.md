@@ -49,8 +49,16 @@ Domain notes:
   real-space on shore and on drop. `Anchor.ExtraFixedUpdate` is suppressed only on the remote copy;
   free physics stays with the host. That method is the only writer of `RopeControllerAnchor.canPull`,
   which the winch needs to take a pull, so `AnchorState` carries the host's value (Protocol 112)
-  and a client writes it into its rope. Every player hull in game 0.39 has exactly one anchor
-  (asset inventory), so binding the first one covers them all.
+  and a client writes it into its rope. Pickup and drop, local or remote, empty the anchor's
+  `groundedCols`: a carried anchor is a trigger and gets no `OnCollisionExit`, so the list kept
+  the seabed or dock and the host dug a guest's dropped anchor in mid-air (`ForgetGround`).
+  The high `anchorDrag` is applied on pickup only when the anchor was set. For a local pickup,
+  the game's `ExtraFixedUpdate` reduces the drag while the anchor is carried. For a guest's
+  pickup, the host suppresses that method and leaves drag alone on subsequent hand poses. On
+  drop or guest disconnect, the host subtracts the decay for the time spent carrying the anchor,
+  with `anchorDragUp` as the minimum (`MeltCarriedDrag`).
+  Every player hull in game 0.39 has exactly one anchor (asset inventory), so binding the first
+  one covers them all.
 - **Held item wall check (client):** an item in a client's hand is a puppet, but its proxy is a
   kinematic trigger placed into the walk copy each frame (`HeldItemProbe`), as the game's held
   proxy is. The game's `PickupableItemCollisionChecker` then sees walls, `GoPointer` pushes a big

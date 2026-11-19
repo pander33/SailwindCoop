@@ -10,6 +10,8 @@ Everyone must update to wire protocol 112.
 
 - Guests can weigh the anchor with the winch. The winch now follows the host's rule for when the
   rope can be pulled.
+- An anchor a guest lets go of falls normally. Pickup and drop clear stale ground contacts, and
+  the host accounts for the drag that would have decayed while the guest carried the anchor.
 - A crate or other cargo in a guest's hands no longer passes through walls, the hull or other
   cargo, and cannot be put down inside them. A crate left inside the hull could roll the boat
   over or spin it.

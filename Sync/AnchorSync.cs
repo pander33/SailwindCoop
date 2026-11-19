@@ -23,8 +23,10 @@ namespace SailwindCoop.Sync
         private readonly SupportPoseBuffer _slave = new SupportPoseBuffer();
         private readonly AnchorStateGate _gate = new AnchorStateGate();
         private static readonly FieldInfo SetField = typeof(Anchor).GetField("set", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo GroundedField = typeof(Anchor).GetField("groundedCols", BindingFlags.Instance | BindingFlags.NonPublic);
         private uint _holder, _nextRequest, _revision;
         private float _sendTimer;
+        private float _carryStart;
         private bool _slaved, _previousKinematic, _previousTrigger;
         private RigidbodyInterpolation _previousInterpolation;
         private CoordFrame _frame;
@@ -110,8 +112,16 @@ namespace SailwindCoop.Sync
             _holder = _net.MyNetId;
             _remoteHeldPose = null;
             _slave.Clear(); _haveFrame = false; _haveLast = false;
+            // The game's ReleaseAnchor gives the dug-in drag only to an anchor torn out of the
+            // ground; carried, it melts in ExtraFixedUpdate, which runs for a local hand.
+            bool wasSet = _anchor.IsSet();
             MirrorSet(false);
-            if (_body != null) { _body.isKinematic = true; _body.drag = _anchor.anchorDrag; }
+            ForgetGround();
+            if (_body != null)
+            {
+                _body.isKinematic = true;
+                if (wasSet) _body.drag = _anchor.anchorDrag;
+            }
             if (_net.Role == Role.Client) SendRequest(true, true);
             else if (_net.Role == Role.Host) SendState(reliable: true);
             Plugin.Logger.LogInfo("[AnchorSync] pickup role=" + _net.Role + " boat=" + _boatId);
@@ -128,6 +138,7 @@ namespace SailwindCoop.Sync
             _holder = 0;
             _remoteHeldPose = null;
             _slave.Clear(); _haveFrame = false; _haveLast = false;
+            ForgetGround();
             if (_collider != null) _collider.isTrigger = false;
             if (_net.Role == Role.Client) { SendRequest(false, true, throwVelocity); EnsureSlaved(false); }
             else if (_net.Role == Role.Host)
@@ -228,8 +239,21 @@ namespace SailwindCoop.Sync
             _holder = msg.Held ? actor : 0;
             _remoteHeldPose = msg.Held ? msg : null;
             _rope.currentLength = msg.RopeLength;
+            bool wasSet = _anchor.IsSet();
             MirrorSet(false);
-            if (_body != null) _body.drag = _anchor.anchorDrag;
+            if (handChanged || !msg.Held) ForgetGround();
+            // Drag as the game has it: the dug-in value only when a set anchor is picked up, then
+            // melting while carried (ExtraFixedUpdate, suppressed here during a guest's carry). Set
+            // on every pose it reached the drop at full strength and held the anchor in the air ~4 s.
+            if (msg.Held && handChanged)
+            {
+                _carryStart = Time.time;
+                if (wasSet && _body != null) _body.drag = _anchor.anchorDrag;
+            }
+            else if (!msg.Held)
+            {
+                MeltCarriedDrag();
+            }
             if (handChanged || !msg.Held) { _slave.Clear(); _haveFrame = false; _haveLast = false; }
             Buffer(msg.Tick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
             if (!LocalHeld)
@@ -330,6 +354,28 @@ namespace SailwindCoop.Sync
             Buffer(msg.Tick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
         }
 
+        /// <summary>Apply the drag decay suppressed in ExtraFixedUpdate during a guest's carry.</summary>
+        private void MeltCarriedDrag()
+        {
+            if (_body == null) return;
+            float melted = _body.drag - Mathf.Max(0f, Time.time - _carryStart) * _anchor.anchorDrag * 0.25f;
+            _body.drag = Mathf.Max(_anchor.anchorDragUp, melted);
+        }
+
+        /// <summary>
+        /// Forget the ground the anchor touched. The game adds to that list on OnCollisionEnter and
+        /// removes on OnCollisionExit; while a hand carries the anchor its collider is a trigger and
+        /// no exit comes. On the host the list then still held the seabed or the dock after a guest
+        /// let go, and ExtraFixedUpdate dug the anchor in where it was let go — in the air — until
+        /// the rope tore it loose seconds later. Emptied on pickup and drop, it fills again when the
+        /// anchor really lands.
+        /// </summary>
+        private void ForgetGround()
+        {
+            try { (GroundedField?.GetValue(_anchor) as System.Collections.IList)?.Clear(); }
+            catch (Exception e) { Plugin.Logger.LogWarning("[AnchorSync] groundedCols boat " + _boatId + ": " + e.Message); }
+        }
+
         private void MirrorSet(bool value)
         {
             ClientSet = value;
@@ -383,6 +429,8 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actor); return; }
             if (_net.Role != Role.Host || actor == 0 || _holder != actor) return;
             _holder = 0; _remoteHeldPose = null; RestoreSlaved(); _haveLast = false;
+            ForgetGround();
+            MeltCarriedDrag();
             if (_body != null) _body.isKinematic = _anchor.IsSet();
             if (Connected && _anchor != null) SendState(reliable: true);
         }
