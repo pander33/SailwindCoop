@@ -2,17 +2,22 @@
 
 All notable user-facing changes are documented in this file.
 
-## [Unreleased]
+## [0.10.0] - 2026-11-19
 
-Everyone must update to wire protocol 113.
+Everyone must update to wire protocol 113. Requires Sailwind 0.40 or 0.40.1.
 
 ### Added
 
 - Any player can pause or resume the shared world from the Escape menu or F8. Opening the
   Escape menu in co-op leaves the world running.
+- F8 Debug has controls for food, water and sleep needs.
 
 ### Fixed
 
+- Players already in a session receive a new guest's avatar choice when that guest joins.
+- Recovering from a knockdown during a world pause restores movement when play can resume.
+- The movement stick no longer triggers diving while the Escape menu is open.
+- The world pause freezes player needs for the whole crew.
 - Guests can weigh the anchor with the winch. The winch now follows the host's rule for when the
   rope can be pulled.
 - An anchor a guest lets go of falls normally. Pickup and drop clear stale ground contacts, and

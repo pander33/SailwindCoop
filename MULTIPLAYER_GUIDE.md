@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.9.0) uses **protocol 111** and supports Sailwind 0.40 and 0.40.1.
+Every machine needs a build with the same protocol number. The current build (0.10.0) uses **protocol 113** and supports Sailwind 0.40 and 0.40.1.
 Earlier releases use different protocols. Some features still await end-to-end in-game verification.
 
 <!--full-->
@@ -14,7 +14,7 @@ The mod comes in two editions that use the same protocol and can play together. 
 edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN, VPN or Steam and
 compares mods when joining. The **full edition** adds
 downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.9.0 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.10.0 (Thunderstore)`. Sections below that apply to one edition say so.
 
 <!--/full-->
 
@@ -203,8 +203,8 @@ Sleep and time advance are shared-world actions.
 - A hit that damages his boat, or water coming over its side, wakes a player asleep by himself.
 - A tavern night taken alone restores the player but does not skip to the morning.
 - Once the screen is dark, press Escape, Activate or Pick Up to leave a shared sleep. World time
-  returns to normal, and the other players continue sleeping individually. If the host has paused,
-  guests can wake while the world stays paused. A collision, running aground or water coming into
+  returns to normal, and the other players continue sleeping individually. If the world is paused,
+  resume it from the menu before leaving shared sleep. A collision, running aground or water coming into
   the hull wakes the whole crew, as in the single-player game.
 - Loose cargo stays where it was on deck while the crew sleeps. Its weight still affects the ship.
 - A player woken by his own hunger or thirst gets up alone. Time stops running fast, and the
@@ -215,11 +215,9 @@ Sleep and time advance are shared-world actions.
 
 Clients should not expect independent time skipping.
 
-Pausing works the same way. When the host opens the game menu, the host's world stops — and so does every
-guest: character control is taken away for the duration and the screen says `Host paused the game`. Guests
-can still look around. Control comes back the moment the host resumes, and also if the connection drops, so
-a lost host can never leave anyone frozen. The same freeze applies while the host is streaming its world to
-someone who is joining.
+Any player can pause or resume the shared world from Escape or F8. During a pause, players can
+open the menu to resume. A brief automatic pause can also occur while a new player receives the
+host's world.
 
 ## Sea, Waves, And Weather
 
@@ -227,7 +225,7 @@ The sea is host-authoritative and identical on every machine.
 
 - Wave shape, size and direction, wind, time of day and the weather cycle all run on the host's clock.
 - The water is drawn at the same instant as the boat, so hull and wave stay in step even on a slow link.
-- The sea stops while the host is paused, and resumes with it.
+- The sea stops while the world is paused, and resumes with it.
 
 If the water ever looks different on one machine, press **Dump water state** (F8 menu, **Settings**) on both machines
 at the same moment and compare the two `debug/water-*.txt` files — they are plain `key = value` text meant to
