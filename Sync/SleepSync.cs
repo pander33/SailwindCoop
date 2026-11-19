@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using LiteNetLib;
@@ -20,10 +21,8 @@ namespace SailwindCoop.Sync
 	public sealed class SleepSync
 	{
 		public static SleepSync Instance { get; private set; }
-		public const float MaxBlackoutSeconds = 45f;
 		public const float FadeSeconds = 2.5f;
-		/// <summary>The game's own sleep time warp.</summary>
-		private const float SleepWarp = 16f;
+		private const float EntranceTimeout = 45f;
 		/// <summary>A personal sleep recovers as if time ran this fast for the sleeper alone.</summary>
 		public const float PersonalWarp = 4f;
 		private const float PresencePeriod = 0.25f, PresenceResend = 2f;
@@ -43,6 +42,7 @@ namespace SailwindCoop.Sync
 
 		private readonly CoopNet _net;
 		private readonly SleepTransitionState _order = new SleepTransitionState();
+		private readonly SharedSleepTiming _timing = new SharedSleepTiming();
 		private readonly Dictionary<string, SleepAddress> _entrances = new Dictionary<string, SleepAddress>();
 		private readonly Dictionary<string, SleepAddress> _deferredEntrances = new Dictionary<string, SleepAddress>();
 		private readonly Dictionary<uint, byte> _presence = new Dictionary<uint, byte>();
@@ -50,7 +50,7 @@ namespace SailwindCoop.Sync
 		private SleepAddress _address = new SleepAddress();
 		private SleepRequestMsg _pendingEntrance;
 		private uint _nextRequest;
-		private float _entranceRetryAt, _entrancePendingAge, _phaseAge, _duration;
+		private float _entranceRetryAt, _entrancePendingAge;
 		private float _presenceAt, _presenceResendAt, _personalAge, _recoveryAge;
 		private int _sentPresence = -1;
 		// _blackout: the shared sleep is shown here, and only then are the game's own sleep flags
@@ -60,17 +60,18 @@ namespace SailwindCoop.Sync
 		// The local player woke by himself (hunger, thirst) while the shared sleep is still the
 		// host's last word: it must not be shown to him again.
 		private bool _leftShared;
-		private float _normalTimeScale, _normalFixedStep;
-		private bool _repairClock;
+		private float _preWarpTimeScale, _normalTimeScale, _normalMaximumStep;
+		private bool _repairClock, _restoreLookAfterMenu;
 		private bool _presentationPending;
 		private Coroutine _fade;
 		public bool ClientAsleep => _blackout || _personal;
-		/// <summary>Asleep or lying in a bed: the needs of such a player are the mod's to count.</summary>
-		internal bool AdjustsNeeds => _blackout || _personal || GameState.inBed != null;
-		/// <summary>A shared sleep ends for everyone at once: nobody gets out of bed during it.</summary>
+		/// <summary>Personal sleep and lying awake use local needs rules.</summary>
+		internal bool AdjustsNeeds => !_blackout && (_personal || GameState.inBed != null);
+		internal bool IsWarpingWorld => _worldWarp;
+		/// <summary>Only SleepSync can release a bed during shared sleep so the host gets the wake.</summary>
 		internal bool HoldsBed => _blackout;
 		/// <summary>Seconds since the shared sleep changed phase; for diagnostics.</summary>
-		internal float PhaseAge => _phaseAge;
+		internal float PhaseAge => _timing.Age;
 		internal bool Connected => _net.State == LinkState.Connected;
 		internal bool Applying => _applying;
 		public string SleepText => _order.Active ? "shared " + _order.Phase : _personal ? "personal" : "awake";
@@ -128,14 +129,31 @@ namespace SailwindCoop.Sync
 			if (!_blackout || _order.Phase != SleepPhase.Sleeping) return;
 			if (ownNeeds)
 			{
-				Log("woken by own needs, leaves the shared sleep");
-				_leftShared = true;
-				if (_net.Role == Role.Host) HostEnd(SleepPhase.Cancel, "host woke by own needs");
-				else EndEffects(true);
+				WakeLocal("own needs");
 				return;
 			}
 
 			if (_net.Role == Role.Host) HostEnd(SleepPhase.Wake, "boat emergency");
+		}
+
+		private void WakeLocal(string why)
+		{
+			Log("leaving the shared sleep: " + why);
+			_leftShared = true;
+			if (_net.Role == Role.Host) HostEnd(SleepPhase.Cancel, why);
+			else
+			{
+				// Tell the host immediately, including when its world is paused.
+				try { SendPresence(0); }
+				finally { EndEffects(true); }
+			}
+		}
+
+		internal bool WakeFromInput()
+		{
+			if (!_blackout || !_timing.WakeDelayElapsed || GameMenuHolds()) return false;
+			WakeLocal("wake input");
+			return true;
 		}
 
 		private void Log(string text)
@@ -272,10 +290,12 @@ namespace SailwindCoop.Sync
 			}
 
 			if (!fresh) return;
-			bool changed = !_order.Matches(state.CycleActor, state.CycleId) || _order.Phase != state.Phase;
+			bool newCycle = !_order.Matches(state.CycleActor, state.CycleId);
+			if (newCycle) _leftShared = false;
+			bool changed = newCycle || _order.Phase != state.Phase;
 			_order.Load(state.Revision, state.CycleActor, state.CycleId, state.Phase);
 			_address = state.Address;
-			if (changed) _phaseAge = 0f;
+			if (changed) _timing.Reset();
 			_presentationPending = true;
 			if (!_order.Expired && PresentationReady())
 			{
@@ -291,7 +311,8 @@ namespace SailwindCoop.Sync
 			_order.Transition(_net.MyNetId, cycle, SleepPhase.Begin, 0, 0);
 			_order.Transition(_net.MyNetId, cycle, SleepPhase.Sleeping, _net.MyNetId, cycle);
 			_address = address;
-			_phaseAge = 0f;
+			_timing.Reset();
+			_preWarpTimeScale = Time.timeScale;
 			Log("shared sleep starts: source=" + address.Source + " timeskip=" + address.Timeskip);
 			ApplyPhase();
 			_net.Broadcast(State(), DeliveryMethod.ReliableOrdered);
@@ -303,15 +324,18 @@ namespace SailwindCoop.Sync
 		private void HostEnd(SleepPhase phase, string why)
 		{
 			if (!_order.Active) return;
-			Log("shared sleep ends: " + phase + ", " + why + ", slept=" + _duration.ToString("F2") + " real=" + _phaseAge.ToString("F1") + "s");
+			Log("shared sleep ends: " + phase + ", " + why + ", slept=" + _timing.Hours.ToString("F2") + " real=" + _timing.Age.ToString("F1") + "s");
 			_order.Transition(_net.MyNetId, NextRequest(), phase, _order.CycleActor, _order.CycleId);
-			_phaseAge = 0f;
+			_timing.Reset();
 			// Everyone is put out of bed; until the clients report that, their old "in bed" must
 			// not start the next sleep.
 			_presence.Clear();
-			ApplyPhase();
-			_net.Broadcast(State(), DeliveryMethod.ReliableOrdered);
-			if (phase != SleepPhase.Cancel) _net.BroadcastNotice(GameplayNoticeKind.SleepEnded, 0);
+			try { ApplyPhase(); }
+			finally
+			{
+				_net.Broadcast(State(), DeliveryMethod.ReliableOrdered);
+				if (phase != SleepPhase.Cancel) _net.BroadcastNotice(GameplayNoticeKind.SleepEnded, 0);
+			}
 		}
 
 		private void ApplyPhase()
@@ -345,9 +369,9 @@ namespace SailwindCoop.Sync
 			bool startingPresentation = !_blackout, wasPersonal = _personal;
 			_blackout = true;
 			_personal = false;
+			GameState.sleeping = true;
 			if (startingPresentation)
 			{
-				_duration = 0f;
 				SetNativeField("currentSleepDuration", 0f);
 				if (!wasPersonal)
 				{
@@ -377,17 +401,42 @@ namespace SailwindCoop.Sync
 
 		private void StopWarp()
 		{
-			if (!_worldWarp) return;
+			if (!_worldWarp)
+			{
+				// The world can stall during the fade before StartWarp takes over the clock.
+				if (_preWarpTimeScale > 0f && Time.timeScale <= 0f && !PauseHolds() && !GameMenuHolds())
+					Time.timeScale = _preWarpTimeScale;
+				_preWarpTimeScale = 0f;
+				return;
+			}
 			if (PauseHolds()) CoopBehaviour.Instance.Pause.SetResumeTimeScale(_normalTimeScale);
-			else if (Time.timeScale > 0f) Time.timeScale = _normalTimeScale;
+			else if (!GameMenuHolds() || Time.timeScale > 0f) Time.timeScale = _normalTimeScale;
 			_repairClock = true;
-			Time.fixedDeltaTime = _normalFixedStep;
+			Time.maximumDeltaTime = _normalMaximumStep;
 			_worldWarp = false;
+		}
+
+		private void StartWarp()
+		{
+			_preWarpTimeScale = 0f;
+			_normalTimeScale = Time.timeScale;
+			_normalMaximumStep = Time.maximumDeltaTime;
+			// A 222 ms physics step can throw a boat against its mooring, cargo or the seabed.
+			// Keep the regular step and cap how many steps Unity can catch up in one frame.
+			Time.maximumDeltaTime = SharedSleepTiming.FrameBudget(Time.fixedDeltaTime, _normalMaximumStep);
+			Time.timeScale = SharedSleepTiming.Warp;
+			_worldWarp = true;
 		}
 
 		public void Tick(float dt)
 		{
 			RepairClock();
+			if (_restoreLookAfterMenu && !GameMenuHolds())
+			{
+				_restoreLookAfterMenu = false;
+				if (PresentationReady() && !ClientAsleep && !GameState.recovering && GameState.inBed == null)
+					MouseLook.ToggleMouseLook(true);
+			}
 			if (!Connected)
 			{
 				if (_order.Active || _blackout || _personal) Clear();
@@ -412,13 +461,14 @@ namespace SailwindCoop.Sync
 			// Not behind the pause check below: a client's recovery runs on its own clock while the
 			// host's world is stopped. With the own clock stopped the game's recovery waits too.
 			if (PresentationReady() && Time.timeScale > 0f) TickRecovery(dt);
+			if (PresentationReady()) TickShared(dt);
 			if (Paused() || !PresentationReady()) return;
 
 			if (_pendingEntrance != null)
 			{
 				_entrancePendingAge += dt;
 				_entranceRetryAt += dt;
-				if (_entrancePendingAge >= MaxBlackoutSeconds)
+				if (_entrancePendingAge >= EntranceTimeout)
 				{
 					_order.ExpireEntrance(_pendingEntrance.RequestId);
 					_pendingEntrance = null;
@@ -432,28 +482,33 @@ namespace SailwindCoop.Sync
 
 			TickPersonal(dt);
 			TickPresence(dt);
+		}
 
+		private void TickShared(float dt)
+		{
 			if (!_order.Active || _order.Expired || _presentationPending) return;
-			_phaseAge += dt;
-			if (_phaseAge >= MaxBlackoutSeconds)
+			bool paused = PauseHolds() || HostPauseHolds() || GameMenuHolds();
+			_timing.Advance(dt, paused);
+			if (_blackout && (GameInput.GetKeyDown(InputName.Activate) || GameInput.GetKeyDown(InputName.PickUp) ||
+			                  OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
+			                  OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger)) && WakeFromInput()) return;
+
+			// Network liveness still matters when the last snapshot reported a pause.
+			if (_net.Role == Role.Client && _timing.LostHostClock(CoopBehaviour.Instance.Env.SecondsSinceHostState))
 			{
 				Plugin.Logger.LogWarning("[SleepSync] role=" + _net.Role + " cycle=" + _order.CycleActor + "/" +
-				                         _order.CycleId + " timeout");
-				if (_net.Role == Role.Host) HostEnd(SleepPhase.Wake, "timeout");
-				else
-				{
-					_order.Expire();
-					EndEffects(true);
-				}
-
+				                         _order.CycleId + " stopped receiving the host clock");
+				_order.Expire();
+				if (_blackout) WakeLocal("host clock snapshots timed out");
 				return;
 			}
 
+			if (paused) return;
 			if (_order.Phase != SleepPhase.Sleeping || _leftShared) return;
 			// The game's own sleep for everyone: each player is asleep for his copy of the game.
 			if (!GameState.sleeping) GameState.sleeping = true;
 
-			if (_phaseAge < 3f) return;
+			if (_timing.Age < SharedSleepTiming.FadeInSeconds) return;
 			GameState.eyesFullyClosed = true;
 			// The game's warning wakes a hungry or thirsty sleeper only once in a few minutes. A
 			// player who lay down again right after it would sleep until he passes out.
@@ -464,24 +519,26 @@ namespace SailwindCoop.Sync
 			}
 
 			if (_net.Role != Role.Host) return;
-			if (!_worldWarp)
+			if (!_worldWarp && Time.timeScale > 0f)
 			{
-				_normalTimeScale = Time.timeScale;
-				_normalFixedStep = Time.fixedDeltaTime;
-				Time.timeScale = SleepWarp;
-				Time.fixedDeltaTime = _normalFixedStep * 10f;
-				_worldWarp = true;
+				StartWarp();
+				return;
 			}
 
+			float hour = Sun.sun != null && Time.timeScale > 0f ? Sun.sun.globalTime : float.NaN;
+			if (_timing.ObserveHostClock(dt, hour))
+			{
+				HostEnd(SleepPhase.Wake, "world clock stalled");
+				return;
+			}
 			if (Sun.sun == null) return;
-			_duration += dt * Time.timeScale * Sun.sun.timescale;
 			bool tavern = _address.Source == SleepSource.Tavern;
 			bool done = tavern
-				? Sun.sun.localTime > 7f && Sun.sun.localTime < 10f && _duration > 3.3f
-				: _duration > 4.5f;
+				? Sun.sun.localTime > 7f && Sun.sun.localTime < 10f && _timing.Hours > 3.3f
+				: _timing.Hours > 4.5f;
 			// Like the game: at sea nobody sleeps longer than needed.
 			if (!done && !_address.Timeskip && CrewRested()) done = true;
-			if (done) HostEnd(SleepPhase.Wake, tavern ? "morning" : _duration > 4.5f ? "slept long enough" : "crew rested");
+			if (done) HostEnd(SleepPhase.Wake, tavern ? "morning" : _timing.Hours > 4.5f ? "slept long enough" : "crew rested");
 		}
 
 		/// <summary>
@@ -519,7 +576,7 @@ namespace SailwindCoop.Sync
 
 			// A bed and an open game menu hold the look and the control for their own reasons.
 			if (GameState.inBed != null) return;
-			if (GameState.inCursorMenu && CoopBehaviour.Instance?.CoopMenuOpen != true) return;
+			if (GameMenuHolds()) return;
 			MouseLook.ToggleMouseLook(true);
 			if (!HostPauseHolds() && !PauseHolds()) Refs.SetPlayerControl(true);
 		}
@@ -557,9 +614,7 @@ namespace SailwindCoop.Sync
 			if (_net.Role == Role.Client)
 			{
 				if (mine == _sentPresence && _presenceResendAt < PresenceResend) return;
-				_sentPresence = mine;
-				_presenceResendAt = 0f;
-				_net.Broadcast(new SleepPresenceMsg { Flags = mine }, DeliveryMethod.ReliableOrdered);
+				SendPresence(mine);
 				return;
 			}
 
@@ -595,6 +650,13 @@ namespace SailwindCoop.Sync
 				Source = tavern && allTimeskip ? SleepSource.Tavern : SleepSource.Exhaustion,
 				Timeskip = allTimeskip
 			});
+		}
+
+		private void SendPresence(byte flags)
+		{
+			_net.Broadcast(new SleepPresenceMsg { Flags = flags }, DeliveryMethod.ReliableOrdered);
+			_sentPresence = flags;
+			_presenceResendAt = 0f;
 		}
 
 		private byte LocalPresence()
@@ -639,24 +701,27 @@ namespace SailwindCoop.Sync
 			return true;
 		}
 
-		/// <summary>
-		/// Runs after the game's PlayerNeeds.LateUpdate and replaces what it did to the sleeping
-		/// player. Sleep need: the game's formula at the speed of the sleep in progress; lying awake
-		/// it stands still. Hunger and thirst: frozen in a personal sleep and lying awake; in a
-		/// shared one a client drains them as fast as the host, whose clock is the only one warped.
-		/// </summary>
+		/// <summary>Shared sleep uses the host's measured simulation rate for everyone's native needs.</summary>
+		internal static float NeedsDeltaTime()
+		{
+			var sleep = Instance;
+			if (sleep?._blackout != true) return Time.deltaTime;
+			if (sleep._net.Role == Role.Client)
+			{
+				var env = CoopBehaviour.Instance.Env;
+				return env.HasRecentHostState ? Time.unscaledDeltaTime * env.HostTimeScale : 0f;
+			}
+			return Time.timeScale > 0f ? Time.deltaTime : 0f;
+		}
+
+		/// <summary>Recover sleep locally and preserve nutrition while sleeping alone or lying awake.</summary>
 		internal void AdjustNeeds(NeedsSnapshot before)
 		{
-			if (!AdjustsNeeds) return;
-			if ((_blackout && _order.Expired) || Sun.sun == null) return;
-			bool paused = HostPauseHolds() || PauseHolds();
-			float hostScale = _net.Role == Role.Host ? Time.timeScale : CoopBehaviour.Instance.Env.HostTimeScale;
-			float scale = _blackout ? hostScale : !_personal || Time.timeScale <= 0f ? 0f : PersonalWarp;
-			if (paused) scale = 0f;
-			float step = Time.unscaledDeltaTime * Sun.sun.timescale;
+			if (!AdjustsNeeds || Sun.sun == null) return;
+			float scale = _personal && Time.timeScale > 0f && !HostPauseHolds() && !PauseHolds() ? PersonalWarp : 0f;
 			bool tavern = GameState.sleepingInTavern;
 
-			float amount = step * 8f * scale;
+			float amount = Time.unscaledDeltaTime * Sun.sun.timescale * scale * 8f;
 			if (tavern) amount *= 4f;
 			float debt = before.Debt;
 			if (debt < 100f)
@@ -670,63 +735,54 @@ namespace SailwindCoop.Sync
 
 			// A tavern night feeds the sleeper: the game has just refilled everything.
 			if (tavern) return;
-			if (!_blackout)
-			{
-				PlayerNeeds.food = before.Food;
-				PlayerNeeds.foodDebt = before.FoodDebt;
-				PlayerNeeds.water = before.Water;
-				PlayerNeeds.protein = before.Protein;
-				PlayerNeeds.vitamins = before.Vitamins;
-				return;
-			}
-
-			// The rates are those of PlayerNeeds.LateUpdate (game 0.39).
-			float missed = step * (scale - Time.timeScale);
-			if (_net.Role != Role.Client || missed <= 0f) return;
-			float foodAndWater = missed * NeedsFrameRatePatches.ConsumptionScale;
-			if (PlayerNeeds.food > 0f) PlayerNeeds.food = Mathf.Max(0f, PlayerNeeds.food - foodAndWater * 3f);
-			else PlayerNeeds.foodDebt = Mathf.Max(0f, PlayerNeeds.foodDebt - foodAndWater * 5f);
-			PlayerNeeds.water = Mathf.Max(0f, PlayerNeeds.water - foodAndWater * 4f);
-			PlayerNeeds.vitamins = Mathf.Max(0f, PlayerNeeds.vitamins - missed * 0.2f);
-			PlayerNeeds.protein = Mathf.Max(0f, PlayerNeeds.protein - missed * 0.2f);
-			PlayerNeeds.alcohol = Mathf.Max(0f, PlayerNeeds.alcohol - missed * 12f);
+			PlayerNeeds.food = before.Food;
+			PlayerNeeds.foodDebt = before.FoodDebt;
+			PlayerNeeds.water = before.Water;
+			PlayerNeeds.protein = before.Protein;
+			PlayerNeeds.vitamins = before.Vitamins;
 		}
 
 		/// <summary>Ends whatever sleep is shown here. A shared sleep also puts the player out of
 		/// bed, so the crew does not fall asleep again at once; a personal one leaves him lying.</summary>
 		private void EndEffects(bool leaveBed)
 		{
-			bool hadEffects = _blackout || _personal;
+			bool wasShared = _blackout;
+			bool hadEffects = wasShared || _personal;
 			_applying = true;
 			try
 			{
 				StopWarp();
 
-				if (_blackout)
+				_blackout = _personal = _recovery = false;
+				global::Sleep.timeskipSleep = false;
+				_presenceAt = PresencePeriod;
+				if (wasShared)
 				{
 					GameState.sleeping = false;
 					GameState.eyesFullyClosed = false;
 				}
 
-				if (hadEffects)
+				if (hadEffects) GameState.sleepingInTavern = false;
+				try
 				{
-					GameState.sleepingInTavern = false;
-					if (GameState.inBed == null) MouseLook.ToggleMouseLook(true);
-					SetNativeField("sleepCooldown", 6f);
+					if (leaveBed && GameState.inBed != null && global::Sleep.instance != null)
+						global::Sleep.instance.LeaveBed();
 				}
-
-				if (leaveBed && GameState.inBed != null && global::Sleep.instance != null)
-					global::Sleep.instance.LeaveBed();
-
-				global::Sleep.timeskipSleep = false;
-				_blackout = _personal = _recovery = false;
-				_presenceAt = PresencePeriod;
-
-				if (hadEffects) Fade(false);
-				if (hadEffects && !HostPauseHolds() && !PauseHolds() && GameState.inBed == null &&
-				    !(GameState.inCursorMenu && CoopBehaviour.Instance?.CoopMenuOpen != true))
-					Refs.SetPlayerControl(true);
-				if (HostPauseHolds() || PauseHolds()) Refs.SetPlayerControl(false);
+				finally
+				{
+					if (hadEffects)
+					{
+						Fade(false);
+						if (GameState.inBed == null)
+						{
+							_restoreLookAfterMenu = GameMenuHolds();
+							MouseLook.ToggleMouseLook(!_restoreLookAfterMenu);
+						}
+					}
+					if (HostPauseHolds() || PauseHolds()) Refs.SetPlayerControl(false);
+					else if (hadEffects && GameState.inBed == null) Refs.SetPlayerControl(true);
+					if (hadEffects) SetNativeField("sleepCooldown", 6f);
+				}
 			}
 			finally
 			{
@@ -744,6 +800,7 @@ namespace SailwindCoop.Sync
 		{
 			EndEffects(false);
 			_order.Clear();
+			_timing.Reset();
 			_entrances.Clear();
 			_deferredEntrances.Clear();
 			_presence.Clear();
@@ -761,26 +818,49 @@ namespace SailwindCoop.Sync
 
 		private bool Paused()
 			=> PauseHolds() || HostPauseHolds() || (_net.Role == Role.Host && Time.timeScale <= 0f) ||
-			   (GameState.inCursorMenu && CoopBehaviour.Instance?.CoopMenuOpen != true);
+			   GameMenuHolds();
 
 		private void Fade(bool sleeping)
 		{
 			var behaviour = CoopBehaviour.Instance;
 			if (behaviour == null) return;
 			if (_fade != null) behaviour.StopCoroutine(_fade);
-			_fade = behaviour.StartCoroutine(Blackout.FadeTo(sleeping ? 1f : 0f, FadeSeconds));
+			_fade = behaviour.StartCoroutine(FadeScreen(sleeping ? 1f : 0f));
+		}
+
+		private static IEnumerator FadeScreen(float target)
+		{
+			var camera = Camera.main;
+			var fade = camera == null ? null : camera.GetComponent<OVRScreenFade>();
+			if (fade == null) yield break;
+			float initial = fade.currentAlpha;
+			for (float t = 0f; t < FadeSeconds && fade != null; t += Time.unscaledDeltaTime)
+			{
+				fade.SetFadeLevel(Mathf.Lerp(initial, target, t / FadeSeconds));
+				Blackout.currentAlpha = fade.currentAlpha;
+				yield return null;
+			}
+			if (fade == null) yield break;
+			fade.SetFadeLevel(target);
+			Blackout.currentAlpha = target;
 		}
 
 		private void RepairClock()
 		{
 			if (!_repairClock || _worldWarp || PauseHolds()) return;
-			if (GameState.inCursorMenu && CoopBehaviour.Instance?.CoopMenuOpen != true) return;
-			if (Time.timeScale == SleepWarp) Time.timeScale = _normalTimeScale;
+			if (GameMenuHolds()) return;
+			if (Time.timeScale == SharedSleepTiming.Warp) Time.timeScale = _normalTimeScale;
 			_repairClock = false;
 		}
 
 		private static bool PauseHolds() => CoopBehaviour.Instance?.Pause?.Active == true;
 		private static bool HostPauseHolds() => CoopBehaviour.Instance?.HostPause?.Frozen == true;
+		private static bool GameMenuHolds()
+		{
+			var coop = CoopBehaviour.Instance;
+			return coop?.GameMenu?.WorldPauseOpen == true ||
+			       (GameState.inCursorMenu && coop?.CoopMenuOpen != true);
+		}
 
 		private static bool CurrentBoatMoored() => GameState.currentBoat != null &&
 		                                           GameState.currentBoat.parent.GetComponent<BoatMooringRopes>()

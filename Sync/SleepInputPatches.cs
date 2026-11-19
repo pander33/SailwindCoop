@@ -17,7 +17,9 @@ namespace SailwindCoop.Sync
             Install(harmony, hooks, typeof(global::Sleep), "FallAsleep", Type.EmptyTypes, nameof(PreFallAsleep), null);
             Install(harmony, hooks, typeof(global::Sleep), "WakeUp", Type.EmptyTypes, nameof(PreWakeUp), null);
             Install(harmony, hooks, typeof(global::Sleep), "LeaveBed", Type.EmptyTypes, nameof(PreLeaveBed), nameof(PostLeaveBed));
-            Install(harmony, hooks, typeof(global::Sleep), "Update", Type.EmptyTypes, nameof(PreSleepLoop), nameof(PostSleepLoop));
+            hooks.Install(typeof(global::Sleep), "Update", Type.EmptyTypes, target => harmony.Patch(target,
+                prefix: Callback(nameof(PreSleepLoop)), finalizer: Callback(nameof(EndSleepLoop))));
+            Install(harmony, hooks, typeof(StartMenu), "GameToSettings", Type.EmptyTypes, nameof(PreOpenGameMenu), null);
             hooks.Install(typeof(Tavern), "ClickSleepButton", Type.EmptyTypes, target => harmony.Patch(target,
                 prefix: Callback(nameof(PreTavern)), postfix: Callback(nameof(PostInput)), finalizer: Callback(nameof(FinishInput))));
             Install(harmony, hooks, typeof(GPButtonOnsenEntrance), "OnActivate", Type.EmptyTypes, nameof(PreEntrance), nameof(PostEntrance));
@@ -109,7 +111,14 @@ namespace SailwindCoop.Sync
         // emergency (collision, running aground, water coming in). SleepSync tells them apart by this.
         private static bool _inSleepLoop;
         private static void PreSleepLoop() { _inSleepLoop = true; }
-        private static void PostSleepLoop() { _inSleepLoop = false; }
+        private static Exception EndSleepLoop(Exception __exception) { _inSleepLoop = false; return __exception; }
+
+        private static bool PreOpenGameMenu()
+        {
+            try { if (Active && SleepSync.Instance.WakeFromInput()) return false; }
+            catch (Exception error) { Warn(nameof(PreOpenGameMenu), error); }
+            return true;
+        }
 
         // PlayerNeedsUI.PlayWarning wakes the player whose own hunger or thirst is low. That is his
         // wake-up alone, not the crew's.

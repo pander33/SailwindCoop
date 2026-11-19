@@ -100,13 +100,13 @@ Domain notes:
 - **Shipyard:** `RefitRequest`/`RefitState` (102/103) carry committed sails, parts, cleaning and
   repair. Payment and UI are not replayed; the local preview stays out of the shared world and save.
 - **Sleep:** two forms (`Sync/SleepSync.cs`). The game's `FallAsleep` only
-  starts a *personal* sleep: dark screen, sleep need at a quarter of the game's sleep speed
-  (`PersonalWarp` 4 against 16), hunger and thirst frozen, no time warp, and
+  starts a *personal* sleep: dark screen, sleep need recovered at `PersonalWarp` (4), hunger and
+  thirst frozen, no time warp, and
   **`GameState.sleeping` stays false** (on the host that flag freezes other players' boats and
   items). It ends when the player is rested or gets up, not by duration; a player lying awake in
   a bed keeps all needs unchanged (`AdjustsNeeds`). Clients report `SleepPresence` (112: in bed /
   wants / rested / tavern / timeskip); the host alone starts the *shared* sleep (blackout for all,
-  `timeScale` 16) when every loaded player is in bed or asleep — rested or not, except a fully
+  `timeScale` 4) when every loaded player is in bed or asleep — rested or not, except a fully
   rested crew where time cannot be skipped — and alone ends it; every player then gets the game's
   sleep flags. The game wakes only its own sleeper, so for a personal sleep the host sends
   `GameplayNoticeKind.BoatAlarm` (a damaging `BoatDamage.Impact`, or `Overflow`) with the boat
@@ -119,8 +119,30 @@ Domain notes:
   `[SleepSync]` log lines carry the player's needs at every transition. A native `WakeUp` from outside `Sleep.Update` on the host
   (collision, aground, water) ends the shared sleep. Clients send
   no sleep transitions; `SleepRequest` carries only the onsen entrance and the baseline request.
-  `PlayerNeeds.LateUpdate` is post-processed by `AdjustNeeds`; its drain rates are copied from
-  game 0.39 (unchanged in 0.40).
+  `PlayerNeeds.LateUpdate` uses the host's simulation rate for passive needs during shared sleep.
+  The environment snapshot sends the ratio of simulated to real time measured over its sample
+  window, including frames Unity capped. Guests apply it in the native needs calculation, before
+  the game's caps and fainting checks. Guests freeze passive needs after five seconds without
+  a snapshot and resume them when a new one arrives. `AdjustNeeds` handles personal sleep and lying awake.
+  The host keeps the normal 22 ms physics step and caps catch-up at eight steps per frame, or the
+  game's existing lower cap. The former 222 ms step could send the hull into a collider under
+  buoyancy or mooring forces. `SharedSleepTiming` tracks hours advanced by the host's Sun, including
+  midnight. The host wakes the crew after 15 seconds without world-clock progress. A guest can
+  leave after 180 seconds without host clock snapshots, including when the last snapshot said
+  the host was paused. A pause snapshot stops blocking guest movement when it is 180 seconds old.
+  Fresh snapshots sustain an intentional pause. The host's stall timer suspends during an
+  intentional pause, including while the F8 window covers the game's settings. Wake and
+  disconnect restore the host's clock and frame budget. If the clock
+  stopped during the fade-in with no pause owner, wake restores the pre-sleep rate. The sleep
+  fade uses unscaled time so it can clear on a frozen world. Escape or the native bed controls
+  leave a shared sleep after three real seconds, even if the host is paused. The guest reports
+  this immediately with `SleepPresence`. A paused host processes the wake when it resumes,
+  cancels the warp and lets the remaining players continue their personal sleep.
+  `ItemRigidbody.FixedUpdate` puts loose cargo aboard into kinematic mode before physics while the
+  local player is in bed or in shared sleep. The item sync applies the same rule when releasing a
+  proxy. Cargo keeps its colliders and weight, and the drop pose's overlap correction is capped
+  when the cargo becomes dynamic again. The native item step decides when to make the body
+  dynamic again, and the mod restores the previous continuous collision mode at that point.
 - **Recovery:** the game's own (`Recovery.RecoverPlayer`: passed out, the Recover button of the
   Escape menu, the world border). `Sync/RecoveryPatches.cs`. The host's recovery takes
   the boat to the port with whoever is aboard; when `RecoverBoat` is done (its enumerator is

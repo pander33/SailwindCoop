@@ -26,7 +26,8 @@ namespace SailwindCoop.Sync
     /// его при закрытии; открывшись во время нашей паузы, оно запомнило бы ноль и вернуло бы ноль —
     /// клиент остался бы замороженным насовсем, уже без нашего участия.
     ///
-    /// Управление возвращается, как только хост снял паузу ИЛИ пропала связь: остаться замороженным
+    /// Управление возвращается, как только хост снял паузу, пропала связь или истекли
+    /// 180 секунд без обновлений среды: остаться замороженным
     /// из-за последнего дошедшего снапшота «хост на паузе» — это софтлок, а не верность хосту.
     /// </summary>
     public sealed class HostPauseSync
@@ -45,6 +46,7 @@ namespace SailwindCoop.Sync
             bool want = _net.Role == Role.Client &&
                         _net.State == LinkState.Connected &&
                         env != null && env.HasHostState &&
+                        env.SecondsSinceHostState < SharedSleepTiming.HostSnapshotTimeout &&
                         env.HostTimeScale <= 0.0001f;
             SetFrozen(want);
         }

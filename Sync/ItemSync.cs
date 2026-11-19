@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using SailwindCoop.Net;
 using UnityEngine;
@@ -638,7 +639,8 @@ namespace SailwindCoop.Sync
                 var body = irb != null ? irb.GetBody() : null;
                 if (body != null)
                 {
-                    if (body.isKinematic != puppet)
+                    if (!puppet && HoldsSleepingCargo(item)) FreezeCargoBody(body);
+                    else if (body.isKinematic != puppet)
                     {
                         SetKinematic(body, puppet);
                         if (puppet) { body.velocity = Vector3.zero; body.angularVelocity = Vector3.zero; }
@@ -2504,9 +2506,49 @@ namespace SailwindCoop.Sync
                 return;
             }
             body.isKinematic = false;
+            if (RestoreCargoCollisionMode(body)) return;
             if (body.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative &&
                 body.GetComponent<MeshCollider>() != null)
                 body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        }
+
+        private sealed class CargoCollisionMode
+        {
+            internal CollisionDetectionMode Value;
+        }
+
+        private static readonly ConditionalWeakTable<Rigidbody, CargoCollisionMode> SleepingCargoModes =
+            new ConditionalWeakTable<Rigidbody, CargoCollisionMode>();
+
+        private static bool HoldsSleepingCargo(ShipItem item)
+            => (GameState.inBed != null || GameState.sleeping) && SleepSync.Instance?.Connected == true &&
+               item != null && item.held == null && item.currentActualBoat != null && IsCargo(item);
+
+        internal static void FreezeSleepingCargo(ItemRigidbody proxy, Rigidbody body)
+        {
+            if (!body.isKinematic && HoldsSleepingCargo(proxy.GetShipItem())) FreezeCargoBody(body);
+        }
+
+        private static void FreezeCargoBody(Rigidbody body)
+        {
+            if (body.isKinematic) return;
+            var mode = body.collisionDetectionMode;
+            if ((mode == CollisionDetectionMode.Continuous || mode == CollisionDetectionMode.ContinuousDynamic) &&
+                !SleepingCargoModes.TryGetValue(body, out _))
+                SleepingCargoModes.Add(body, new CargoCollisionMode { Value = mode });
+            body.velocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            SetKinematic(body, true);
+        }
+
+        // Vanilla decides when an item can move again. Restore CCD only after it is dynamic.
+        internal static bool RestoreCargoCollisionMode(Rigidbody body)
+        {
+            if (body == null || body.isKinematic || !SleepingCargoModes.TryGetValue(body, out var original)) return false;
+            SleepingCargoModes.Remove(body);
+            if (body.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative)
+                body.collisionDetectionMode = original.Value;
+            return true;
         }
 
         private static void MoveProxyToItem(ShipItem item, bool kinematic, Vector3 vel)
@@ -2539,12 +2581,18 @@ namespace SailwindCoop.Sync
                     pt.position = pos;
                     pt.rotation = rot;
                 }
-                SetKinematic(body, kinematic);
+                bool sleepingCargo = !kinematic && HoldsSleepingCargo(item);
+                if (sleepingCargo) FreezeCargoBody(body);
+                else SetKinematic(body, kinematic);
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
                 // detection off entirely; restore it when the item is freed to local physics. Free
                 // cargo on a client stays solid as an obstacle for the hand (_solidCargo).
                 body.detectCollisions = !kinematic || solid;
+                // The drop pose can overlap the pile. Keep the correction speed capped even
+                // when the body will only become dynamic after someone gets out of bed.
+                if (!kinematic) body.maxDepenetrationVelocity = SettleDepenetration;
+                if (sleepingCargo) return;
                 if (kinematic)
                 {
                     body.velocity = Vector3.zero;
@@ -2552,10 +2600,6 @@ namespace SailwindCoop.Sync
                 }
                 else
                 {
-                    // A dropped item is snapped to the authoritative drop point, which may overlap other
-                    // items whose local pile differs from the sender's. Re-enabling collisions then makes
-                    // Unity eject it at high speed. Cap the depenetration speed and clamp the throw velocity.
-                    body.maxDepenetrationVelocity = SettleDepenetration;
                     body.velocity = Vector3.ClampMagnitude(vel, MaxDropSpeed);
                     body.angularVelocity = Vector3.zero;
                 }

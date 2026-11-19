@@ -531,7 +531,7 @@ namespace SailwindCoop.Net
         public byte CrestWavesUp;
         public float CrestTargetInertiaAngle;
         public float CrestWindWavesWeight;
-        // Time.timeScale хоста: 0 на JoinPause и в его меню, тогда часы воды у клиента стоят.
+        // Host simulation rate. Zero marks a world pause. During shared sleep this is measured.
         public float HostTimeScale;
         // The two inputs of OceanUpdaterCrest.DCTInertiaUpdate that belong to the local player:
         // the inertia waves scale with GameState.distanceToLand and drop to a quarter while

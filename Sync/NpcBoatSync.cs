@@ -465,8 +465,8 @@ namespace SailwindCoop.Sync
         /// Our prefix skips <c>UpdateKinematic</c> for a body <c>BoatSync</c> drives, but HarmonyX still
         /// runs every other mod's postfix. Towable Boats' postfix sets <c>isKinematic = false</c> on boats
         /// in a tow chain while <c>GameState.sleeping</c>, which turned a client's driven copy into a
-        /// simulated body until <c>BoatSync</c> set it back, and in a shared sleep (<c>timeScale</c> 16)
-        /// that is many physics steps. This runs last and puts the flag back at once.
+        /// simulated body until <c>BoatSync</c> set it back. This runs last and restores the flag
+        /// before any physics steps run on the driven body.
         /// </summary>
         private static void PostUpdateKinematic(BoatHorizon __instance)
         {

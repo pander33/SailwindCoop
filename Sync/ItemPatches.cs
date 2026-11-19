@@ -19,6 +19,8 @@ namespace SailwindCoop.Sync
             TryPatch(harmony, hooks, typeof(GoPointer), "PickUpItem", new[] { typeof(PickupableItem) }, prefixName: nameof(PrePickup), postfixName: nameof(PostPickup));
             TryPatch(harmony, hooks, typeof(GoPointer), "DropItem", Type.EmptyTypes, prefixName: nameof(PreDrop), postfixName: nameof(PostDrop));
             TryPatch(harmony, hooks, typeof(ItemRigidbody), "Start", Type.EmptyTypes, postfixName: nameof(PostItemRigidbodyStart));
+            TryPatch(harmony, hooks, typeof(ItemRigidbody), "FixedUpdate", Type.EmptyTypes,
+                prefixName: nameof(PreItemRigidbodyFixedUpdate), postfixName: nameof(PostItemRigidbodyFixedUpdate));
             TryPatch(harmony, hooks, typeof(ShipItemBottle), "OnItemClick", new[] { typeof(PickupableItem) },
                 prefixName: nameof(PreBottleItemClick), postfixName: nameof(PostBottleItemClick));
             TryPatch(harmony, hooks, typeof(ShipItemOar), "OnAltHeld", Type.EmptyTypes, postfixName: nameof(PostOarAltHeld));
@@ -180,6 +182,26 @@ namespace SailwindCoop.Sync
         {
             try { ItemSync.PuppetStarted(__instance); }
             catch (Exception e) { WarnPatch("[ItemPatches] PostItemRigidbodyStart: " + e.Message); }
+        }
+
+        private static void PreItemRigidbodyFixedUpdate(ItemRigidbody __instance, out Rigidbody __state)
+        {
+            __state = null;
+            try
+            {
+                var body = __instance.GetBody();
+                if (body == null) return;
+                if (GameState.inBed != null || GameState.sleeping) ItemSync.FreezeSleepingCargo(__instance, body);
+                if (body.isKinematic) __state = body;
+            }
+            catch (Exception e) { WarnPatch("[ItemPatches] Freezing sleeping cargo: " + e.Message); }
+        }
+
+        private static void PostItemRigidbodyFixedUpdate(Rigidbody __state)
+        {
+            if (__state == null) return;
+            try { ItemSync.RestoreCargoCollisionMode(__state); }
+            catch (Exception e) { WarnPatch("[ItemPatches] Restoring cargo collision mode: " + e.Message); }
         }
 
         private struct BottleClickState

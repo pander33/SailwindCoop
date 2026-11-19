@@ -54,6 +54,73 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("shared sleep caps physics catch-up without stretching the regular step", () => {
+                const float step = 0.02222f;
+                Assert(SharedSleepTiming.FrameBudget(step, 0.3333f) == step * 8f, "too many fixed steps per frame");
+                Assert(SharedSleepTiming.FrameBudget(step, 0.1f) == 0.1f, "raised an existing stricter cap");
+            });
+            Test("sleep snapshots advertise the simulated rate during capped frames", () => {
+                Assert(Math.Abs(SharedSleepTiming.EffectiveScale(4f, 0.3f, 0.1f) - 3f) < 0.0001f,
+                    "guest used the requested rate instead of the measured rate");
+                Assert(SharedSleepTiming.EffectiveScale(0f, 0.3f, 0.1f) == 0f, "pause did not advertise zero");
+                Assert(SharedSleepTiming.EffectiveScale(4f, 0f, 0.1f) == 4f, "resume looked like a pause");
+            });
+            Test("a shared sleep can pass three minutes while host snapshots still arrive", () => {
+                var timing = new SharedSleepTiming();
+                timing.Reset();
+                timing.ObserveHostClock(0f, 18f);
+                for (int elapsed = 1; elapsed <= 190; elapsed++)
+                {
+                    timing.Advance(1f, false);
+                    Assert(!timing.ObserveHostClock(1f, 18f + elapsed * 0.024f), "a moving host clock timed out");
+                    Assert(!timing.LostHostClock(0.25f), "client left an advancing sleep");
+                }
+                Assert(timing.Hours > 4.5f, "the sleep could not complete its simulated hours");
+                Assert(timing.LostHostClock(180f), "lost snapshots did not release the client");
+            });
+            Test("shared sleep measures world time through midnight and tolerates an owned pause", () => {
+                var timing = new SharedSleepTiming();
+                timing.Reset();
+                timing.Advance(3f, false);
+                timing.Advance(200f, true);
+                Assert(timing.Age == 3f, "an owned pause ate into the blackout limit");
+                Assert(!timing.ObserveHostClock(0f, 23.75f), "initial sample stalled");
+                Assert(!timing.ObserveHostClock(1f, 0.25f) && timing.Hours == 0.5f, "midnight lost sleep progress");
+                Assert(!timing.ObserveHostClock(14f, 0.25f), "recovered too early");
+                Assert(!timing.ObserveHostClock(1f, 0.5f) && timing.Hours == 0.75f, "progress did not clear the stall");
+            });
+            Test("an unscaled host snapshot timeout can end a paused shared sleep", () => {
+                var timing = new SharedSleepTiming();
+                timing.Reset();
+                timing.Advance(179f, true);
+                Assert(!timing.LostHostClock(float.PositiveInfinity), "gave no time for the first snapshot");
+                timing.Advance(1f, true);
+                Assert(timing.Age == 0f, "advanced the sleep during a pause");
+                Assert(!timing.LostHostClock(0.25f), "a live paused host timed out");
+                Assert(timing.LostHostClock(180f), "an old pause prevented the client from waking");
+                timing.Reset();
+                Assert(!timing.LostHostClock(180f), "the timeout leaked into a new phase");
+            });
+            Test("wake input becomes available during a paused blackout", () => {
+                var timing = new SharedSleepTiming();
+                timing.Reset();
+                timing.Advance(1f, false);
+                timing.Advance(1f, true);
+                Assert(!timing.WakeDelayElapsed, "wake input was enabled during the initial fade");
+                timing.Advance(1f, true);
+                Assert(timing.WakeDelayElapsed && timing.Age == 1f, "pause blocked wake input or advanced the world timer");
+                timing.Reset();
+                Assert(!timing.WakeDelayElapsed, "wake input carried over into a new phase");
+            });
+            Test("shared sleep detects a stalled host clock even with no scaled delta", () => {
+                var timing = new SharedSleepTiming();
+                timing.Reset();
+                timing.ObserveHostClock(0f, 12f);
+                Assert(!timing.ObserveHostClock(5f, 12f), "a five-second hitch ended sleep");
+                Assert(timing.ObserveHostClock(10f, float.NaN) && timing.Hours == 0f, "a stopped clock kept sleep alive");
+                timing.Reset();
+                Assert(!timing.ObserveHostClock(1f, 12f) && timing.Hours == 0f, "stall leaked into the next sleep");
+            });
             Test("early trade sale retains the original author and suppresses a second consume when the spawn arrives", () => {
                 var items = new ItemAuthoring<object>();
                 var item = new object();

@@ -23,6 +23,8 @@ namespace SailwindCoop.Sync
     {
         private readonly CoopNet _net;
         private float _sendStamp = float.NegativeInfinity;
+        private float _receivedStamp = float.NegativeInfinity;
+        private float _scaledSinceSend, _realSinceSend;
         private bool _windDisabled;     // client: did we turn off the local Wind sim?
         private bool _wavesDisabled;    // client: did we turn off the local WavesInertia sim?
         private WavesInertia _waves;    // cached; no singleton on the engine type
@@ -31,11 +33,13 @@ namespace SailwindCoop.Sync
         /// поэтому едет оно в этом же снапшоте, но вся логика там.</summary>
         public CrestWaterSync Crest;
 
-        /// <summary><c>Time.timeScale</c> хоста из последнего снапшота. Нужен не только воде:
-        /// <see cref="SleepSync"/> считает по нему скорость восстановления сил, пока спит хост.</summary>
+        /// <summary>Host simulation rate from the last snapshot, including capped frames during shared sleep.</summary>
         public float HostTimeScale { get; private set; } = 1f;
         /// <summary>Пришёл ли хоть один снапшот среды — до него <see cref="HostTimeScale"/> вымышлен.</summary>
         public bool HasHostState { get; private set; }
+        internal float SecondsSinceHostState => Time.unscaledTime - _receivedStamp;
+        // The slowest supported snapshot interval is two seconds. Allow one missed sample.
+        internal bool HasRecentHostState => SecondsSinceHostState < 5f;
 
         /// <summary>Environment snapshot rate (Hz). Slow — env changes gradually.</summary>
         public float EnvHz = 4f;
@@ -67,6 +71,9 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Client) { SmoothWind(dt); if (Crest != null) Crest.Tick(); return; }
             if (_net.Role != Role.Host) return;
             if (_net.State != LinkState.Connected) return;
+
+            _scaledSinceSend += dt;
+            _realSinceSend += Time.unscaledDeltaTime;
 
             // ВАЖНО: интервал по НЕмасштабируемому времени, а не по dt.
             // CoopBehaviour передаёт сюда Time.deltaTime, а он на паузе хоста равен нулю — таймер
@@ -107,7 +114,13 @@ namespace SailwindCoop.Sync
                 msg.WavesMagnitude = waves.currentMagnitude;
             }
 
-            msg.HostTimeScale = Time.timeScale;
+            // Use the whole sample window so a single short or long frame does not bias the rate.
+            // Zero stays reserved for an actual pause. Other consumers also use this rate to
+            // advance the host's ocean clock between snapshots.
+            msg.HostTimeScale = SleepSync.Instance?.IsWarpingWorld == true
+                ? SharedSleepTiming.EffectiveScale(Time.timeScale, _scaledSinceSend, _realSinceSend)
+                : Time.timeScale;
+            _scaledSinceSend = _realSinceSend = 0f;
 
             if (Crest != null) Crest.Capture(msg);
 
@@ -180,6 +193,7 @@ namespace SailwindCoop.Sync
 
             HostTimeScale = msg.HostTimeScale;
             HasHostState = true;
+            _receivedStamp = Time.unscaledTime;
             if (Crest != null) Crest.ApplyRemote(_net, msg);
 
         }
@@ -200,6 +214,8 @@ namespace SailwindCoop.Sync
             }
             _waves = null;
             _sendStamp = float.NegativeInfinity;
+            _receivedStamp = float.NegativeInfinity;
+            _scaledSinceSend = _realSinceSend = 0f;
             _haveWindTarget = false;
             _windT = 1f;
 

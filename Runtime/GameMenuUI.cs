@@ -64,7 +64,7 @@ namespace SailwindCoop.Runtime
         private readonly CoopMenuUI _window;
 
         private StartMenu _menu;
-        private GameObject _kit, _startUI, _settingsUI, _page, _titleEntry, _worldEntry;
+        private GameObject _kit, _startUI, _settingsUI, _recoveryUI, _confirmQuitUI, _page, _titleEntry, _worldEntry;
         private TextMesh _body;
         private readonly Row[] _rows = new Row[Rows];
         private Row _primary;
@@ -86,6 +86,12 @@ namespace SailwindCoop.Runtime
 
         public bool Open => _place != Place.Closed;
 
+        // StartMenu holds the world paused across its settings pages, even with F8 on top.
+        internal bool WorldPauseOpen => GameState.playing && (_place == Place.World ||
+            (_settingsUI != null && _settingsUI.activeInHierarchy) ||
+            (_recoveryUI != null && _recoveryUI.activeInHierarchy) ||
+            (_confirmQuitUI != null && _confirmQuitUI.activeInHierarchy));
+
         // -----------------------------------------------------------------
         // Patch: Escape on the page
         // -----------------------------------------------------------------
@@ -97,7 +103,7 @@ namespace SailwindCoop.Runtime
                 prefix: new HarmonyMethod(typeof(GameMenuUI), nameof(MenuKeyPrefix))));
             PatchHealth.Report("Game menu", hooks);
 
-            // The game's key bindings (GameInput, in Oculus.VR, which is not referenced) do not look
+            // The game's key bindings (GameInput, in Oculus.VR) do not look
             // at its menus: F presses the button under the cursor, C switches the camera. While an
             // address is typed on the page they read nothing.
             Type keys = AccessTools.TypeByName("GameInput");
@@ -246,7 +252,9 @@ namespace SailwindCoop.Runtime
         {
             _startUI = Field(menu, "startUI");
             _settingsUI = Field(menu, "settingsUI");
-            GameObject recovery = Field(menu, "recoveryUI");
+            _recoveryUI = Field(menu, "recoveryUI");
+            _confirmQuitUI = Field(menu, "confirmQuitUI");
+            GameObject recovery = _recoveryUI;
             Transform settingsButton = Child(_startUI, "button settings");
             Transform quitButton = Child(_settingsUI, "button quit");
             if (settingsButton == null || quitButton == null || recovery == null ||

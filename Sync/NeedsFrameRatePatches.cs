@@ -29,6 +29,7 @@ namespace SailwindCoop.Sync
         private static float FoodDebtStep()
         {
             if (!InCoop) return 0.5f;
+            if (SleepSync.Instance?.HoldsBed == true && SleepSync.NeedsDeltaTime() <= 0f) return 0f;
             float step = 0.5f * ConsumptionScale;
             return NormalizeFrameRate ? step * Mathf.Clamp(Time.unscaledDeltaTime * ReferenceFps, 0f, 10f) : step;
         }
@@ -39,6 +40,18 @@ namespace SailwindCoop.Sync
         {
             var code = instructions.ToList();
             var timescale = AccessTools.Field(typeof(Sun), nameof(Sun.timescale));
+            var deltaTime = AccessTools.PropertyGetter(typeof(Time), nameof(Time.deltaTime));
+            var needsDeltaTime = AccessTools.Method(typeof(SleepSync), nameof(SleepSync.NeedsDeltaTime));
+            // Change the time used by needs before vanilla clamps them or decides to pass out.
+            // Some expressions multiply by a constant before reading Sun.timescale. The eat
+            // cooldown uses only Time.deltaTime and stays on the local clock.
+            var clockSites = Enumerable.Range(0, code.Count - 4).Where(i => code[i].Calls(deltaTime) &&
+                (code[i + 2].LoadsField(timescale) ||
+                 (code[i + 2].opcode == OpCodes.Mul && code[i + 4].LoadsField(timescale)))).ToArray();
+            if (clockSites.Length != 9)
+                throw new InvalidOperationException("Expected nine timed needs calculations, found " + clockSites.Length);
+            foreach (int index in clockSites) code[index].operand = needsDeltaTime;
+
             var matches = new List<int>();
             for (int i = 1; i < code.Count - 1; i++)
                 if (code[i - 1].LoadsField(timescale) && code[i].opcode == OpCodes.Ldc_R4 &&

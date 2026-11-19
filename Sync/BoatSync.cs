@@ -255,7 +255,7 @@ namespace SailwindCoop.Sync
             body.SetPositionAndRotation(hullPos - bodyRot * hullOffset, bodyRot);
 
             // RealVel is per second of the host's clock (real time); a body's velocity is per second of
-            // game time. They differ under a shared sleep's timeScale 16, which both machines run.
+            // local game time. The host can warp its clock during shared sleep while ours stays normal.
             cb.Velocity = vel / Mathf.Max(Time.timeScale, 0.0001f);
             cb.AngularVelocity = AngularVelocity(cb, bodyRot);
             SetMotion(cb);

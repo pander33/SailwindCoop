@@ -183,29 +183,31 @@ Sleep and time advance are shared-world actions.
 
 - The host controls world time.
 - Time is skipped only when **every player lies down** (a paid tavern night counts): whoever lies,
-  sleeps, rested or not. Then every screen goes dark and the world runs fast, as in the
-  single-player game. Everyone recovers, and everyone gets hungry and thirsty at the same rate.
+  sleeps, rested or not. Then every screen goes dark and the host runs the world at up to four
+  times normal speed. Everyone recovers, and everyone gets hungry and thirsty at the same rate.
   One rested player does not wake the others: at sea the sleep ends when the whole crew is
   rested, at a mooring or ashore it lasts the usual length. A crew that is already rested skips
   time only at a mooring or ashore.
 - When the shared sleep ends, everyone is put out of bed.
 - A player who lies down while someone stays up, or collapses from exhaustion, sleeps by himself.
-  His screen goes dark, his sleep need recovers at a quarter of the speed of the shared sleep, and
-  hunger and thirst stand still. The world
-  keeps its normal pace for the others.
+  His screen goes dark and his sleep need recovers at four times the normal rate. Hunger and
+  thirst stand still, and the world keeps its normal pace for the others.
 - That sleep ends when he is rested: the screen clears and he can stay in bed. Lying there he
   does not get tired, hungry or thirsty, and still counts as asleep, so the shared sleep starts as
   soon as the rest of the crew lies down. Any key gets him up; a player who collapsed outside a
   bed is woken by any key too.
 - A hit that damages his boat, or water coming over its side, wakes a player asleep by himself.
 - A tavern night taken alone restores the player but does not skip to the morning.
-- During a shared sleep nobody can get out of bed; it ends by itself. A collision, running
-  aground or water coming into the hull wakes the whole crew, as in the single-player game.
+- Once the screen is dark, press Escape, Activate or Pick Up to leave a shared sleep. World time
+  returns to normal, and the other players continue sleeping individually. If the host has paused,
+  guests can wake while the world stays paused. A collision, running aground or water coming into
+  the hull wakes the whole crew, as in the single-player game.
+- Loose cargo stays where it was on deck while the crew sleeps. Its weight still affects the ship.
 - A player woken by his own hunger or thirst gets up alone. Time stops running fast, and the
   others sleep on, each by himself, until he lies down again. A player who is nearly out of water
   or food cannot take part in the shared sleep: he is woken a few seconds after it starts.
-- At a mooring, ashore and in a tavern the shared sleep skips time: it lasts a few seconds and
-  restores the sleep need almost at once, as in the single-player game.
+- At a mooring, ashore and in a tavern the game speeds up the day clock further, so the crew spends
+  less real time asleep.
 
 Clients should not expect independent time skipping.
 

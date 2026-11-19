@@ -1320,6 +1320,13 @@ namespace SailwindCoop.Runtime
             }
             else if (_cursorCaptured)
             {
+                // The game's settings can still be underneath this window and own the cursor.
+                if (_coop.GameMenu?.WorldPauseOpen == true)
+                {
+                    _cursorCaptured = false;
+                    return;
+                }
+
                 // Opened from the co-op page of the game's menu: that menu still holds the cursor.
                 bool restoreGameplayInput = GameState.playing && !GameState.currentlyLoading && !(PageOpen != null && PageOpen());
                 if (restoreGameplayInput)
