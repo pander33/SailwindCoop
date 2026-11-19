@@ -181,10 +181,11 @@ Domain notes:
   only the load hold. A join can use a fresh save taken under manual pause. If that save stalls,
   it waits for the crew to resume. Unscaled environment snapshots carry the pause revision, so
   delayed UDP updates cannot roll back the clock after a transition. `HostPauseSync` holds local
-  movement while the menu pointer stays available. Sleep and recovery can hand back player control
+  movement while the menu pointer stays available. Sleep, recovery and knockdown can hand back player control
   through `HostPauseSync`, which restores it as soon as no sleep, pause or menu holds it. During a
   world pause, the normal needs update and movement drain wait on both roles. The stock Escape
-  menu blocks local locomotion independently of the clock, keeping gravity and collisions active.
+  menu blocks local locomotion independently of the clock, including diving with the primary
+  stick, while gravity, collisions and the secondary-stick pointer remain active.
 - **Saves:** the profile and the co-op slot are written atomically with a backup and `GameVersion`.
   A join from a loaded world first returns to the title screen (`CoopBehaviour.LeaveWorldFirst`):
   the session is torn down, an own world is saved, the game's static state is reset and scene 0 is

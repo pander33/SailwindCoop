@@ -114,16 +114,21 @@ namespace SailwindCoop.Runtime
             // address is typed on the page they read nothing.
             Type keys = AccessTools.TypeByName("GameInput");
             foreach (string name in new[] { "GetKeyDown", "GetKey", "GetKeyUp" })
+                InstallInputPrefix(name, nameof(KeyPrefix), new[] { typeof(InputName) });
+            // Swimming also reads the primary stick directly. The menu pointer uses the secondary stick.
+            InstallInputPrefix("GetPrimaryVertical", nameof(PrimaryVerticalPrefix), Type.EmptyTypes);
+
+            void InstallInputPrefix(string name, string prefix, Type[] args)
             {
                 try
                 {
-                    MethodInfo method = keys != null ? AccessTools.Method(keys, name) : null;
+                    MethodInfo method = keys != null ? AccessTools.Method(keys, name, args) : null;
                     if (method == null) throw new MissingMethodException("GameInput", name);
-                    harmony.Patch(method, prefix: new HarmonyMethod(typeof(GameMenuUI), nameof(KeyPrefix)));
+                    harmony.Patch(method, prefix: new HarmonyMethod(typeof(GameMenuUI), prefix));
                 }
                 catch (Exception e)
                 {
-                    Plugin.Logger.LogWarning("[GameMenu] GameInput." + name + " not hooked, the game's keys stay live while an address is typed: " + e.Message);
+                    Plugin.Logger.LogWarning("[GameMenu] GameInput." + name + " not hooked: " + e.Message);
                 }
             }
         }
@@ -138,6 +143,13 @@ namespace SailwindCoop.Runtime
             }
             catch { return true; }
             __result = false;
+            return false;
+        }
+
+        private static bool PrimaryVerticalPrefix(ref float __result)
+        {
+            if (!GameMenuPause.HoldsMovement) return true;
+            __result = 0f;
             return false;
         }
 

@@ -289,7 +289,13 @@ namespace SailwindCoop.Sync
             _body = null;
             _immuneUntil = Time.time + ImmuneSeconds;
             _letGo = false;
-            try { if (!Held()) Refs.SetPlayerControl(true); }
+            try
+            {
+                var coop = CoopBehaviour.Instance;
+                if (coop?.HostPause is HostPauseSync pause && (pause.Frozen || coop.Pause?.Active == true))
+                    pause.RestoreControlWhenReady();
+                else if (!Held()) Refs.SetPlayerControl(true);
+            }
             catch (Exception e) { Plugin.Logger.ReportError("[Knockdown] could not give control back", e.Message, ref _report); }
             Plugin.Logger.LogInfo("[Knockdown] up");
         }
