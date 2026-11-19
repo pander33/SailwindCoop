@@ -184,23 +184,43 @@ namespace SailwindCoop.Sync
             catch (Exception e) { WarnPatch("[ItemPatches] PostItemRigidbodyStart: " + e.Message); }
         }
 
-        private static void PreItemRigidbodyFixedUpdate(ItemRigidbody __instance, out Rigidbody __state)
+        private struct CargoStepState
         {
-            __state = null;
+            internal Rigidbody Body;
+            internal float? SavedDynamicTimer;
+        }
+
+        private static void PreItemRigidbodyFixedUpdate(ItemRigidbody __instance, ref float ___dynamicColTimer,
+            out CargoStepState __state)
+        {
+            __state = default;
             try
             {
                 var body = __instance.GetBody();
                 if (body == null) return;
-                if (GameState.inBed != null || GameState.sleeping) ItemSync.FreezeSleepingCargo(__instance, body);
-                if (body.isKinematic) __state = body;
+                bool sleeping = GameState.inBed != null || GameState.sleeping;
+                if (sleeping) ItemSync.FreezeSleepingCargo(__instance, body);
+                if (!body.isKinematic) return;
+                __state.Body = body;
+                // The deferred network drop still needs its first dynamic step. Ignore the
+                // mesh idle shortcut for this step and leave the other vanilla checks in place.
+                if (!sleeping && ___dynamicColTimer <= 0f && ItemSync.HasDeferredMeshRelease(body))
+                {
+                    __state.SavedDynamicTimer = ___dynamicColTimer;
+                    ___dynamicColTimer = Time.fixedDeltaTime;
+                }
             }
             catch (Exception e) { WarnPatch("[ItemPatches] Freezing sleeping cargo: " + e.Message); }
         }
 
-        private static void PostItemRigidbodyFixedUpdate(Rigidbody __state)
+        private static void PostItemRigidbodyFixedUpdate(CargoStepState __state, ref float ___dynamicColTimer)
         {
-            if (__state == null) return;
-            try { ItemSync.RestoreCargoCollisionMode(__state); }
+            if (__state.Body == null) return;
+            try
+            {
+                if (__state.SavedDynamicTimer.HasValue) ___dynamicColTimer = __state.SavedDynamicTimer.Value;
+                ItemSync.RestoreCargoCollisionMode(__state.Body);
+            }
             catch (Exception e) { WarnPatch("[ItemPatches] Restoring cargo collision mode: " + e.Message); }
         }
 

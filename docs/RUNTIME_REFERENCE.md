@@ -137,12 +137,15 @@ Domain notes:
   fade uses unscaled time so it can clear on a frozen world. Escape or the native bed controls
   leave a shared sleep after three real seconds, even if the host is paused. The guest reports
   this immediately with `SleepPresence`. A paused host processes the wake when it resumes,
-  cancels the warp and lets the remaining players continue their personal sleep.
+  cancels the warp and lets the remaining players continue their personal sleep. Bed interaction
+  inputs are ignored while a menu owns the cursor.
   `ItemRigidbody.FixedUpdate` puts loose cargo aboard into kinematic mode before physics while the
   local player is in bed or in shared sleep. The item sync applies the same rule when releasing a
   proxy. Cargo keeps its colliders and weight, and the drop pose's overlap correction is capped
   when the cargo becomes dynamic again. The native item step decides when to make the body
-  dynamic again, and the mod restores the previous continuous collision mode at that point.
+  dynamic again. The mod restores the previous continuous collision mode at that point, or
+  the normal dynamic mesh mode if the release began with an already kinematic proxy. A deferred
+  mesh drop gets its first dynamic step even if the item's vanilla idle timer has expired.
 - **Recovery:** the game's own (`Recovery.RecoverPlayer`: passed out, the Recover button of the
   Escape menu, the world border). `Sync/RecoveryPatches.cs`. The host's recovery takes
   the boat to the port with whoever is aboard; when `RecoverBoat` is done (its enumerator is

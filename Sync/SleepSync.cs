@@ -489,9 +489,10 @@ namespace SailwindCoop.Sync
 			if (!_order.Active || _order.Expired || _presentationPending) return;
 			bool paused = PauseHolds() || HostPauseHolds() || GameMenuHolds();
 			_timing.Advance(dt, paused);
-			if (_blackout && (GameInput.GetKeyDown(InputName.Activate) || GameInput.GetKeyDown(InputName.PickUp) ||
-			                  OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
-			                  OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger)) && WakeFromInput()) return;
+			if (_blackout && !GameState.inCursorMenu &&
+			    (GameInput.GetKeyDown(InputName.Activate) || GameInput.GetKeyDown(InputName.PickUp) ||
+			     OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
+			     OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger)) && WakeFromInput()) return;
 
 			// Network liveness still matters when the last snapshot reported a pause.
 			if (_net.Role == Role.Client && _timing.LostHostClock(CoopBehaviour.Instance.Env.SecondsSinceHostState))

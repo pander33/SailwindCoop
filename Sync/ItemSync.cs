@@ -2507,14 +2507,18 @@ namespace SailwindCoop.Sync
             }
             body.isKinematic = false;
             if (RestoreCargoCollisionMode(body)) return;
-            if (body.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative &&
-                body.GetComponent<MeshCollider>() != null)
+            if (UsesSpeculativeMesh(body))
                 body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         }
+
+        private static bool UsesSpeculativeMesh(Rigidbody body)
+            => body.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative &&
+               body.GetComponent<MeshCollider>() != null;
 
         private sealed class CargoCollisionMode
         {
             internal CollisionDetectionMode Value;
+            internal bool DeferredMeshRelease;
         }
 
         private static readonly ConditionalWeakTable<Rigidbody, CargoCollisionMode> SleepingCargoModes =
@@ -2529,17 +2533,31 @@ namespace SailwindCoop.Sync
             if (!body.isKinematic && HoldsSleepingCargo(proxy.GetShipItem())) FreezeCargoBody(body);
         }
 
-        private static void FreezeCargoBody(Rigidbody body)
+        private static void FreezeCargoBody(Rigidbody body, bool deferRelease = false)
         {
+            // A puppet is already kinematic. A deferred release still owes it the same
+            // dynamic mesh collision mode that SetKinematic(false) would restore.
+            bool deferredMesh = deferRelease && UsesSpeculativeMesh(body);
+            var mode = deferredMesh
+                ? CollisionDetectionMode.ContinuousDynamic
+                : body.collisionDetectionMode;
+            if (mode == CollisionDetectionMode.Continuous || mode == CollisionDetectionMode.ContinuousDynamic)
+            {
+                if (!SleepingCargoModes.TryGetValue(body, out var pending))
+                {
+                    pending = new CargoCollisionMode { Value = mode };
+                    SleepingCargoModes.Add(body, pending);
+                }
+                pending.DeferredMeshRelease |= deferredMesh;
+            }
             if (body.isKinematic) return;
-            var mode = body.collisionDetectionMode;
-            if ((mode == CollisionDetectionMode.Continuous || mode == CollisionDetectionMode.ContinuousDynamic) &&
-                !SleepingCargoModes.TryGetValue(body, out _))
-                SleepingCargoModes.Add(body, new CargoCollisionMode { Value = mode });
             body.velocity = Vector3.zero;
             body.angularVelocity = Vector3.zero;
             SetKinematic(body, true);
         }
+
+        internal static bool HasDeferredMeshRelease(Rigidbody body)
+            => SleepingCargoModes.TryGetValue(body, out var pending) && pending.DeferredMeshRelease;
 
         // Vanilla decides when an item can move again. Restore CCD only after it is dynamic.
         internal static bool RestoreCargoCollisionMode(Rigidbody body)
@@ -2582,7 +2600,7 @@ namespace SailwindCoop.Sync
                     pt.rotation = rot;
                 }
                 bool sleepingCargo = !kinematic && HoldsSleepingCargo(item);
-                if (sleepingCargo) FreezeCargoBody(body);
+                if (sleepingCargo) FreezeCargoBody(body, deferRelease: true);
                 else SetKinematic(body, kinematic);
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
