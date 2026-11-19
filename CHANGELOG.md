@@ -4,7 +4,12 @@ All notable user-facing changes are documented in this file.
 
 ## [Unreleased]
 
-Everyone must update to wire protocol 112.
+Everyone must update to wire protocol 113.
+
+### Added
+
+- Any player can pause or resume the shared world from the Escape menu or F8. Opening the
+  Escape menu in co-op leaves the world running.
 
 ### Fixed
 
@@ -19,8 +24,8 @@ Everyone must update to wire protocol 112.
 - Nobody can push a boat while carrying cargo, the host included.
 - Shared sleep keeps the regular physics step to reduce abrupt hull motion during time acceleration.
   A stalled world clock wakes the crew automatically. Players can also leave shared sleep with
-  Escape or the usual bed controls, including during a host pause. Opening F8 over the game's
-  settings preserves the pause. Clicking in F8 leaves shared sleep active.
+  Escape or the usual bed controls. During a manual world pause, use the menu to resume first.
+  Clicking in F8 leaves shared sleep active.
 - Shared sleep measures the host's actual simulation rate for guests' needs. At low frame rates
   the crew can sleep for the full in-game duration while the world clock is progressing.
 - Shared sleep stops changing guest needs when host updates go stale. If the updates never

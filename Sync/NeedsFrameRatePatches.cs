@@ -19,12 +19,15 @@ namespace SailwindCoop.Sync
         {
             var hooks = new PatchHookCatalog();
             hooks.Install(typeof(PlayerNeeds), "LateUpdate", Type.EmptyTypes, target => harmony.Patch(target,
+                prefix: new HarmonyMethod(typeof(NeedsFrameRatePatches), nameof(NeedsTickAllowed)),
                 transpiler: new HarmonyMethod(typeof(NeedsFrameRatePatches), nameof(PatchNeedsDrain))));
             hooks.Install(typeof(PlayerNeeds), "DrainEnergyFromMovement", Type.EmptyTypes, target => harmony.Patch(target,
                 prefix: new HarmonyMethod(typeof(NeedsFrameRatePatches), nameof(BeforeMovement)),
                 postfix: new HarmonyMethod(typeof(NeedsFrameRatePatches), nameof(AfterMovement))));
             PatchHealth.Report("Needs FPS", hooks);
         }
+
+        private static bool NeedsTickAllowed() => CoopBehaviour.Instance?.WorldGameplayPaused != true;
 
         private static float FoodDebtStep()
         {
@@ -90,20 +93,25 @@ namespace SailwindCoop.Sync
             return code;
         }
 
-        private static void BeforeMovement(out Vector3 __state)
-            => __state = new Vector3(PlayerNeeds.food, PlayerNeeds.foodDebt, PlayerNeeds.water);
+        private static bool BeforeMovement(out Vector3? __state)
+        {
+            bool allowed = NeedsTickAllowed();
+            __state = allowed ? new Vector3(PlayerNeeds.food, PlayerNeeds.foodDebt, PlayerNeeds.water) : (Vector3?)null;
+            return allowed;
+        }
 
-        private static void AfterMovement(Vector3 __state)
+        private static void AfterMovement(Vector3? __state)
         {
             try
             {
-                if (!InCoop) return;
+                if (!InCoop || !__state.HasValue) return;
+                Vector3 before = __state.Value;
                 float scale = ConsumptionScale;
                 if (NormalizeFrameRate && Time.deltaTime > 0f)
                     scale *= Mathf.Clamp(1f / (Time.deltaTime * ReferenceFps), 0.1f, 10f);
-                PlayerNeeds.food = __state.x + (PlayerNeeds.food - __state.x) * scale;
-                PlayerNeeds.foodDebt = __state.y + (PlayerNeeds.foodDebt - __state.y) * scale;
-                PlayerNeeds.water = __state.z + (PlayerNeeds.water - __state.z) * scale;
+                PlayerNeeds.food = before.x + (PlayerNeeds.food - before.x) * scale;
+                PlayerNeeds.foodDebt = before.y + (PlayerNeeds.foodDebt - before.y) * scale;
+                PlayerNeeds.water = before.z + (PlayerNeeds.water - before.z) * scale;
             }
             catch (Exception error) { PatchGuard.Fail(Report, error); }
         }

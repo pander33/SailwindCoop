@@ -5,69 +5,67 @@ using UnityEngine;
 
 namespace SailwindCoop.Sync
 {
-    /// <summary>
-    /// Пауза хоста должна останавливать и клиента.
-    ///
-    /// Хост останавливает мир штатно — игровым меню (<c>MainMenu.GameToSettings</c> ставит
-    /// <c>Time.timeScale = 0</c>) и на время передачи сохранения новому игроку
-    /// (<see cref="JoinPause"/>). Всё, чем распоряжается хост, при этом замирает само:
-    /// <see cref="BoatSync"/>, <see cref="ItemSync"/> и <see cref="AnchorSync"/> не шлют снапшотов при
-    /// нулевом <c>timeScale</c>, а часы воды стоят, потому что их шаг умножается на хостовый масштаб
-    /// (<see cref="CrestWaterSync"/>). Не замирал ровно один объект — сам клиент: он продолжал ходить
-    /// по палубе остановленного мира, мог сойти с лодки или упасть в воду, а его взаимодействия
-    /// уезжали хосту, который ответит на них через неизвестно сколько.
-    ///
-    /// Поэтому на время паузы хоста клиенту отключается управление персонажем — тот же приём, что у
-    /// ведомого сна (<see cref="SleepSync"/>): <c>Refs.SetPlayerControl(false)</c> гасит
-    /// <c>OVRPlayerController</c> и <c>CharacterController</c>. Осмотреться мышью можно, уйти — нет.
-    ///
-    /// Свой <c>Time.timeScale</c> клиент сознательно НЕ трогает. Игровое меню Sailwind запоминает
-    /// «доспаузный» масштаб в собственное поле (<c>unpausedTimescale</c>) при открытии и возвращает
-    /// его при закрытии; открывшись во время нашей паузы, оно запомнило бы ноль и вернуло бы ноль —
-    /// клиент остался бы замороженным насовсем, уже без нашего участия.
-    ///
-    /// Управление возвращается, как только хост снял паузу, пропала связь или истекли
-    /// 180 секунд без обновлений среды: остаться замороженным
-    /// из-за последнего дошедшего снапшота «хост на паузе» — это софтлок, а не верность хосту.
-    /// </summary>
     public sealed class HostPauseSync
     {
         private readonly CoopNet _net;
-        private bool _frozen;
+        private bool _restoreControl;
         private CoopLog.Repeat _controlReport;
 
         public HostPauseSync(CoopNet net) { _net = net; }
 
-        /// <summary>Держим ли мы сейчас клиента замороженным. Читают баннер на экране и оверлей.</summary>
-        public bool Frozen => _frozen;
+        public bool Frozen { get; private set; }
+        internal WorldPauseReason Reasons { get; private set; }
+        internal bool HasState { get; private set; }
+        private uint _revision;
 
-        public void Tick(EnvironmentSync env)
+        internal void OnState(PauseStateMsg msg)
         {
-            bool want = _net.Role == Role.Client &&
-                        _net.State == LinkState.Connected &&
-                        env != null && env.HasHostState &&
-                        env.SecondsSinceHostState < SharedSleepTiming.HostSnapshotTimeout &&
-                        env.HostTimeScale <= 0.0001f;
-            SetFrozen(want);
+            if (HasState && msg.Revision < _revision) return;
+            _revision = msg.Revision;
+            Reasons = msg.Reasons;
+            HasState = true;
         }
 
-        public void Clear() { SetFrozen(false); }
-
-        private void SetFrozen(bool value)
+        internal void Tick(EnvironmentSync env, bool hostManualPause)
         {
-            if (value == _frozen) return;
-            _frozen = value;
+            bool remotePause = _net.Role == Role.Client && env.HasHostState &&
+                               env.SecondsSinceHostState < SharedSleepTiming.HostSnapshotTimeout &&
+                               env.HostTimeScale <= 0.0001f;
+            Frozen = _net.State == LinkState.Connected && GameState.playing && !GameState.currentlyLoading &&
+                     (remotePause || hostManualPause);
+            UpdateControl();
+        }
+
+        public void Clear()
+        {
+            Frozen = HasState = false;
+            Reasons = WorldPauseReason.None;
+            _revision = 0;
+            UpdateControl();
+        }
+
+        // A subsystem can release its own lock while both controllers are still held by the pause.
+        internal void RestoreControlWhenReady() => _restoreControl = true;
+
+        private void UpdateControl()
+        {
+            if (!Frozen && !_restoreControl) return;
             try
             {
-                if (value)
+                if (Refs.charController == null || Refs.ovrController == null) return;
+                if (Frozen)
                 {
+                    if (!Refs.charController.enabled && !Refs.ovrController.enabled) return;
+                    _restoreControl = true;
                     Refs.SetPlayerControl(false);
                 }
-                else if ((SleepSync.Instance == null || !SleepSync.Instance.ClientAsleep) && GameState.inBed == null)
+                else if (GameState.playing && !GameState.currentlyLoading && !GameState.inCursorMenu &&
+                         GameState.inBed == null && !GameState.recovering && !GameState.sleeping &&
+                         SleepSync.Instance?.ClientAsleep != true &&
+                         CoopBehaviour.Instance?.Knockdown?.Down != true)
                 {
-                    // Ведомый сон держит управление по своей причине — не возвращать его за него,
-                    // иначе спящий клиент вдруг пойдёт гулять с чёрным экраном.
                     Refs.SetPlayerControl(true);
+                    _restoreControl = false;
                 }
             }
             catch (Exception e)
@@ -75,7 +73,6 @@ namespace SailwindCoop.Sync
                 Plugin.Logger.ReportError("[HostPauseSync] Could not toggle player control",
                                           e.Message, ref _controlReport);
             }
-            Plugin.Logger.LogInfo("[HostPauseSync] client " + (value ? "frozen (host paused)" : "released"));
         }
     }
 }

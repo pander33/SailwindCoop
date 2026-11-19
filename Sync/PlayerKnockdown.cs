@@ -32,7 +32,6 @@ namespace SailwindCoop.Sync
         // not by the frame it shows up in. Seen is the last frame the item was near.
         private struct Track { public Transform Parent; public Vector3 Pos; public float Time; public int Seen; }
 
-        private static readonly FieldInfo ClickedButton = AccessTools.Field(typeof(GoPointer), "clickedButton");
         private static readonly FieldInfo ThrowPower = AccessTools.Field(typeof(GoPointer), "currentThrowPower");
 
         private readonly CoopNet _net;
@@ -245,6 +244,7 @@ namespace SailwindCoop.Sync
                     GetUp(place: false);
                     return;
                 }
+                if (CoopBehaviour.Instance?.HostPause?.Frozen == true) return;
                 if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || Held())
                 {
                     GetUp(place: true);
@@ -325,14 +325,7 @@ namespace SailwindCoop.Sync
                         held.OnDrop();
                         pointer.DropItem();
                     }
-                    var clicked = ClickedButton?.GetValue(pointer) as GoPointerButton;
-                    if (clicked != null)
-                    {
-                        clicked.OnUnactivate();
-                        clicked.OnUnactivate(pointer);
-                        clicked.Unclick();
-                        ClickedButton.SetValue(pointer, null);
-                    }
+                    InputScopePatches.ReleaseClick(pointer);
                 }
                 catch (Exception e) { Plugin.Logger.ReportError("[Knockdown] could not let go", e.Message, ref _report); }
             }

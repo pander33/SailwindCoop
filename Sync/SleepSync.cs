@@ -151,7 +151,8 @@ namespace SailwindCoop.Sync
 
 		internal bool WakeFromInput()
 		{
-			if (!_blackout || !_timing.WakeDelayElapsed || GameMenuHolds()) return false;
+			if (!_blackout || !_timing.WakeDelayElapsed || MenuTakesInput() ||
+			    CoopBehaviour.Instance?.ManualWorldPaused == true) return false;
 			WakeLocal("wake input");
 			return true;
 		}
@@ -431,7 +432,7 @@ namespace SailwindCoop.Sync
 		public void Tick(float dt)
 		{
 			RepairClock();
-			if (_restoreLookAfterMenu && !GameMenuHolds())
+			if (_restoreLookAfterMenu && !MenuTakesInput())
 			{
 				_restoreLookAfterMenu = false;
 				if (PresentationReady() && !ClientAsleep && !GameState.recovering && GameState.inBed == null)
@@ -575,11 +576,11 @@ namespace SailwindCoop.Sync
 				return;
 			}
 
-			// A bed and an open game menu hold the look and the control for their own reasons.
+			// A bed and an open game menu hold the look for their own reasons.
 			if (GameState.inBed != null) return;
-			if (GameMenuHolds()) return;
-			MouseLook.ToggleMouseLook(true);
-			if (!HostPauseHolds() && !PauseHolds()) Refs.SetPlayerControl(true);
+			_restoreLookAfterMenu = MenuTakesInput();
+			if (!_restoreLookAfterMenu) MouseLook.ToggleMouseLook(true);
+			CoopBehaviour.Instance?.HostPause?.RestoreControlWhenReady();
 		}
 
 		private void TickPersonal(float dt)
@@ -776,12 +777,13 @@ namespace SailwindCoop.Sync
 						Fade(false);
 						if (GameState.inBed == null)
 						{
-							_restoreLookAfterMenu = GameMenuHolds();
+							_restoreLookAfterMenu = MenuTakesInput();
 							MouseLook.ToggleMouseLook(!_restoreLookAfterMenu);
 						}
 					}
+					if (hadEffects && GameState.inBed == null)
+						CoopBehaviour.Instance?.HostPause?.RestoreControlWhenReady();
 					if (HostPauseHolds() || PauseHolds()) Refs.SetPlayerControl(false);
-					else if (hadEffects && GameState.inBed == null) Refs.SetPlayerControl(true);
 					if (hadEffects) SetNativeField("sleepCooldown", 6f);
 				}
 			}
@@ -857,9 +859,12 @@ namespace SailwindCoop.Sync
 		private static bool PauseHolds() => CoopBehaviour.Instance?.Pause?.Active == true;
 		private static bool HostPauseHolds() => CoopBehaviour.Instance?.HostPause?.Frozen == true;
 		private static bool GameMenuHolds()
+			=> MenuTakesInput() && !GameMenuPause.InSession;
+
+		private static bool MenuTakesInput()
 		{
 			var coop = CoopBehaviour.Instance;
-			return coop?.GameMenu?.WorldPauseOpen == true ||
+			return coop?.GameMenu?.WorldMenuOpen == true ||
 			       (GameState.inCursorMenu && coop?.CoopMenuOpen != true);
 		}
 

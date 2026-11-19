@@ -52,8 +52,28 @@ namespace SailwindCoop.Runtime
         public ModSync Mods { get; private set; }
         public JoinPause Pause { get; private set; }
 
-        /// <summary>Клиентская сторона паузы хоста: пока хост стоит, наш игрок не ходит.</summary>
+        /// <summary>Applies the local movement lock while co-op holds the world.</summary>
         public HostPauseSync HostPause { get; private set; }
+
+        private WorldPauseReason WorldPauseReasons => Net.Role == Role.Host ? Pause.Reasons : HostPause.Reasons;
+        internal bool ManualWorldPaused => (WorldPauseReasons & WorldPauseReason.Manual) != 0;
+        internal bool CanUseWorldPause => GameState.playing && !GameState.currentlyLoading &&
+            Net.State == LinkState.Connected && (Net.Role == Role.Host || (ClientJoined && HostPause.HasState));
+        internal string WorldPauseLabel => ManualWorldPaused ? "Resume world" : "Pause world";
+
+        internal void ToggleWorldPause()
+        {
+            if (!CanUseWorldPause) return;
+            if (Net.Role == Role.Host) Pause.SetManual(!ManualWorldPaused);
+            else Net.Broadcast(new PauseRequestMsg { Paused = !ManualWorldPaused }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
+
+        private PauseStateMsg CaptureWorldPause() => new PauseStateMsg
+        {
+            Revision = Pause.Revision,
+            Reasons = Pause.Reasons,
+            HostTimeScale = Time.timeScale,
+        };
 
         private DebugOverlay _overlay;
         private bool _overlayVisible = false;
@@ -117,15 +137,21 @@ namespace SailwindCoop.Runtime
                 if (Mods.BuildView().Deciding) return "Checking compatibility: review the mod differences";
                 if (Net.State == LinkState.Handshaking) return "Checking compatibility";
                 if (Net.State == LinkState.Connecting) return "Connecting";
-                if (Net.Role == Role.Client && Net.State == LinkState.Connected) return "Checking compatibility / waiting for the host world";
+                if (Net.Role == Role.Client && Net.State == LinkState.Connected)
+                {
+                    foreach (var member in Net.RosterSnapshot)
+                        if (member.NetId == Net.MyNetId && member.State == MemberJoinState.WaitingForResume)
+                            return "Waiting for the crew to resume the world";
+                    return "Checking compatibility / waiting for the host world";
+                }
                 return "";
             }
         }
 
-        /// <summary>Is OUR co-op menu the thing holding the cursor? Lets <see cref="JoinPause"/> tell a
-        /// game menu (which stops the clock) from this one (which does not).</summary>
+        /// <summary>Is the F8 co-op window holding the cursor?</summary>
         public bool CoopMenuOpen => _menuUI != null && _menuUI.Visible;
         internal bool PlayingCoop => Net?.State == LinkState.Connected && GameState.playing && !GameState.currentlyLoading;
+        internal bool WorldGameplayPaused => PlayingCoop && (Pause?.Active == true || HostPause?.Frozen == true);
 
         public bool OverlayVisible
         {
@@ -275,6 +301,7 @@ namespace SailwindCoop.Runtime
             };
             Pause = new JoinPause();
             HostPause = new HostPauseSync(Net);
+            Pause.Changed += () => Net.Broadcast(CaptureWorldPause(), LiteNetLib.DeliveryMethod.ReliableOrdered);
 
             // F3 — intercept the game's interaction layer so a client's clicks reach the host.
             _harmony = new Harmony(Plugin.Guid);
@@ -332,6 +359,8 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Origin catch-up", () => OriginCatchUp.Apply(_harmony), patchFault);
             PatchHealth.Install("Crest wave inputs", () => CrestWaterSync.Apply(_harmony), patchFault);
             PatchHealth.Install("Game menu", () => GameMenuUI.Apply(_harmony), patchFault);
+            PatchHealth.Install("Escape menu clock", () => GameMenuPause.Apply(_harmony), patchFault, required: true);
+            PatchHealth.Install("Pause sun clock", () => EnvironmentSync.PatchSun(_harmony), patchFault);
 
             PatchGuard.Run(() => {
                 var signatures = InteractionActionCatalog.Inspect(typeof(GoPointerButton).Assembly);
@@ -354,6 +383,7 @@ namespace SailwindCoop.Runtime
                                       ", avatar=" + (string.IsNullOrEmpty(s.SelectedAvatar) ? "(default)" : s.SelectedAvatar));
                 // Remember the bundle file this client wants; used when their first PlayerState arrives.
                 Players.RegisterRemoteAvatarFile(s.PlayerNetId, s.SelectedAvatar);
+                s.Peer.Send(CaptureWorldPause(), LiteNetLib.DeliveryMethod.ReliableOrdered);
                 // The world transfer starts when the client answers the mod list (Mods.HostProceed).
                 Mods.OnClientReady(s);
             };
@@ -476,9 +506,9 @@ namespace SailwindCoop.Runtime
                 // применения поз игроков — иначе столкновение с ними читается по вчерашней позе.
                 new SyncStep("NpcBoats.TickHost", () => NpcBoats.TickHost()),
                 new SyncStep("NpcBoats.ApplyRemote", () => NpcBoats.ApplyRemote()),
-                new SyncStep("Env.Tick", () => Env.Tick(_dt)),
+                new SyncStep("Env.Tick", () => Env.Tick(_dt, Pause.Revision)),
                 // Сразу за Env: именно он держит последний известный timeScale хоста.
-                new SyncStep("HostPause.Tick", () => HostPause.Tick(Env)),
+                new SyncStep("HostPause.Tick", () => HostPause.Tick(Env, Net.Role == Role.Host && Pause.Active)),
                 new SyncStep("CrestWater.TickHost", () => { if (Net.Role == Role.Host) CrestWater.TickHost(Net); }),
                 // Замер воды крутится на обеих ролях: он нужен для дампа, а дамп снимают одновременно.
                 new SyncStep("CrestWater.TickProbe", () =>
@@ -644,7 +674,7 @@ namespace SailwindCoop.Runtime
             // that would be the exact failure mode this per-step containment exists to remove.
             if (_steps == null) return;
 
-            _dt = Time.deltaTime;
+            _dt = Time.timeScale == 0f ? 0f : Time.deltaTime;
             for (int i = 0; i < _steps.Length; i++)
             {
                 var step = _steps[i];
@@ -766,6 +796,22 @@ namespace SailwindCoop.Runtime
 
         private void OnGameMessage(MsgType type, INetMessage msg, LiteNetLib.NetPeer fromPeer)
         {
+            // Pause control stays live through other subsystems' buffering windows.
+            if (type == MsgType.PauseRequest)
+            {
+                if (Net.Role == Role.Host && CanUseWorldPause) Pause.SetManual(((PauseRequestMsg)msg).Paused);
+                return;
+            }
+            if (type == MsgType.PauseState)
+            {
+                if (Net.Role == Role.Client)
+                {
+                    var state = (PauseStateMsg)msg;
+                    HostPause.OnState(state);
+                    Env.OnPauseState(state);
+                }
+                return;
+            }
             Items.BeforeReceive(type, msg);
             if (Shipyard.Defer(type, msg, fromPeer)) return;
             switch (type)
@@ -1048,6 +1094,8 @@ namespace SailwindCoop.Runtime
                             Net.BroadcastNotice(GameplayNoticeKind.PlayerReady, netId);
                         }
                         Pause.Release(netId);
+                        if (((ClientWorldLoadedMsg)msg).Ok && netId != 0)
+                            Net.SendToPlayer(netId, CaptureWorldPause(), LiteNetLib.DeliveryMethod.ReliableOrdered);
                     }
                     break;
             }
@@ -1098,7 +1146,7 @@ namespace SailwindCoop.Runtime
                                          StreamSaveTimeoutSec + " s - clearing it so joins keep working");
                 ResetJoinStreaming();
             }
-            return _streamingSave || (Pause != null && Pause.Active);
+            return _streamingSave || (Pause != null && Pause.Technical);
         }
 
         /// <summary>Teardown: drop the queue slot so a later session does not inherit a stuck join.</summary>
@@ -1148,12 +1196,9 @@ namespace SailwindCoop.Runtime
         /// Host side: when a client finishes the handshake, save the host's world fresh (so the client
         /// gets the up-to-date economy/objects/position), then stream the save file to that client.
         ///
-        /// Order matters. The join-freeze (<see cref="JoinPause"/>) stops the host's clock outright, so
-        /// it must be taken only AFTER the forced save has finished writing: the game's own save path
-        /// runs as a coroutine, and asking it to complete while <c>Time.timeScale == 0</c> risks it
-        /// never finishing — burning the save-window and save-busy waits below and then the pause's own
-        /// 120 s safety timeout. Freezing right before the bytes go out still covers the window that
-        /// actually matters (snapshot on the wire → client in the world).
+        /// The join hold begins after the save is on disk, covering the window from snapshot
+        /// transmission to the client entering the world. If a manual pause overlaps the save,
+        /// it may finish under that pause; a blocked save waits for a player to resume.
         /// </summary>
         private IEnumerator StreamSaveToClientInner(LiteNetLib.NetPeer peer, uint netId, int epoch)
         {
@@ -1174,7 +1219,7 @@ namespace SailwindCoop.Runtime
 
             FurstMateCompat.PrepareHostSave(peer);
             Items.PrepareTradeSaleWorld(peer);
-            if (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.instance != null)
+            while (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.instance != null)
             {
                 // SaveGame silently refuses while busy / in bed / in shipyard / not ready — wait for a
                 // window where it can run, then verify it really started (DoSaveGame flips its private
@@ -1202,12 +1247,27 @@ namespace SailwindCoop.Runtime
                     for (float t = 0f; SaveTransferSync.HostSaveBusy() && t < 10f; t += Time.unscaledDeltaTime)
                         yield return null;
                     yield return new WaitForEndOfFrame();
+                    if (!SaveTransferSync.HostSaveBusy()) break;
                 }
-                else
+
+                if (!Pause.Manual)
                 {
-                    Plugin.Logger.LogWarning("[Coop] Timed out waiting for a fresh save window - " +
-                                             "client will receive the last save from disk");
+                    Plugin.Logger.LogWarning("[Coop] Could not finish a fresh save for the joining player - using the last save on disk");
+                    break;
                 }
+
+                Notice("A player is waiting for a save. Resume the world to let them join.");
+                Net.SetMemberState(netId, MemberJoinState.WaitingForResume);
+                while (Pause.Manual)
+                {
+                    if (_streamingSaveEpoch != epoch || peer == null ||
+                        peer.ConnectionState != LiteNetLib.ConnectionState.Connected) yield break;
+                    _streamingSaveDeadline = Time.realtimeSinceStartup + StreamSaveTimeoutSec;
+                    yield return null;
+                }
+                if (_streamingSaveEpoch != epoch || peer == null ||
+                    peer.ConnectionState != LiteNetLib.ConnectionState.Connected) yield break;
+                Net.SetMemberState(netId, MemberJoinState.ReceivingWorld);
             }
 
             byte[] bytes = SaveTransferSync.ReadHostSaveBytes();
@@ -1280,7 +1340,7 @@ namespace SailwindCoop.Runtime
             // stack unbalanced and cascades into unrelated "GUI Error" spam, so contain it here too.
             try
             {
-                if (HostPause != null && HostPause.Frozen) DrawHostPausedBanner();
+                if (HostPause?.Frozen == true) DrawWorldPausedBanner();
                 if (_menuUI != null) _menuUI.Draw();
                 Dice?.Input.DrawHint();
                 _emoteWheel.Draw();
@@ -1298,12 +1358,7 @@ namespace SailwindCoop.Runtime
 
         private static GUIStyle _pausedBanner;
 
-        /// <summary>
-        /// Пока хост на паузе, клиент не может ходить (<see cref="HostPauseSync"/>). Без надписи это
-        /// неотличимо от зависшей игры, поэтому баннер рисуется всегда — не в оверлее и не в меню,
-        /// которые по умолчанию закрыты.
-        /// </summary>
-        private void DrawHostPausedBanner()
+        private void DrawWorldPausedBanner()
         {
             if (_pausedBanner == null)
                 _pausedBanner = new GUIStyle(GUI.skin.box)
@@ -1313,8 +1368,13 @@ namespace SailwindCoop.Runtime
                     wordWrap = false,
                 };
             const float w = 360f, h = 34f;
+            var reasons = WorldPauseReasons;
+            string message = ManualWorldPaused ? "World paused. Use the menu to resume."
+                : (reasons & WorldPauseReason.Loading) != 0 ? "Waiting for a player to load"
+                : (reasons & WorldPauseReason.Settling) != 0 ? "Waiting for the world to settle"
+                : "World paused";
             GUI.Label(new Rect((Screen.width - w) * 0.5f, 24f, w, h),
-                      "Host paused the game", _pausedBanner);
+                      message, _pausedBanner);
         }
 
         private void OnDestroy()
@@ -1463,7 +1523,11 @@ namespace SailwindCoop.Runtime
             if (steam) Net.StartSteamHost(port, Plugin.Cfg.SteamFriendsOnly.Value);
             else
             Net.StartHost(port);
-            if (Net.Role == Role.Host) Mods.BeginHost();
+            if (Net.Role == Role.Host)
+            {
+                GameMenuPause.HandOffToSession();
+                Mods.BeginHost();
+            }
             NoticeFaultedPatchSets();
         }
 
@@ -1957,6 +2021,7 @@ namespace SailwindCoop.Runtime
             Boats.Clear();
             Players.Clear();
             _rosterTimer = 0f;
+            GameMenuPause.ReturnToSolo();
         }
 
     }

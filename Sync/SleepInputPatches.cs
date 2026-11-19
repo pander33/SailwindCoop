@@ -51,7 +51,8 @@ namespace SailwindCoop.Sync
             __state = default(SleepSync.NeedsSnapshot);
             try
             {
-                if (Active && SleepSync.Instance.AdjustsNeeds && !__instance.godMode && GameState.playing &&
+                if (Active && CoopBehaviour.Instance?.WorldGameplayPaused != true &&
+                    SleepSync.Instance.AdjustsNeeds && !__instance.godMode && GameState.playing &&
                     !GameState.recovering && GameState.currentShipyard == null &&
                     !(EconomyUI.instance.uiActive && !Debugger.buildDebugModeOn) && !__instance.applyOverride)
                     __state = new SleepSync.NeedsSnapshot

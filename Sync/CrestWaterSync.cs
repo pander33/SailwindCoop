@@ -165,8 +165,8 @@ namespace SailwindCoop.Sync
 
         /// <summary>
         /// Один шаг часов воды. Монотонность — не украшение: см. <c>UpdateData</c> в комментарии
-        /// класса. Шаг масштабируется хостовым <c>timeScale</c>, поэтому пауза хоста (JoinPause или
-        /// его меню) останавливает воду клиента, а пауза самого клиента — нет.
+        /// класса. Шаг масштабируется хостовым <c>timeScale</c>, поэтому остановка мира
+        /// останавливает воду и у гостя.
         /// </summary>
         private void AdvanceClock()
         {
@@ -248,6 +248,8 @@ namespace SailwindCoop.Sync
                                           e.Message, ref _wavesReport);
             }
         }
+
+        internal void SetHostTimeScale(float scale) => _hostTimeScale = scale;
 
         /// <summary>Клиент: принять снапшот.</summary>
         public void ApplyRemote(Net.CoopNet net, Net.EnvStateMsg msg)

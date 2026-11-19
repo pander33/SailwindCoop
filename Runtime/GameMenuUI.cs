@@ -57,17 +57,21 @@ namespace SailwindCoop.Runtime
         private const float BodyY = 1.25f, FirstRowY = 0.82f, RowStep = 0.255f, PrimaryY = -0.48f, BackY = -0.82f, FrontZ = -0.10f;
         // The Escape menu's Co-op button: right column, beside the game's version.
         private const float WorldEntryX = 1.45f, WorldEntryY = -0.62f;
+        private const float PauseEntryX = 1.55f, PauseEntryY = -0.96f;
 
         private static readonly FieldInfo AnimsPlaying = AccessTools.Field(typeof(StartMenu), "animsPlaying");
+        private static readonly MethodInfo MoveToPlayer = AccessTools.Method(typeof(StartMenu), "MoveMenuToPlayer");
 
         private readonly CoopBehaviour _coop;
         private readonly CoopMenuUI _window;
+        private readonly Action _togglePause;
 
         private StartMenu _menu;
         private GameObject _kit, _startUI, _settingsUI, _recoveryUI, _confirmQuitUI, _page, _titleEntry, _worldEntry;
         private TextMesh _body;
         private readonly Row[] _rows = new Row[Rows];
         private Row _primary;
+        private Row _pauseEntry;
 
         private Place _place = Place.Closed;
         private bool _typing;
@@ -76,18 +80,19 @@ namespace SailwindCoop.Runtime
         private bool _reopenTitle;
         private float _bindAt, _boundAt, _refreshAt;
         private bool _broken, _layoutWarned;
+        private bool _poseSyncedWhilePaused;
         private int _failures;
 
         public GameMenuUI(CoopBehaviour coop, CoopMenuUI window)
         {
             _coop = coop;
             _window = window;
+            _togglePause = coop.ToggleWorldPause;
         }
 
         public bool Open => _place != Place.Closed;
 
-        // StartMenu holds the world paused across its settings pages, even with F8 on top.
-        internal bool WorldPauseOpen => GameState.playing && (_place == Place.World ||
+        internal bool WorldMenuOpen => GameState.playing && (_place == Place.World ||
             (_settingsUI != null && _settingsUI.activeInHierarchy) ||
             (_recoveryUI != null && _recoveryUI.activeInHierarchy) ||
             (_confirmQuitUI != null && _confirmQuitUI.activeInHierarchy));
@@ -100,7 +105,8 @@ namespace SailwindCoop.Runtime
         {
             var hooks = new PatchHookCatalog();
             hooks.Install(typeof(StartMenu), "LateUpdate", Type.EmptyTypes, method => harmony.Patch(method,
-                prefix: new HarmonyMethod(typeof(GameMenuUI), nameof(MenuKeyPrefix))));
+                prefix: new HarmonyMethod(typeof(GameMenuUI), nameof(MenuKeyPrefix)),
+                postfix: new HarmonyMethod(typeof(GameMenuUI), nameof(KeepWorldMenuInView))));
             PatchHealth.Report("Game menu", hooks);
 
             // The game's key bindings (GameInput, in Oculus.VR) do not look
@@ -122,13 +128,35 @@ namespace SailwindCoop.Runtime
             }
         }
 
-        private static bool KeyPrefix(ref bool __result)
+        private static bool KeyPrefix(InputName __0, ref bool __result)
         {
             // Called many times a frame: a plain try instead of a guard that allocates.
-            try { if (CoopBehaviour.Instance?.GameMenu?.Typing != true) return true; }
+            try
+            {
+                if (CoopBehaviour.Instance?.GameMenu?.Typing != true &&
+                    !(IsMovementKey(__0) && GameMenuPause.HoldsMovement)) return true;
+            }
             catch { return true; }
             __result = false;
             return false;
+        }
+
+        private static bool IsMovementKey(InputName key)
+        {
+            switch (key)
+            {
+                case InputName.MoveUp:
+                case InputName.MoveDown:
+                case InputName.MoveLeft:
+                case InputName.MoveRight:
+                case InputName.Run:
+                case InputName.Walk:
+                case InputName.Jump:
+                case InputName.Crouch:
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         internal bool Typing => _typing && _place != Place.Closed;
@@ -137,6 +165,12 @@ namespace SailwindCoop.Runtime
         // over the page. Escape closes the page and the menu together, as on the game's other pages.
         private static bool MenuKeyPrefix() => PatchGuard.Prefix(
             () => CoopBehaviour.Instance?.GameMenu?.TakeMenuKey() != true, Report);
+
+        private static void KeepWorldMenuInView()
+        {
+            try { CoopBehaviour.Instance?.GameMenu?.RefreshWorldMenu(); }
+            catch (Exception error) { Report(error); }
+        }
 
         private static void Report(Exception error) => Plugin.Logger.LogWarning("[GameMenu] " + error);
 
@@ -195,6 +229,28 @@ namespace SailwindCoop.Runtime
             _window.PageWantsLanSearch = false;
         }
 
+        private void RefreshWorldMenu()
+        {
+            if (_pauseEntry != null && _settingsUI.activeInHierarchy)
+                Fill(_pauseEntry, _coop.CanUseWorldPause
+                    ? new Entry(_coop.WorldPauseLabel, _togglePause)
+                    : default(Entry));
+
+            if (!GameMenuPause.InSession || !WorldMenuOpen || !GameMenuPause.HasOpenWorldMenu(_menu))
+            {
+                _poseSyncedWhilePaused = false;
+                return;
+            }
+            Vector3 before = _menu.transform.position;
+            Quaternion facing = _menu.transform.rotation;
+            MoveToPlayer?.Invoke(_menu, null);
+            bool needsSync = !Physics.autoSyncTransforms;
+            if (needsSync && (!_poseSyncedWhilePaused || _menu.transform.position != before ||
+                              _menu.transform.rotation != facing))
+                Physics.SyncTransforms();
+            _poseSyncedWhilePaused = needsSync;
+        }
+
         // One failure takes the page down to be built anew; a page that keeps failing is given up.
         private void Fail(Exception error)
         {
@@ -218,9 +274,10 @@ namespace SailwindCoop.Runtime
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[GameMenu] The game's menu page was not given back: " + e.Message); }
             Forget();
-            foreach (GameObject made in new[] { _titleEntry, _worldEntry, _page, _kit })
+            foreach (GameObject made in new[] { _titleEntry, _worldEntry, _pauseEntry?.Root, _page, _kit })
                 if (made != null) UnityEngine.Object.Destroy(made);
             _titleEntry = _worldEntry = _page = _kit = null;
+            _pauseEntry = null;
             _menu = null;
         }
 
@@ -280,6 +337,11 @@ namespace SailwindCoop.Runtime
             _worldEntry.name = "button coop";
             SetLabel(_worldEntry, "Co-op");
             _worldEntry.transform.localPosition = new Vector3(WorldEntryX, WorldEntryY, quitButton.localPosition.z);
+            _pauseEntry = Copy(quitButton.gameObject, _settingsUI.transform, null);
+            _pauseEntry.Root.name = "button world pause";
+            _pauseEntry.Root.transform.localPosition = new Vector3(PauseEntryX, PauseEntryY, quitButton.localPosition.z);
+            _pauseEntry.Button.Pressed = () => _pauseEntry.Action?.Invoke();
+            Fill(_pauseEntry, default(Entry));
 
             BuildPage(menu, recovery, quitButton.gameObject);
             return true;

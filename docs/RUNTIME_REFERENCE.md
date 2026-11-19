@@ -172,6 +172,19 @@ Domain notes:
 - **Missions:** the journal is sent on change and to a client that finished loading; a guest takes
   the journal only from the host.
 - **House doors:** `HouseDoor` (106) carries the absolute target of island house doors.
+- **World pause:** Escape and F8 offer **Pause world** / **Resume world** in a loaded co-op session.
+  Escape retains its camera and cursor behavior. `Runtime/GameMenuPause.cs` hands the clock from
+  the stock menu to co-op on session start and back when the session ends. The Escape page follows
+  the camera while the world runs. The host applies `PauseRequest` as a desired state and sends
+  `PauseState` reliably, including the baseline for joining players. `JoinPause` owns the host
+  clock until the manual, loading and teleport reasons have all cleared. The loading timeout clears
+  only the load hold. A join can use a fresh save taken under manual pause. If that save stalls,
+  it waits for the crew to resume. Unscaled environment snapshots carry the pause revision, so
+  delayed UDP updates cannot roll back the clock after a transition. `HostPauseSync` holds local
+  movement while the menu pointer stays available. Sleep and recovery can hand back player control
+  through `HostPauseSync`, which restores it as soon as no sleep, pause or menu holds it. During a
+  world pause, the normal needs update and movement drain wait on both roles. The stock Escape
+  menu blocks local locomotion independently of the clock, keeping gravity and collisions active.
 - **Saves:** the profile and the co-op slot are written atomically with a backup and `GameVersion`.
   A join from a loaded world first returns to the title screen (`CoopBehaviour.LeaveWorldFirst`):
   the session is torn down, an own world is saved, the game's static state is reset and scene 0 is

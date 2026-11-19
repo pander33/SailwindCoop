@@ -10,6 +10,8 @@ namespace SailwindCoop.Sync
 {
     internal static class InputScopePatches
     {
+        private static readonly FieldInfo ClickedButton = AccessTools.Field(typeof(GoPointer), "clickedButton");
+
         internal static void Apply(Harmony harmony)
         {
             var hooks = new PatchHookCatalog();
@@ -43,6 +45,14 @@ namespace SailwindCoop.Sync
             __state = null;
             try { __state = InteractionContext.Begin(InteractionSource.LocalInput); }
             catch (Exception e) { Report(e); }
+            // A release edge could otherwise be lost during the hold. StartMenu uses its own
+            // MouseButtonPointer and remains clickable.
+            if (CoopBehaviour.Instance?.HostPause?.Frozen == true)
+            {
+                try { ReleaseClick(__instance); }
+                catch (Exception e) { Report(e); }
+                return false;
+            }
             bool consumed = false;
             try { consumed = CoopBehaviour.Instance?.Dice?.Input.Handle(__instance) == true; }
             catch (Exception e) { Report(e); }
@@ -56,6 +66,16 @@ namespace SailwindCoop.Sync
         {
             try { __state?.Dispose(); }
             catch (Exception e) { Report(e); }
+        }
+
+        internal static void ReleaseClick(GoPointer pointer)
+        {
+            var clicked = ClickedButton?.GetValue(pointer) as GoPointerButton;
+            if (clicked == null) return;
+            clicked.OnUnactivate();
+            clicked.OnUnactivate(pointer);
+            clicked.Unclick();
+            ClickedButton.SetValue(pointer, null);
         }
 
         private struct LengthState { internal bool Captured; internal float Before; }
@@ -95,16 +115,21 @@ namespace SailwindCoop.Sync
         private static void PostLock(GPButtonSteeringWheel __instance, WheelState __state)
             => PatchGuard.Run(() => { if (__state.Captured && __instance != null && !InteractionContext.Suppressed &&
                 __state.Locked != ControlsSync.Locked(__instance)) ControlsSync.Instance?.NotifyWheelLock(__instance); }, Report);
-        private static void PreWheelInput(GPButtonSteeringWheel __instance, out WheelState __state)
+        private static bool PreWheelInput(GPButtonSteeringWheel __instance, out WheelState __state)
         {
-            var state = new WheelState();
+            __state = default(WheelState);
             try
             {
+                if (CoopBehaviour.Instance?.HostPause?.Frozen == true) return false;
                 if (__instance != null && !InteractionContext.Suppressed)
-                { state.Input = __instance.currentInput; state.Held = ControlsSync.WheelHeld(__instance); state.Captured = true; }
+                {
+                    __state.Input = __instance.currentInput;
+                    __state.Held = ControlsSync.WheelHeld(__instance);
+                    __state.Captured = true;
+                }
             }
             catch (Exception e) { Report(e); }
-            __state = state;
+            return true;
         }
         private static void PostWheelInput(GPButtonSteeringWheel __instance, WheelState __state)
         {

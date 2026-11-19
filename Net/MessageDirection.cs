@@ -30,6 +30,7 @@ namespace SailwindCoop.Net
                 case MsgType.MissionAbandon:
                 case MsgType.MissionDeliver:
                 case MsgType.ClientWorldLoaded:
+                case MsgType.PauseRequest:
                 case MsgType.ItemOperationRequest:
                 case MsgType.WheelLockRequest:
                 case MsgType.MooringCarryRequest:
@@ -60,6 +61,7 @@ namespace SailwindCoop.Net
                 case MsgType.DespawnObject:
                 case MsgType.BoatState:
                 case MsgType.EnvState:
+                case MsgType.PauseState:
                 case MsgType.ControlState:
                 case MsgType.AnchorState:
                 case MsgType.MooringState:

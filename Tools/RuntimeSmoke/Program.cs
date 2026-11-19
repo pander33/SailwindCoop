@@ -54,6 +54,35 @@ internal static class Program
         string path = Path.Combine(dir, "profile.dat");
         try
         {
+            Test("world pause keeps the clock held until the last reason clears", () => {
+                var clock = new WorldPauseClock();
+                float scale = 4f;
+                bool autoSync = true;
+                clock.SetReasons(WorldPauseReason.Manual, ref scale, ref autoSync);
+                Assert(scale == 0f && !autoSync, "manual pause did not stop the simulation");
+                Assert(!clock.SetReasons(WorldPauseReason.Manual, ref scale, ref autoSync) && clock.Revision == 1,
+                    "duplicate pause changed the revision");
+                clock.SetReasons(WorldPauseReason.Manual | WorldPauseReason.Loading | WorldPauseReason.Settling,
+                    ref scale, ref autoSync);
+                clock.SetReasons(WorldPauseReason.Loading | WorldPauseReason.Settling, ref scale, ref autoSync);
+                Assert(scale == 0f && !autoSync, "resuming manually cleared a technical pause");
+                clock.SetReasons(WorldPauseReason.Settling, ref scale, ref autoSync);
+                Assert(scale == 0f && !autoSync, "completing a join cleared the teleport settle");
+                clock.SetReasons(WorldPauseReason.None, ref scale, ref autoSync);
+                Assert(scale == 4f && autoSync, "the original sleep rate or physics settings were lost");
+            });
+            Test("world pause restores the normal rate when shared sleep ends under it", () => {
+                var clock = new WorldPauseClock();
+                float scale = 4f;
+                bool autoSync = false;
+                clock.SetReasons(WorldPauseReason.Loading, ref scale, ref autoSync);
+                clock.SetReasons(WorldPauseReason.Manual | WorldPauseReason.Loading, ref scale, ref autoSync);
+                clock.SetResumeScale(1f);
+                clock.SetReasons(WorldPauseReason.Manual, ref scale, ref autoSync);
+                Assert(scale == 0f, "finishing a load undid the manual pause");
+                clock.SetReasons(WorldPauseReason.None, ref scale, ref autoSync);
+                Assert(scale == 1f && !autoSync, "sleep rate or existing transform mode was restored incorrectly");
+            });
             Test("shared sleep caps physics catch-up without stretching the regular step", () => {
                 const float step = 0.02222f;
                 Assert(SharedSleepTiming.FrameBudget(step, 0.3333f) == step * 8f, "too many fixed steps per frame");

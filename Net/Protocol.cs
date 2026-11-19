@@ -30,7 +30,8 @@ namespace SailwindCoop.Net
         // 110: sail repair acknowledgements and recoverable dog purchase results.
         // 111: recoverable Economy Overhaul sales and empty office snapshots.
         // 112: AnchorState carries the host's RopeControllerAnchor.canPull.
-        public const int Version = 112;
+        // 113: explicit world pause and environment snapshots ordered against pause transitions.
+        public const int Version = 113;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -96,6 +97,8 @@ namespace SailwindCoop.Net
                 case MsgType.PlayerState: return new PlayerStateMsg();
                 case MsgType.BoatState: return new BoatStateMsg();
                 case MsgType.EnvState: return new EnvStateMsg();
+                case MsgType.PauseRequest: return new PauseRequestMsg();
+                case MsgType.PauseState: return new PauseStateMsg();
                 case MsgType.ControlState: return new ControlStateMsg();
                 case MsgType.AnchorState: return new AnchorStateMsg();
                 case MsgType.AnchorRequest: return new AnchorRequestMsg();

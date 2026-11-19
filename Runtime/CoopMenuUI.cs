@@ -429,6 +429,8 @@ namespace SailwindCoop.Runtime
                 case Mode.Hosting: DrawSessionHosting(); break;
                 default: DrawSessionJoined(); break;
             }
+            if (_coop.CanUseWorldPause && GUILayout.Button(_coop.WorldPauseLabel, _button, GUILayout.Height(ButtonHeight)))
+                _coop.ToggleWorldPause();
             GUILayout.EndVertical();
         }
 
@@ -833,6 +835,7 @@ namespace SailwindCoop.Runtime
             {
                 case MemberJoinState.Handshaking: return "Handshake";
                 case MemberJoinState.Queued: return "Waiting";
+                case MemberJoinState.WaitingForResume: return "World paused";
                 case MemberJoinState.ReceivingWorld: return "Receiving";
                 case MemberJoinState.LoadingWorld: return "Loading";
                 case MemberJoinState.Ready: return "Ready";
@@ -1321,7 +1324,7 @@ namespace SailwindCoop.Runtime
             else if (_cursorCaptured)
             {
                 // The game's settings can still be underneath this window and own the cursor.
-                if (_coop.GameMenu?.WorldPauseOpen == true)
+                if (_coop.GameMenu?.WorldMenuOpen == true)
                 {
                     _cursorCaptured = false;
                     return;

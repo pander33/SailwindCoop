@@ -24,6 +24,8 @@ namespace SailwindCoop.Sync
         private readonly CoopNet _net;
         private float _sendStamp = float.NegativeInfinity;
         private float _receivedStamp = float.NegativeInfinity;
+        private uint _pauseRevision;
+        private long _snapshotTick = long.MinValue;
         private float _scaledSinceSend, _realSinceSend;
         private bool _windDisabled;     // client: did we turn off the local Wind sim?
         private bool _wavesDisabled;    // client: did we turn off the local WavesInertia sim?
@@ -46,6 +48,19 @@ namespace SailwindCoop.Sync
 
         public EnvironmentSync(CoopNet net) { _net = net; }
 
+        internal static void PatchSun(Harmony harmony)
+        {
+            var sunPaused = AccessTools.DeclaredMethod(typeof(Sun), "SunPaused", Type.EmptyTypes);
+            if (sunPaused == null) throw new MissingMethodException(typeof(Sun).Name, "SunPaused");
+            harmony.Patch(sunPaused, postfix: new HarmonyMethod(typeof(EnvironmentSync), nameof(HoldSun)));
+        }
+
+        private static void HoldSun(ref bool __result)
+        {
+            try { __result |= Runtime.CoopBehaviour.Instance?.HostPause?.Frozen == true; }
+            catch (Exception e) { Plugin.Logger.LogWarning("[EnvironmentSync] Could not hold sun: " + e.Message); }
+        }
+
         // Client: wind moved from the value at the last snapshot to the new one over one interval.
         private const float WindSnapDegrees = 90f;
         private bool _haveWindTarget;
@@ -66,7 +81,7 @@ namespace SailwindCoop.Sync
         // Host: capture and broadcast
         // -----------------------------------------------------------------
 
-        public void Tick(float dt)
+        public void Tick(float dt, uint pauseRevision)
         {
             if (_net.Role == Role.Client) { SmoothWind(dt); if (Crest != null) Crest.Tick(); return; }
             if (_net.Role != Role.Host) return;
@@ -88,6 +103,7 @@ namespace SailwindCoop.Sync
             var msg = new EnvStateMsg
             {
                 Tick = _net.Clock.ServerTick,
+                PauseRevision = pauseRevision,
                 Wind = global::Wind.currentWind,
                 BaseWind = global::Wind.currentBaseWind,
                 WindRot = global::Wind.windRotation,
@@ -139,7 +155,10 @@ namespace SailwindCoop.Sync
 
         public void OnEnvState(EnvStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
-            if (_net.Role != Role.Client) return;
+            if (_net.Role != Role.Client || msg.PauseRevision < _pauseRevision ||
+                msg.Tick <= _snapshotTick) return;
+            _pauseRevision = msg.PauseRevision;
+            _snapshotTick = msg.Tick;
 
             // Wind: take over from the local simulation so it stops fighting us.
             var wind = global::Wind.instance;
@@ -198,6 +217,18 @@ namespace SailwindCoop.Sync
 
         }
 
+        internal void OnPauseState(PauseStateMsg msg)
+        {
+            // A newer environment sample may arrive ahead of the reliable packet. Its measured
+            // simulation rate takes precedence over the transition's instantaneous rate.
+            if (msg.Revision < _pauseRevision || (msg.Revision == _pauseRevision && HasHostState)) return;
+            _pauseRevision = msg.Revision;
+            HostTimeScale = msg.HostTimeScale;
+            HasHostState = true;
+            _receivedStamp = Time.unscaledTime;
+            Crest?.SetHostTimeScale(HostTimeScale);
+        }
+
         public void Clear()
         {
             // Hand the wind back to the local simulation for single-player.
@@ -215,6 +246,8 @@ namespace SailwindCoop.Sync
             _waves = null;
             _sendStamp = float.NegativeInfinity;
             _receivedStamp = float.NegativeInfinity;
+            _pauseRevision = 0;
+            _snapshotTick = long.MinValue;
             _scaledSinceSend = _realSinceSend = 0f;
             _haveWindTarget = false;
             _windT = 1f;

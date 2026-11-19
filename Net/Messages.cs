@@ -133,6 +133,8 @@ namespace SailwindCoop.Net
         PostalBoard = 137,
         TradeSale = 138,
         TradeSaleReceipt = 139,
+        PauseRequest = 140,
+        PauseState = 141,
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>
@@ -172,6 +174,7 @@ namespace SailwindCoop.Net
         Ready = 4,
         Failed = 5,
         CheckingMods = 6,   // the host sent its mod list and waits for the client's answer
+        WaitingForResume = 7,
     }
 
     public enum GameplayNoticeKind : byte
@@ -533,6 +536,7 @@ namespace SailwindCoop.Net
         public float CrestWindWavesWeight;
         // Host simulation rate. Zero marks a world pause. During shared sleep this is measured.
         public float HostTimeScale;
+        public uint PauseRevision;
         // The two inputs of OceanUpdaterCrest.DCTInertiaUpdate that belong to the local player:
         // the inertia waves scale with GameState.distanceToLand and drop to a quarter while
         // GameState.eyesFullyClosed. The client runs the updater with the host's values, so its
@@ -564,6 +568,7 @@ namespace SailwindCoop.Net
             w.Put(CrestTargetInertiaAngle);
             w.Put(CrestWindWavesWeight);
             w.Put(HostTimeScale);
+            w.Put(PauseRevision);
             w.Put(CrestDistanceToLand);
             w.Put(CrestEyesClosed);
         }
@@ -590,8 +595,39 @@ namespace SailwindCoop.Net
             CrestTargetInertiaAngle = r.GetFloat();
             CrestWindWavesWeight = r.GetFloat();
             HostTimeScale = r.GetFloat();
+            PauseRevision = r.GetUInt();
             CrestDistanceToLand = r.GetFloat();
             CrestEyesClosed = r.GetBool();
+        }
+    }
+
+    public sealed class PauseRequestMsg : INetMessage
+    {
+        public bool Paused;
+        public MsgType Type => MsgType.PauseRequest;
+        public void Serialize(NetDataWriter w) => w.Put(Paused);
+        public void Deserialize(NetDataReader r) => Paused = r.GetBool();
+    }
+
+    public sealed class PauseStateMsg : INetMessage
+    {
+        public uint Revision;
+        public WorldPauseReason Reasons;
+        public float HostTimeScale;
+        public MsgType Type => MsgType.PauseState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Revision);
+            w.Put((byte)Reasons);
+            w.Put(HostTimeScale);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Revision = r.GetUInt();
+            Reasons = (WorldPauseReason)r.GetByte();
+            HostTimeScale = r.GetFloat();
         }
     }
 

@@ -29,6 +29,7 @@
     <Compile Include="..\..\Net\ModMessages.cs" Link="Net\ModMessages.cs" />
     <Compile Include="..\..\Net\Protocol.cs" Link="Net\Protocol.cs" />
     <Compile Include="..\..\Net\MessageDirection.cs" Link="Net\MessageDirection.cs" />
+    <Compile Include="..\..\Net\WorldPauseReason.cs" Link="Net\WorldPauseReason.cs" />
     <Compile Include="..\..\Net\NetRegistry.cs" Link="Net\NetRegistry.cs" />
     <Compile Include="..\..\Sync\SleepTransitionState.cs" Link="Sync\SleepTransitionState.cs" />
     <Compile Include="..\..\Sync\DeckForceTimeline.cs" Link="Sync\DeckForceTimeline.cs" />
