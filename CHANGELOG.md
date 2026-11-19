@@ -14,6 +14,7 @@ Everyone must update to wire protocol 112.
   cargo, and cannot be put down inside them. A crate left inside the hull could roll the boat
   over or spin it.
 - Guests now bump into cargo lying on deck and can stand on crates, as in single player.
+- Nobody can push a boat while carrying cargo, the host included.
 
 ## [0.9.0] - 2026-11-16
 

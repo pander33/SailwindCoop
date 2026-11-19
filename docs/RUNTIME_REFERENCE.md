@@ -63,13 +63,12 @@ Domain notes:
   `MoveProxyToItem` read the set, so these colliders are not switched off and on every frame. The
   hand's checker drops colliders that were switched off (`PruneCollisionChecker`): they send no
   `OnTriggerExit`.
-- **Hands full of cargo (client):** while a client carries cargo (`ItemSync.IsCargo`) its
-  pointer reaches only buttons the carried item accepts (`AllowOnItemClick`; none for a crate). A
-  postfix of `GoPointer.DoRaycast` drops any other target and unlooks it
-  (`InteractionSync.BlockedWhileCarrying`). On the host the crate in front of the camera takes the
-  ray; a client's did not, so a guest could steer, crank and work controls with a crate in his
-  arms. Loading uses Alt on cargo lying down and delivery uses trigger areas, so neither needs the
-  pointer while carrying.
+- **Pushing with full hands:** nobody pushes a boat (hull, dock or sail push control) with cargo
+  (`ItemSync.IsCargo`) in his arms; host and client follow the same rule, and a small item does
+  not stop a push. The game itself does not stop it. `InteractionSync.ShouldBlockPushWhileHolding` skips the push control's
+  `ExtraFixedUpdate` on the pushing machine; the host applies a client's push from its request,
+  not through that method. Wheel, winches and other controls stay usable with an item in hand, as
+  in the game.
 - **Items:** full ordered item state with revision, acknowledgement and tombstones. Compound
   operations (cutting, elixirs, oakum, oil, candles, tobacco packs) go through
   `ItemOperationRequest`/`Result` and apply once. Typed components cover food, soup, kettle, stove,

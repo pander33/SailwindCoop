@@ -537,7 +537,7 @@ namespace SailwindCoop.Sync
         }
 
         /// <summary>Cargo: what the game carries in both hands, trade goods and crates.</summary>
-        private static bool IsCargo(ShipItem item)
+        internal static bool IsCargo(ShipItem item)
             => item.big || item is ShipItemCrate || item.GetComponent<Good>() != null;
 
         /// <summary>A proxy the game would keep solid: not in a belt slot, a crate, a stove.</summary>

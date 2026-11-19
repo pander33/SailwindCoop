@@ -56,7 +56,6 @@ namespace SailwindCoop.Sync
         private GoPointer _hostPointer;
         private bool _replaying;          // guard so the host's replay doesn't re-forward
         private GoPointer _gp;
-        private FieldInfo _fHeldItem;
         private DeckForceBatch _push;
         private ushort _pushIndex;
         private float _lastPushFixedTime;
@@ -127,13 +126,18 @@ namespace SailwindCoop.Sync
             return true;
         }
 
+        /// <summary>
+        /// Nobody pushes a boat with cargo in his arms (the game does not stop that); host and client
+        /// follow the same rule, so a small item in the hand does not stop a push. Skipping the push control's
+        /// ExtraFixedUpdate stops only the local player's push: the host applies a client's push
+        /// from its request (<see cref="ApplyForces"/>), not through this method.
+        /// </summary>
         public static bool ShouldBlockPushWhileHolding(GoPointerButton btn)
         {
             var self = Instance;
             if (self == null || btn == null) return false;
             if (self._net.State != LinkState.Connected || !IsPushButton(btn)) return false;
-            if (self._net.Role != Role.Client) return false;
-            if (!self.HasHeldItem()) return false;
+            if (!(self.HeldItem() is ShipItem item) || !ItemSync.IsCargo(item)) return false;
 
             self.RememberPush("block held '" + ButtonLabel(btn) + "'");
             return true;
@@ -539,17 +543,14 @@ namespace SailwindCoop.Sync
             RememberPush("out #" + _pushIndex);
         }
 
-        private bool HasHeldItem()
+        private PickupableItem HeldItem()
         {
             try
             {
                 if (_gp == null) _gp = UnityEngine.Object.FindObjectOfType<GoPointer>();
-                if (_gp == null) return false;
-                if (_fHeldItem == null)
-                    _fHeldItem = typeof(GoPointer).GetField("heldItem", BindingFlags.NonPublic | BindingFlags.Instance);
-                return _fHeldItem != null && _fHeldItem.GetValue(_gp) != null;
+                return _gp != null ? _gp.GetHeldItem() : null;
             }
-            catch { return false; }
+            catch { return null; }
         }
 
         private GoPointer HostPointer()
