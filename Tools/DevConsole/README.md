@@ -63,6 +63,7 @@ DLL as its body. This needs the .NET SDK and `curl` on the machine.
 | `Dev.Call(obj, "Method", args)` | calls a method, private or not |
 | `Dev.Dump(obj)` | all instance fields, inherited private ones included |
 | `Dev.Path(component)` | the transform path from the scene root |
+| `Dev.Needs(food: 75, sleep: 60, water: 90)` | sets the supplied needs and returns all three values |
 | `Dev.Items()` | one row per saved `ShipItem`: ids, `parentObject`, parent, sold, held, collider |
 | `Dev.Print(value)` | adds a line to `out` |
 | `Dev.Vars` | a dictionary that survives between snippets |
@@ -74,6 +75,20 @@ CoopBehaviour.Instance.Net.Role
 Dev.Items().Where(r => (int)r["parentObject"] > 0).ToList()
 Dev.Get(Dev.One<BoatLocalItems>(), "cachedItems")
 ```
+
+### Player needs
+
+Load a save or join a game, then run:
+
+```bash
+Tools/DevConsole/devrun.sh 'Dev.Needs()'
+Tools/DevConsole/devrun.sh 'Dev.Needs(food: 75, sleep: 60, water: 90)'
+Tools/DevConsole/devrun.sh -p 7779 'Dev.Needs(water: 100)'
+```
+
+Values are percentages from 0 to 100, with 100 meaning full, rested or hydrated. Each argument
+is optional. Changes apply once to the local player in the selected game instance. Normal
+consumption and debt mechanics continue, so setting water to 0 can trigger recovery.
 
 ## Safety
 

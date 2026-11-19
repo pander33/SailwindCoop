@@ -100,6 +100,34 @@ namespace SailwindCoop.DevConsole
             return path;
         }
 
+        /// <summary>Reads the local player's needs and sets any supplied bar values (0–100).</summary>
+        public static Dictionary<string, float> Needs(float? food = null, float? sleep = null, float? water = null)
+        {
+            if (!GameState.playing || PlayerNeeds.instance == null)
+                throw new InvalidOperationException("Load a game before reading or changing player needs.");
+
+            ValidateNeed(food, nameof(food));
+            ValidateNeed(sleep, nameof(sleep));
+            ValidateNeed(water, nameof(water));
+
+            if (food.HasValue) PlayerNeeds.food = food.Value;
+            if (sleep.HasValue) PlayerNeeds.sleep = sleep.Value;
+            if (water.HasValue) PlayerNeeds.water = water.Value;
+
+            return new Dictionary<string, float>
+            {
+                { "food", PlayerNeeds.food },
+                { "sleep", PlayerNeeds.sleep },
+                { "water", PlayerNeeds.water },
+            };
+        }
+
+        private static void ValidateNeed(float? value, string name)
+        {
+            if (value.HasValue && !(value.Value >= 0f && value.Value <= 100f))
+                throw new ArgumentOutOfRangeException(name, value.Value, "Use a value from 0 to 100.");
+        }
+
         /// <summary>One row per ShipItem with a save identity: what the save and the item caches see.</summary>
         public static List<Dictionary<string, object>> Items()
         {

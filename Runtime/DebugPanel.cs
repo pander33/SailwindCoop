@@ -9,7 +9,7 @@ namespace SailwindCoop.Runtime
 {
     /// <summary>
     /// Dev-only test harness. Creates hard-to-reach co-op scenarios on demand (gold,
-    /// item spawn, reputation, time/storm/teleport) without grinding to the right place/items.
+    /// item spawn, reputation, player needs, time/storm/teleport) without grinding to the right place/items.
     ///
     /// Pure setup tool — it changes NO wire format. A host item spawn goes through the vanilla
     /// path (<c>Instantiate(PrefabsDirectory.directory[i])</c> + <c>SaveablePrefab.RegisterToSave</c>),
@@ -31,6 +31,7 @@ namespace SailwindCoop.Runtime
 
         private string _goldAmount = "10000";
         private string _itemFilter = "";
+        private Vector2 _panelScroll;
         private Vector2 _scroll;
         private string _status = "—";
 
@@ -48,7 +49,8 @@ namespace SailwindCoop.Runtime
             if (!Visible) return;
             EnsureStyles();
 
-            const float w = 380f, h = 900f;
+            const float w = 380f;
+            float h = Mathf.Min(900f, Screen.height - 24f);
             var rect = new Rect(12, 12, w, h);
             GUI.Box(rect, "Debug Panel - Test Scenarios", _box);
 
@@ -58,6 +60,9 @@ namespace SailwindCoop.Runtime
             GUILayout.Label("Role: " + role + "   ·   " + _status, _label);
             GUILayout.Space(4);
 
+            _panelScroll = GUILayout.BeginScrollView(_panelScroll);
+            DrawNeeds();
+            GUILayout.Space(6);
             DrawGold();
             GUILayout.Space(6);
             DrawReputation();
@@ -70,8 +75,35 @@ namespace SailwindCoop.Runtime
             GUILayout.Space(6);
             DrawBoatBodies();
             DrawItemSpawn();
+            GUILayout.EndScrollView();
 
             GUILayout.EndArea();
+        }
+
+        private void DrawNeeds()
+        {
+            GUILayout.Label("- Player needs (local) -", _label);
+            if (!GameState.playing || GameState.currentlyLoading || PlayerNeeds.instance == null)
+            {
+                GUILayout.Label("Load a game to change player needs.", _label);
+                return;
+            }
+
+            DrawNeedSlider("Food", ref PlayerNeeds.food);
+            DrawNeedSlider("Sleep", ref PlayerNeeds.sleep);
+            DrawNeedSlider("Water", ref PlayerNeeds.water);
+        }
+
+        private void DrawNeedSlider(string name, ref float value)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(name, _label, GUILayout.Width(50));
+            float shown = Mathf.Clamp(value, 0f, 100f);
+            float selected = GUILayout.HorizontalSlider(shown, 0f, 100f, GUILayout.Width(190));
+            if (selected != shown && !float.IsNaN(selected))
+                value = Mathf.Round(selected);
+            GUILayout.Label(value.ToString("0") + "%", _label);
+            GUILayout.EndHorizontal();
         }
 
         // -----------------------------------------------------------------

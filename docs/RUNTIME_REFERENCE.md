@@ -63,6 +63,13 @@ Domain notes:
   `MoveProxyToItem` read the set, so these colliders are not switched off and on every frame. The
   hand's checker drops colliders that were switched off (`PruneCollisionChecker`): they send no
   `OnTriggerExit`.
+- **Hands full of cargo (client):** while a client carries cargo (`ItemSync.IsCargo`) its
+  pointer reaches only buttons the carried item accepts (`AllowOnItemClick`; none for a crate). A
+  postfix of `GoPointer.DoRaycast` drops any other target and unlooks it
+  (`InteractionSync.BlockedWhileCarrying`). On the host the crate in front of the camera takes the
+  ray; a client's did not, so a guest could steer, crank and work controls with a crate in his
+  arms. Loading uses Alt on cargo lying down and delivery uses trigger areas, so neither needs the
+  pointer while carrying.
 - **Items:** full ordered item state with revision, acknowledgement and tombstones. Compound
   operations (cutting, elixirs, oakum, oil, candles, tobacco packs) go through
   `ItemOperationRequest`/`Result` and apply once. Typed components cover food, soup, kettle, stove,
@@ -407,6 +414,9 @@ Domain notes:
   (`CoopMenuUI.WantsLanSearch`, ticked from `CoopBehaviour.Update`): it asks the limited
   broadcast, each adapter's directed broadcast and loopback every 1.5 s; `LanHostList` keeps one
   row per host session for 5 s. Join goes through the address field.
+- **Player needs in Debug:** F8 → Settings → Debug opens `Runtime/DebugPanel.cs` when
+  `[Debug] EnableDebugPanel` is enabled. In a loaded world, the Food, Sleep and Water sliders
+  show the current bars and set the selected bar to 0–100 for the local player.
 - **Wrong game version:** `CoopBehaviour` names game classes in its fields, so on a game that
   lacks one Unity does not create it and reports that only in `Player.log`. `Plugin.Awake` adds
   it through `Runtime/StartupNotice.cs`, which then shows an on-screen notice and logs the reason
