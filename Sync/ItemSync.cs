@@ -314,6 +314,12 @@ namespace SailwindCoop.Sync
             TickUnsealedCrate();
             if (_rowingOar != null && Time.frameCount - _lastRowFrame > 1) FlushOarStroke();
             SendLocalHeldPose(dt);
+            // Only a synced item is a puppet in the hand; any other is the game's own.
+            if (_net.Role == Role.Client)
+            {
+                var hand = HeldItem() as ShipItem;
+                HeldProbe.Tick(hand != null && _byItem.ContainsKey(hand) ? hand : null);
+            }
             TickInstruments(dt);
             TickOperations();
             TickPuppetsAwaitingStart();
@@ -428,6 +434,7 @@ namespace SailwindCoop.Sync
                 // another collider and vanish. The last received pose is boat-local, so a settled item
                 // keeps riding the boat after the host stops streaming it.
                 bool held = e.HolderNetId != 0;
+                UpdateSolidCargo(e, held);
                 PrepareForRemotePose(e.Item, held);   // layer 2 while in a hand, else 0
                 SetPuppet(e.Item, true);
                 ApplyItemPose(e, localNow, serverNow);
@@ -508,6 +515,39 @@ namespace SailwindCoop.Sync
 
         private static readonly List<Collider> PuppetColliders = new List<Collider>();
 
+        /// <summary>
+        /// Client: free cargo whose puppet proxy stays solid. The game counts every solid collider a
+        /// held item's proxy touches as an obstacle (PickupableItemCollisionChecker); a puppet's are
+        /// off, so a crate in the guest's hand went through the cargo lying on deck and could be put
+        /// down inside it. A kinematic solid proxy pushes no other puppet (they are kinematic too) and
+        /// is moved only by the host's stream. Kept as a set, read by <see cref="SetPuppet"/> and
+        /// <see cref="MoveProxyToItem"/>: switching the colliders off and on again every frame would
+        /// send the hand's checker a fresh OnTriggerEnter each time without an exit.
+        /// </summary>
+        private static readonly HashSet<ShipItem> _solidCargo = new HashSet<ShipItem>();
+
+        private static bool SolidCargo(ShipItem item)
+            => item != null && item.held == null && _solidCargo.Contains(item);
+
+        private void UpdateSolidCargo(ItemEntry e, bool held)
+        {
+            if (Time.frameCount % 600 == 0) _solidCargo.RemoveWhere(i => i == null);
+            if (!held && e.InventorySlot < 0 && IsCargo(e.Item) && FreeProxy(e.Item)) _solidCargo.Add(e.Item);
+            else _solidCargo.Remove(e.Item);
+        }
+
+        /// <summary>Cargo: what the game carries in both hands, trade goods and crates.</summary>
+        private static bool IsCargo(ShipItem item)
+            => item.big || item is ShipItemCrate || item.GetComponent<Good>() != null;
+
+        /// <summary>A proxy the game would keep solid: not in a belt slot, a crate, a stove.</summary>
+        private static bool FreeProxy(ShipItem item)
+        {
+            if (!item.gameObject.activeInHierarchy || ItemComponents.InStove(item)) return false;
+            var irb = item.GetItemRigidbody();
+            return irb != null && !irb.inStove && irb.GetCurrentBox() == null && irb.GetCurrentInventorySlot() == null;
+        }
+
         // Items that must be puppets but whose ItemRigidbody.Start has not run yet (see SetPuppet).
         private static readonly HashSet<ShipItem> _puppetAwaitingStart = new HashSet<ShipItem>();
         private static readonly List<ShipItem> _puppetStartScratch = new List<ShipItem>();
@@ -573,15 +613,25 @@ namespace SailwindCoop.Sync
                 bool keepWallAttachDriver = puppet && item != null && item.wallAttachment && item.held != null;
                 if (irb != null && keepWallAttachDriver && !irb.enabled) irb.enabled = true;
                 else if (irb != null && !keepWallAttachDriver && irb.enabled == puppet) irb.enabled = !puppet;
-                if (irb != null)
+                // The local hand's proxy is a trigger probe (HeldItemProbe): the pose stream calls this
+                // for it several times a second, and must leave its colliders and checker alone.
+                bool probed = puppet && irb != null && !irb.enabled && HeldProbe.Holds(item);
+                // Free cargo on a client keeps a solid proxy: an obstacle for the hand (_solidCargo).
+                bool solid = puppet && !probed && irb != null && !irb.enabled && SolidCargo(item);
+                if (irb != null && !probed)
                 {
-                    irb.ToggleCollider(!puppet);
+                    bool on = !puppet || solid;
+                    irb.ToggleCollider(on);
                     // Components can change without a transform hierarchy notification.
                     irb.GetComponentsInChildren(true, PuppetColliders);
                     try
                     {
                         foreach (var col in PuppetColliders)
-                            if (col != null && col.enabled == puppet) col.enabled = !puppet;
+                        {
+                            if (col == null) continue;
+                            if (solid && col.isTrigger) col.isTrigger = false;
+                            if (col.enabled != on) col.enabled = on;
+                        }
                     }
                     finally { PuppetColliders.Clear(); }
                 }
@@ -595,19 +645,41 @@ namespace SailwindCoop.Sync
                     }
                     // A kinematic puppet still shoves dynamic items; keep it purely visual so it can't
                     // push the client's other items out of sync with the host.
-                    if (body.detectCollisions == puppet) body.detectCollisions = !puppet;
+                    if (!probed && body.detectCollisions != (!puppet || solid)) body.detectCollisions = !puppet || solid;
                 }
-                if (puppet && item != null && item.colChecker != null)
-                {
-                    item.colChecker.collisions = 0;
-                    item.colChecker.allowObstructedDropping = true;
-                    if (_fColCheckerCollidedCols == null)
-                        _fColCheckerCollidedCols = typeof(PickupableItemCollisionChecker).GetField("collidedCols", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var list = _fColCheckerCollidedCols != null ? _fColCheckerCollidedCols.GetValue(item.colChecker) as System.Collections.IList : null;
-                    list?.Clear();
-                }
+                if (puppet && !probed) ClearCollisionChecker(item);
             }
             catch { }
+        }
+
+        /// <summary>Client: the wall check of the item in the local hand (see <see cref="HeldItemProbe"/>).</summary>
+        private static readonly HeldItemProbe HeldProbe = new HeldItemProbe();
+
+        /// <summary>Forget what the item's collision checker touched. A puppet's colliders are off and a
+        /// disabled collider sends no OnTriggerExit, so the list would keep its walls for good.</summary>
+        internal static void ClearCollisionChecker(ShipItem item)
+        {
+            if (item == null || item.colChecker == null) return;
+            item.colChecker.collisions = 0;
+            item.colChecker.allowObstructedDropping = true;
+            if (_fColCheckerCollidedCols == null)
+                _fColCheckerCollidedCols = typeof(PickupableItemCollisionChecker).GetField("collidedCols", BindingFlags.NonPublic | BindingFlags.Instance);
+            var list = _fColCheckerCollidedCols != null ? _fColCheckerCollidedCols.GetValue(item.colChecker) as System.Collections.IList : null;
+            list?.Clear();
+        }
+
+        /// <summary>Drop what the checker of the item in the hand can no longer touch: a collider
+        /// switched off (cargo another player picked up, a puppet) sends no OnTriggerExit, and the item
+        /// could then never be put down again. The count follows the list, as the game keeps them.</summary>
+        internal static void PruneCollisionChecker(ShipItem item)
+        {
+            if (item == null || item.colChecker == null) return;
+            if (_fColCheckerCollidedCols == null)
+                _fColCheckerCollidedCols = typeof(PickupableItemCollisionChecker).GetField("collidedCols", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (!(_fColCheckerCollidedCols?.GetValue(item.colChecker) is List<Collider> list)) return;
+            list.RemoveAll(col => col == null || !col.enabled || !col.gameObject.activeInHierarchy ||
+                                  (col.attachedRigidbody != null && !col.attachedRigidbody.detectCollisions));
+            item.colChecker.collisions = list.Count;
         }
 
         public void NotifyPickup(GoPointer pointer, PickupableItem pickup)
@@ -634,6 +706,7 @@ namespace SailwindCoop.Sync
             // but no joint, and the game's OnPickup clears the flags only through a joint. Left set,
             // the drop below reads it as a wall attach and the item hangs in the air for everyone.
             ClearStaleHangFlags(item);
+            _solidCargo.Remove(item); // the hand's proxy is the probe's now; ApplyRemote re-adds it once free
             SetPuppet(item, true);    // client-held items are visual only; no collision/boat push
             e.HolderNetId = _net.MyNetId;
             ResetItemPose(e);
@@ -2443,23 +2516,35 @@ namespace SailwindCoop.Sync
                 var proxy = item != null ? item.GetItemRigidbody() : null;
                 var body = proxy != null ? proxy.GetBody() : null;
                 if (proxy == null || body == null) return;
+                bool solid = kinematic && SolidCargo(item);
+                Vector3 pos;
+                Quaternion rot;
                 if (item.currentActualBoat != null && item.currentWalkCol != null)
                 {
                     Vector3 boatLocalPos = item.currentActualBoat.InverseTransformPoint(item.transform.position);
                     Quaternion boatLocalRot = Quaternion.Inverse(item.currentActualBoat.rotation) * item.transform.rotation;
-                    proxy.transform.position = item.currentWalkCol.TransformPoint(boatLocalPos);
-                    proxy.transform.rotation = item.currentWalkCol.rotation * boatLocalRot;
+                    pos = item.currentWalkCol.TransformPoint(boatLocalPos);
+                    rot = item.currentWalkCol.rotation * boatLocalRot;
                 }
                 else
                 {
-                    proxy.transform.position = item.transform.position;
-                    proxy.transform.rotation = item.transform.rotation;
+                    pos = item.transform.position;
+                    rot = item.transform.rotation;
+                }
+                // A solid proxy is moved only when its item moved: cargo at rest on deck then costs
+                // the physics scene nothing each frame.
+                var pt = proxy.transform;
+                if (!solid || (pt.position - pos).sqrMagnitude > 1e-8f || Quaternion.Angle(pt.rotation, rot) > 0.01f)
+                {
+                    pt.position = pos;
+                    pt.rotation = rot;
                 }
                 SetKinematic(body, kinematic);
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
-                // detection off entirely; restore it when the item is freed to local physics.
-                body.detectCollisions = !kinematic;
+                // detection off entirely; restore it when the item is freed to local physics. Free
+                // cargo on a client stays solid as an obstacle for the hand (_solidCargo).
+                body.detectCollisions = !kinematic || solid;
                 if (kinematic)
                 {
                     body.velocity = Vector3.zero;
@@ -4519,6 +4604,8 @@ namespace SailwindCoop.Sync
 
         public void Clear()
         {
+            HeldProbe.Reset();
+            _solidCargo.Clear();
             foreach (var e in _items)
                 if (e != null && e.Item != null)
                     RestoreDisconnectedItem(e.Item);

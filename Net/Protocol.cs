@@ -29,7 +29,8 @@ namespace SailwindCoop.Net
         // 109: sail repair deltas, dog purchase results, correlated postal delivery replies.
         // 110: sail repair acknowledgements and recoverable dog purchase results.
         // 111: recoverable Economy Overhaul sales and empty office snapshots.
-        public const int Version = 111;
+        // 112: AnchorState carries the host's RopeControllerAnchor.canPull.
+        public const int Version = 112;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)

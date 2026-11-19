@@ -265,7 +265,7 @@ namespace SailwindCoop.Sync
                 {
                     BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = pose.Tick,
                     Frame = pose.Frame, Pos = pose.Pos, Rot = pose.Rot, Vel = pose.Vel,
-                    Set = _anchor.IsSet(), HolderNetId = holder, RopeLength = _rope.currentLength,
+                    Set = _anchor.IsSet(), CanPull = _rope.canPull, HolderNetId = holder, RopeLength = _rope.currentLength,
                     Revision = _revision = SessionCounters.NextRevision(),
                 };
             }
@@ -281,7 +281,7 @@ namespace SailwindCoop.Sync
                 BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = tick,
                 Frame = world ? CoordFrame.World : CoordFrame.Boat, Pos = pos,
                 Rot = world ? _anchor.transform.rotation : Quaternion.Inverse(_boat.rotation) * _anchor.transform.rotation,
-                Vel = vel, Set = _anchor.IsSet(), HolderNetId = holder, RopeLength = _rope.currentLength, Revision = _revision = SessionCounters.NextRevision(),
+                Vel = vel, Set = _anchor.IsSet(), CanPull = _rope.canPull, HolderNetId = holder, RopeLength = _rope.currentLength, Revision = _revision = SessionCounters.NextRevision(),
             };
         }
 
@@ -302,7 +302,7 @@ namespace SailwindCoop.Sync
             _net.Broadcast(new ResyncRequestMsg { BoatIndex = _boatId, Domain = ResyncDomain.Anchor }, DeliveryMethod.ReliableOrdered);
         }
         private static bool Changed(AnchorStateMsg a, AnchorStateMsg b)
-            => a == null || a.Frame != b.Frame || a.Set != b.Set || a.HolderNetId != b.HolderNetId || !a.RopeLength.Equals(b.RopeLength) ||
+            => a == null || a.Frame != b.Frame || a.Set != b.Set || a.CanPull != b.CanPull || a.HolderNetId != b.HolderNetId || !a.RopeLength.Equals(b.RopeLength) ||
                (a.Pos - b.Pos).sqrMagnitude > 1e-4f || Quaternion.Angle(a.Rot, b.Rot) > 0.1f;
 
         public void OnAnchorState(AnchorStateMsg msg, NetPeer peer)
@@ -316,6 +316,10 @@ namespace SailwindCoop.Sync
             }
             if (_anchor == null || !_gate.Receive(msg.Revision, msg.RequesterNetId, msg.RequestId, _net.MyNetId)) return;
             if (LocalHeld) return;
+            // The winch here takes no pull while canPull is false, and only Anchor.ExtraFixedUpdate
+            // writes it — suppressed on a client (SuppressPhysics). Without the host's value the
+            // client's flag stayed as loaded and the crew could not weigh the anchor.
+            _rope.canPull = msg.CanPull;
             bool changed = _holder != msg.HolderNetId;
             _holder = msg.HolderNetId;
             if (changed) { _slave.Clear(); _haveFrame = false; }

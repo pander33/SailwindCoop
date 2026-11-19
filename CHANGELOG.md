@@ -2,6 +2,19 @@
 
 All notable user-facing changes are documented in this file.
 
+## [Unreleased]
+
+Everyone must update to wire protocol 112.
+
+### Fixed
+
+- Guests can weigh the anchor with the winch. The winch now follows the host's rule for when the
+  rope can be pulled.
+- A crate or other cargo in a guest's hands no longer passes through walls, the hull or other
+  cargo, and cannot be put down inside them. A crate left inside the hull could roll the boat
+  over or spin it.
+- Guests now bump into cargo lying on deck and can stand on crates, as in single player.
+
 ## [0.9.0] - 2026-11-16
 
 Everyone must update to wire protocol 111. Requires Sailwind 0.40; 0.40.1 is supported.

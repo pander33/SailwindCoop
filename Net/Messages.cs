@@ -622,6 +622,9 @@ namespace SailwindCoop.Net
         public Quaternion Rot;    // world rotation (World) or boat-local rotation (Boat)
         public Vector3 Vel;       // real-space velocity for extrapolation (World only; else zero)
         public bool Set;          // Anchor.IsSet() — dug into the seabed
+        /// <summary>RopeControllerAnchor.canPull: written only by Anchor.ExtraFixedUpdate, which runs on
+        /// the host alone; the winch takes no pull while it is false.</summary>
+        public bool CanPull;
         public uint HolderNetId;
         public float RopeLength; // Normalized RopeControllerAnchor.currentLength
         public uint Revision; // Order states even when host ticks coincide
@@ -638,6 +641,7 @@ namespace SailwindCoop.Net
             w.PutQuaternion(Rot);
             w.PutVector3(Vel);
             w.Put(Set);
+            w.Put(CanPull);
             w.Put(HolderNetId); w.Put(RopeLength); w.Put(Revision); w.Put(RequesterNetId); w.Put(RequestId);
         }
 
@@ -650,6 +654,7 @@ namespace SailwindCoop.Net
             Rot = r.GetQuaternion();
             Vel = r.GetVector3();
             Set = r.GetBool();
+            CanPull = r.GetBool();
             HolderNetId = r.GetUInt(); RopeLength = r.GetFloat(); Revision = r.GetUInt(); RequesterNetId = r.GetUInt(); RequestId = r.GetUInt();
         }
     }

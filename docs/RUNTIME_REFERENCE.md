@@ -1,6 +1,6 @@
 # Runtime reference
 
-Current implementation: plugin 0.9.0, Protocol 111, Sailwind 0.40 / 0.40.1.
+Current implementation: plugin 0.9.0, Protocol 112 (0.9.0 was released with 111), Sailwind 0.40 / 0.40.1.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
 Protocol numbers within subsystem descriptions identify when a feature was introduced.
@@ -47,8 +47,22 @@ Domain notes:
 - **Anchor:** bound through `RopeControllerAnchor.joint` (`Anchor.Awake` moves it above the hull).
   `AnchorRequest` (88) carries pickup, held pose and drop: boat-local on the holder's own deck,
   real-space on shore and on drop. `Anchor.ExtraFixedUpdate` is suppressed only on the remote copy;
-  free physics stays with the host. Every player hull in game 0.39 has exactly one anchor
+  free physics stays with the host. That method is the only writer of `RopeControllerAnchor.canPull`,
+  which the winch needs to take a pull, so `AnchorState` carries the host's value (Protocol 112)
+  and a client writes it into its rope. Every player hull in game 0.39 has exactly one anchor
   (asset inventory), so binding the first one covers them all.
+- **Held item wall check (client):** an item in a client's hand is a puppet, but its proxy is a
+  kinematic trigger placed into the walk copy each frame (`HeldItemProbe`), as the game's held
+  proxy is. The game's `PickupableItemCollisionChecker` then sees walls, `GoPointer` pushes a big
+  item out of them and refuses a drop inside one. `SetPuppet` leaves that proxy alone while it is in
+  the hand. Without the probe a guest could put a crate inside the hull; the host woke its physics
+  there and `BoatMass` threw the boat's centre of mass with it.
+  Free cargo (big items, crates, trade goods with `Good`) keeps a solid kinematic proxy that
+  follows its item (`_solidCargo`, decided in `ApplyRemote`), so the hand stops at cargo on deck
+  too, and the guest's character collides with it as in single player. `SetPuppet` and
+  `MoveProxyToItem` read the set, so these colliders are not switched off and on every frame. The
+  hand's checker drops colliders that were switched off (`PruneCollisionChecker`): they send no
+  `OnTriggerExit`.
 - **Items:** full ordered item state with revision, acknowledgement and tombstones. Compound
   operations (cutting, elixirs, oakum, oil, candles, tobacco packs) go through
   `ItemOperationRequest`/`Result` and apply once. Typed components cover food, soup, kettle, stove,
