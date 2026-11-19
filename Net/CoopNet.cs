@@ -799,6 +799,7 @@ namespace SailwindCoop.Net
                  " (" + Origin(session) + ")");
             OnClientReady?.Invoke(session);
             SendKnownAvatarsTo(peer);
+            AnnounceAvatarToOthers(session);
             BroadcastRoster();
             BroadcastNotice(GameplayNoticeKind.PlayerJoined, assigned);
         }
@@ -833,6 +834,35 @@ namespace SailwindCoop.Net
             catch (Exception e)
             {
                 _log("[CoopNet] SendKnownAvatarsTo: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// Host: the other half of <see cref="SendKnownAvatarsTo"/> — tell the clients already in
+        /// the session which avatar the newly accepted client chose. Hello reaches only the host,
+        /// so without this an earlier guest never learns the newcomer's choice and builds the
+        /// default avatar (a primitive when avatar.bundle is absent).
+        /// </summary>
+        private void AnnounceAvatarToOthers(PeerSession session)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(session.SelectedAvatar)) return;
+                var msg = new AvatarChangeMsg { NetId = session.PlayerNetId, BundleFile = session.SelectedAvatar };
+                int sent = 0;
+                foreach (var s in _sessions.Values)
+                {
+                    if (!s.HandshakeDone || s.Peer == session.Peer) continue;
+                    s.Peer.Send(msg, DeliveryMethod.ReliableOrdered);
+                    sent++;
+                }
+                if (sent > 0)
+                    _log("[CoopNet] Announced avatar of NetId " + session.PlayerNetId + " to " + sent +
+                         " other client(s)");
+            }
+            catch (Exception e)
+            {
+                _log("[CoopNet] AnnounceAvatarToOthers: " + e.Message);
             }
         }
 
