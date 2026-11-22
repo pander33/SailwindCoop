@@ -28,6 +28,7 @@ namespace SailwindCoop.Net
     /// <summary>Only a complete revision replaces committed marks; local preview is separate.</summary>
     public sealed class ChartStateMsg : INetMessage
     {
+        public const int MaxChunks = 512;
         public int InstanceId, PrefabIndex;
         public uint Revision, Requester, RequestId;
         public ushort Chunk, Chunks = 1;
@@ -44,7 +45,7 @@ namespace SailwindCoop.Net
         {
             InstanceId = r.GetInt(); PrefabIndex = r.GetInt(); Revision = r.GetUInt(); Requester = r.GetUInt(); RequestId = r.GetUInt();
             Chunk = r.GetUShort(); Chunks = r.GetUShort(); Missing = r.GetBool();
-            if (Chunks == 0 || Chunk >= Chunks) throw new InvalidDataException("invalid chart chunk header");
+            if (Chunks == 0 || Chunks > MaxChunks || Chunk >= Chunks) throw new InvalidDataException("invalid chart chunk header");
             int count = r.GetUShort(); if (count > r.AvailableBytes / 33) throw new InvalidDataException("truncated chart marks");
             Marks = new ChartMark[count]; for (int i = 0; i < count; i++) { Marks[i] = new ChartMark(); Marks[i].Deserialize(r); }
         }

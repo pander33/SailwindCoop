@@ -192,7 +192,7 @@ namespace SailwindCoop.Sync
             {
                 var repair = RepairFor(key);
                 repair.Mend(Snap(sail));
-                if (repair.TrySend(false, out var values, out bool mend))
+                if (repair.TrySend(false, Time.unscaledTime, out var values, out bool mend))
                     Send(false, new List<SailDamageEntry> { new SailDamageEntry { Key = key, Values = values, Mend = mend } });
             }
         }
@@ -207,69 +207,77 @@ namespace SailwindCoop.Sync
         /// <summary>Called from the item tick.</summary>
         public static void Tick()
         {
-            if (!SyncEnabled || !Active || Model == null) return;
-            if (!Host && !_baselined) return;
-            float now = Time.unscaledTime;
-            if (now < _nextScan) return;
-            _nextScan = now + ScanInterval;
-            if (_sewnBolts.Count > 0)
+            if (!SyncEnabled || !Active) return;
+            try
             {
-                // A used-up bolt is destroyed through ShipItem.DestroyItem, which item sync already sends.
-                foreach (var bolt in _sewnBolts)
-                    if (bolt != null) ItemSync.Instance?.NotifyItemStateChanged(bolt, "sailcloth used");
-                _sewnBolts.Clear();
-            }
-            if (now >= _nextRefresh)
-            {
-                _nextRefresh = now + RefreshInterval;
-                _sails = UnityEngine.Object.FindObjectsOfType<Sail>();
-                _known.RemoveWhere(sail => sail == null);
-            }
-
-            List<SailDamageEntry> changed = null;
-            foreach (var sail in _sails)
-            {
-                if (sail == null) continue;
-                string key = Key(sail);
-                if (key == null) continue;
-                float[] snap = Snap(sail);
-                if (!Host)
+                if (Model == null) return;
+                if (!Host && !_baselined) return;
+                float now = Time.unscaledTime;
+                if (now < _nextScan) return;
+                _nextScan = now + ScanInterval;
+                if (_sewnBolts.Count > 0)
                 {
-                    var repair = RepairFor(key);
-                    if (_known.Add(sail)) ShowRepair(sail, snap, repair);
-                    else repair.Observe(snap);
-
-                    var queued = repair.Queued;
-                    bool repairSettled = _lastScan.TryGetValue(key, out var previousDelta) && !Differs(queued, previousDelta, Same);
-                    _lastScan[key] = (float[])queued.Clone();
-                    bool sendDelta = Differs(queued, Whole, SendStep) || (repairSettled && Differs(queued, Whole, Same));
-                    if (repair.TrySend(sendDelta, out var values, out bool mend))
-                        (changed ?? (changed = new List<SailDamageEntry>())).Add(
-                            new SailDamageEntry { Key = key, Values = values, Mend = mend });
-                    continue;
+                    // A used-up bolt is destroyed through ShipItem.DestroyItem, which item sync already sends.
+                    foreach (var bolt in _sewnBolts)
+                        if (bolt != null) ItemSync.Instance?.NotifyItemStateChanged(bolt, "sailcloth used");
+                    _sewnBolts.Clear();
                 }
-                bool hasSynced = _synced.TryGetValue(key, out var synced);
-
-                if (_known.Add(sail))
+                if (now >= _nextRefresh)
                 {
-                    // First sight. The host takes what it has as the starting point for a key it has never seen.
-                    if (!hasSynced) { _synced[key] = snap; continue; }
-                    if (Differs(snap, synced, Same)) Apply(sail, synced);
-                    continue;
+                    _nextRefresh = now + RefreshInterval;
+                    _sails = UnityEngine.Object.FindObjectsOfType<Sail>();
+                    _known.RemoveWhere(sail => sail == null);
                 }
 
-                var reference = hasSynced ? synced : Whole;
-                bool settled = _lastScan.TryGetValue(key, out var previous) && !Differs(snap, previous, Same);
-                _lastScan[key] = snap;
-                if (!Worth(snap, reference) && !(settled && Differs(snap, reference, Same))) continue;
-                _synced[key] = snap;
-                (changed ?? (changed = new List<SailDamageEntry>())).Add(new SailDamageEntry
+                List<SailDamageEntry> changed = null;
+                foreach (var sail in _sails)
                 {
-                    Key = key, Values = snap,
-                });
-            }
+                    if (sail == null) continue;
+                    string key = Key(sail);
+                    if (key == null) continue;
+                    float[] snap = Snap(sail);
+                    if (!Host)
+                    {
+                        var repair = RepairFor(key);
+                        if (_known.Add(sail)) ShowRepair(sail, snap, repair);
+                        else repair.Observe(snap);
 
-            if (changed != null) Send(false, changed);
+                        var queued = repair.Queued;
+                        bool repairSettled = _lastScan.TryGetValue(key, out var previousDelta) && !Differs(queued, previousDelta, Same);
+                        _lastScan[key] = (float[])queued.Clone();
+                        bool sendDelta = Differs(queued, Whole, SendStep) || (repairSettled && Differs(queued, Whole, Same));
+                        if (repair.TrySend(sendDelta, now, out var values, out bool mend))
+                            (changed ?? (changed = new List<SailDamageEntry>())).Add(
+                                new SailDamageEntry { Key = key, Values = values, Mend = mend });
+                        continue;
+                    }
+                    bool hasSynced = _synced.TryGetValue(key, out var synced);
+
+                    if (_known.Add(sail))
+                    {
+                        // First sight. The host takes what it has as the starting point for a key it has never seen.
+                        if (!hasSynced) { _synced[key] = snap; continue; }
+                        if (Differs(snap, synced, Same)) Apply(sail, synced);
+                        continue;
+                    }
+
+                    var reference = hasSynced ? synced : Whole;
+                    bool settled = _lastScan.TryGetValue(key, out var previous) && !Differs(snap, previous, Same);
+                    _lastScan[key] = snap;
+                    if (!Worth(snap, reference) && !(settled && Differs(snap, reference, Same))) continue;
+                    _synced[key] = snap;
+                    (changed ?? (changed = new List<SailDamageEntry>())).Add(new SailDamageEntry
+                    {
+                        Key = key, Values = snap,
+                    });
+                }
+
+                if (changed != null) Send(false, changed);
+            }
+            catch (Exception e)
+            {
+                Plugin.Logger.LogWarning("[SailDmgCompat] Tick failed: " + e.Message);
+            }
         }
 
         /// <summary>Host: everything a joiner needs, including sails of boats the host has not come near yet.</summary>
@@ -299,78 +307,86 @@ namespace SailwindCoop.Sync
 
         public static void OnRemote(SailDamageMsg packet, NetPeer sender)
         {
-            if (!Active || Model == null) return;
-
-            if (Host)
+            if (!Active || packet == null) return;
+            try
             {
-                if (packet.ReplaceAll || packet.RepairAck || (Net.FeaturesOf(sender) & ModFeatures.SailDamage) == 0) return;
-            }
-            else if (packet.ReplaceAll)
-            {
-                // The guest's own save put damage on its sails; the host's state replaces all of it.
-                _applying = true;
-                try { _deserialize.Invoke(Model, new object[] { "" }); }
-                finally { _applying = false; }
-                _synced.Clear();
-                _repairs.Clear();
-                _known.Clear();
-                _lastScan.Clear();
-                _baselined = true;
-            }
+                if (Model == null) return;
 
-
-            Dictionary<string, Sail> byKey = null;
-            var applied = Host ? new List<SailDamageEntry>() : null;
-            foreach (var entry in packet.Entries)
-            {
-                if (entry.Key == null || entry.Values == null || entry.Values.Length < 6) continue;
-                if (byKey == null) byKey = SailsByKey();
-                byKey.TryGetValue(entry.Key, out var sail);
                 if (Host)
                 {
-                    float[] authoritative;
-                    if (sail != null)
-                    {
-                        var current = Snap(sail);
-                        var repaired = entry.Mend ? Whole : AddDelta(current, entry.Values);
-                        if (entry.Mend || Differs(current, repaired, Same)) Apply(sail, repaired);
-                        authoritative = Snap(sail);
-                        _known.Add(sail);
-                    }
-                    else
-                    {
-                        var pending = (Dictionary<string, float[]>)_pending.GetValue(Model);
-                        if (pending == null || !pending.TryGetValue(entry.Key, out var current))
-                            current = _synced.TryGetValue(entry.Key, out var last) ? last : Whole;
-                        authoritative = entry.Mend ? Whole : AddDelta(current, entry.Values);
-                        if (pending != null) pending[entry.Key] = authoritative;
-                    }
-                    _synced[entry.Key] = authoritative;
-                    applied.Add(new SailDamageEntry { Key = entry.Key, Values = authoritative });
+                    if (packet.ReplaceAll || packet.RepairAck || (Net.FeaturesOf(sender) & ModFeatures.SailDamage) == 0) return;
                 }
-                else
+                else if (packet.ReplaceAll)
                 {
-                    var repair = RepairFor(entry.Key);
-                    if (sail != null)
+                    // The guest's own save put damage on its sails; the host's state replaces all of it.
+                    _applying = true;
+                    try { _deserialize.Invoke(Model, new object[] { "" }); }
+                    finally { _applying = false; }
+                    _synced.Clear();
+                    _repairs.Clear();
+                    _known.Clear();
+                    _lastScan.Clear();
+                    _baselined = true;
+                }
+
+                if (packet.Entries == null) return;
+                Dictionary<string, Sail> byKey = null;
+                var applied = Host ? new List<SailDamageEntry>() : null;
+                foreach (var entry in packet.Entries)
+                {
+                    if (entry == null || entry.Key == null || entry.Values == null || entry.Values.Length < 6) continue;
+                    if (byKey == null) byKey = SailsByKey();
+                    byKey.TryGetValue(entry.Key, out var sail);
+                    if (Host)
                     {
-                        var current = Snap(sail);
-                        if (!_known.Add(sail)) repair.Observe(current);
-                        repair.UpdateAuthority(entry.Values, packet.RepairAck);
-                        ShowRepair(sail, current, repair);
+                        float[] authoritative;
+                        if (sail != null)
+                        {
+                            var current = Snap(sail);
+                            var repaired = entry.Mend ? Whole : AddDelta(current, entry.Values);
+                            if (entry.Mend || Differs(current, repaired, Same)) Apply(sail, repaired);
+                            authoritative = Snap(sail);
+                            _known.Add(sail);
+                        }
+                        else
+                        {
+                            var pending = (Dictionary<string, float[]>)_pending.GetValue(Model);
+                            if (pending == null || !pending.TryGetValue(entry.Key, out var current))
+                                current = _synced.TryGetValue(entry.Key, out var last) ? last : Whole;
+                            authoritative = entry.Mend ? Whole : AddDelta(current, entry.Values);
+                            if (pending != null) pending[entry.Key] = authoritative;
+                        }
+                        _synced[entry.Key] = authoritative;
+                        applied.Add(new SailDamageEntry { Key = entry.Key, Values = authoritative });
                     }
                     else
                     {
-                        repair.UpdateAuthority(entry.Values, packet.RepairAck);
-                        if (_pending.GetValue(Model) is Dictionary<string, float[]> pending)
-                            pending[entry.Key] = entry.Values;
+                        var repair = RepairFor(entry.Key);
+                        if (sail != null)
+                        {
+                            var current = Snap(sail);
+                            if (!_known.Add(sail)) repair.Observe(current);
+                            repair.UpdateAuthority(entry.Values, packet.RepairAck);
+                            ShowRepair(sail, current, repair);
+                        }
+                        else
+                        {
+                            repair.UpdateAuthority(entry.Values, packet.RepairAck);
+                            if (_pending.GetValue(Model) is Dictionary<string, float[]> pending)
+                                pending[entry.Key] = entry.Values;
+                        }
                     }
+                }
+                if (applied?.Count > 0)
+                {
+                    var entries = applied.ToArray();
+                    sender.Send(new SailDamageMsg { RepairAck = true, Entries = entries }, DeliveryMethod.ReliableOrdered);
+                    Net.SendMod(new SailDamageMsg { Entries = entries }, ModFeatures.SailDamage, DeliveryMethod.ReliableOrdered, sender);
                 }
             }
-            if (applied?.Count > 0)
+            catch (Exception e)
             {
-                var entries = applied.ToArray();
-                sender.Send(new SailDamageMsg { RepairAck = true, Entries = entries }, DeliveryMethod.ReliableOrdered);
-                Net.SendMod(new SailDamageMsg { Entries = entries }, ModFeatures.SailDamage, DeliveryMethod.ReliableOrdered, sender);
+                Plugin.Logger.LogWarning("[SailDmgCompat] Remote packet handling failed: " + e.Message);
             }
         }
 

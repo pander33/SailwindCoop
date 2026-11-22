@@ -6,12 +6,13 @@ namespace SailwindCoop.Sync
     /// <summary>Collects one identified revision without exposing partial replacement state.</summary>
     internal sealed class ChunkAccumulator<T>
     {
+        internal const int MaxChunks = 2048;
         private string _key;
         private T[][] _chunks;
         private int _received;
         internal T[] Add(string key, int index, int count, T[] data)
         {
-            if (count <= 0 || index < 0 || index >= count || data == null) throw new InvalidDataException("invalid chunk format");
+            if (count <= 0 || count > MaxChunks || index < 0 || index >= count || data == null) throw new InvalidDataException("invalid chunk format");
             if (_key != key) { _key = key; _chunks = new T[count][]; _received = 0; }
             if (_chunks.Length != count) throw new InvalidDataException("inconsistent chunk count");
             if (_chunks[index] == null) { _chunks[index] = data; _received++; }

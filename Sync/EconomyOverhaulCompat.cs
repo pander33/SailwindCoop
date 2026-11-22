@@ -444,15 +444,20 @@ namespace SailwindCoop.Sync
                 }
                 if (action == TradeSell && __args.Length == 3 && _tradeQuote != null && _tradeUnits != null && _tradeCargo != null)
                 {
-                    var batch = _tradeQuote.Invoke(null, __args);
-                    if (_tradeUnits.GetValue(batch) is IEnumerable units)
-                        foreach (var unit in units)
-                        {
-                            var cargo = _tradeCargo.GetValue(unit) as Good;
-                            if (cargo == null || !(FinancedCargoSync.Instance?.Blocks(cargo.GetComponent<ShipItem>()) ?? false)) continue;
-                            Notify(FinancedText);
-                            return false;
-                        }
+                    try
+                    {
+                        var batch = _tradeQuote.Invoke(null, __args);
+                        if (batch != null && _tradeUnits.GetValue(batch) is IEnumerable units)
+                            foreach (var unit in units)
+                            {
+                                if (unit == null) continue;
+                                var cargo = _tradeCargo.GetValue(unit) as Good;
+                                if (cargo == null || !(FinancedCargoSync.Instance?.Blocks(cargo.GetComponent<ShipItem>()) ?? false)) continue;
+                                Notify(FinancedText);
+                                return false;
+                            }
+                    }
+                    catch (Exception e) { Fault("trade finance check", e); }
                 }
                 // A sale removes cargo. Only purchases need the before/after creation scan.
                 _tradeIds = null;
@@ -467,11 +472,19 @@ namespace SailwindCoop.Sync
                 }
                 _tradeSelling = action == TradeSell;
                 TradeDestroyed.Clear();
-                _inTrade = true;
                 MarketSync.Instance?.BeginTrade();
+                _inTrade = true;
+                return true;
             }
-            catch (Exception e) { Fault("trade start", e); _inTrade = false; _tradeSelling = false; TradeDestroyed.Clear(); }
-            return true;
+            catch (Exception e)
+            {
+                Fault("trade start", e);
+                _inTrade = false;
+                _tradeSelling = false;
+                _tradeIds = null;
+                TradeDestroyed.Clear();
+                return false;
+            }
         }
 
         private static Exception TradeEnd(Exception __exception)
@@ -541,6 +554,7 @@ namespace SailwindCoop.Sync
         private struct PlankState
         {
             internal bool Active;
+            internal ShipItem Plank;
             internal float Damage, Oakum;
             internal int Id, Prefab;
         }
@@ -552,10 +566,8 @@ namespace SailwindCoop.Sync
             try
             {
                 var save = plank != null ? plank.GetComponent<SaveablePrefab>() : null;
-                __state = new PlankState { Active = true, Damage = hull.hullDamage, Oakum = hull.oakum,
+                __state = new PlankState { Active = true, Plank = plank, Damage = hull.hullDamage, Oakum = hull.oakum,
                                            Id = save != null ? save.instanceId : 0, Prefab = save != null ? save.prefabIndex : 0 };
-                // Before the mod destroys it: the host consumes its copy.
-                ItemSync.Instance?.NotifySold(__state.Id, __state.Prefab);
             }
             catch (Exception e) { Fault("plank start", e); }
         }
@@ -565,11 +577,14 @@ namespace SailwindCoop.Sync
             if (!__state.Active || hull == null) return;
             try
             {
-                var damage = BoatDamageSync.Instance;
-                if (damage == null) return;
                 // Oakum first: the host clamps oakum to what the remaining damage holds after each step,
                 // and only this order gives the mod's own result.
                 float oakum = __state.Oakum - hull.oakum, repaired = __state.Damage - hull.hullDamage;
+                bool consumed = oakum > 0f || repaired > 0f || (!ReferenceEquals(__state.Plank, null) && __state.Plank == null);
+                if (consumed)
+                    ItemSync.Instance?.NotifySold(__state.Plank, __state.Id, __state.Prefab);
+                var damage = BoatDamageSync.Instance;
+                if (damage == null) return;
                 if (oakum > 0f) damage.NotifyLocalDamageAction(DamageAction.RemoveOakum, oakum, hull);
                 if (repaired > 0f) damage.NotifyLocalDamageAction(DamageAction.RepairHull, repaired, hull);
             }

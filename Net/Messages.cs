@@ -1672,6 +1672,8 @@ namespace SailwindCoop.Net
             InstanceId = r.GetInt();
             PrefabIndex = r.GetInt();
             int n = r.GetByte();
+            if (n * sizeof(float) > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("Truncated item extra values");
             Values = new float[n];
             for (int i = 0; i < n; i++) Values[i] = r.GetFloat();
         }
@@ -1919,6 +1921,8 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r)
         {
             int n = r.GetByte();
+            if (n * 13 + 20 > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("Truncated storm state");
             Pos = new Vector3[n];
             Active = new bool[n];
             for (int i = 0; i < n; i++) { Pos[i] = r.GetVector3(); Active[i] = r.GetBool(); }
@@ -2122,6 +2126,8 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r)
         {
             int n = r.GetByte();
+            if (n * 50 > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("Truncated mission journal entries");
             Missions = new MissionEntry[n];
             for (int i = 0; i < n; i++)
             {
@@ -2587,6 +2593,8 @@ namespace SailwindCoop.Net
     /// <summary>Host -> client: one ordered chunk of the serialized SaveContainer.</summary>
     public sealed class SaveSnapshotChunkMsg : INetMessage
     {
+        public const int MaxBytes = ushort.MaxValue;
+
         public int Index;
         public byte[] Data = System.Array.Empty<byte>();
 
@@ -2601,7 +2609,13 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r)
         {
             Index = r.GetInt();
-            Data = r.GetBytesWithLength();
+            if (r.AvailableBytes < sizeof(ushort))
+                throw new System.IO.InvalidDataException("Truncated save snapshot chunk length");
+            int len = r.GetUShort();
+            if (len > MaxBytes || len > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("Truncated save snapshot chunk");
+            Data = len == 0 ? System.Array.Empty<byte>() : new byte[len];
+            if (len > 0) r.GetBytes(Data, len);
         }
     }
 
@@ -2787,6 +2801,8 @@ namespace SailwindCoop.Net
         {
             Tick = r.GetLong();
             int count = r.GetByte();
+            if (count * 50 > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("Truncated NPC boat entries");
             Boats = new Entry[count];
             for (int i = 0; i < count; i++)
             {
@@ -2977,7 +2993,8 @@ namespace SailwindCoop.Net
             if (HasDemand)
             {
                 int events = r.GetByte();
-                if (events > MaxEvents) throw new System.FormatException("demand event count " + events);
+                if (events > MaxEvents || events * 22 > r.AvailableBytes)
+                    throw new System.IO.InvalidDataException("demand event count " + events);
                 Events = new MarketEvent[events];
                 for (int i = 0; i < events; i++)
                     Events[i] = new MarketEvent
@@ -2987,13 +3004,15 @@ namespace SailwindCoop.Net
                     };
             }
             int ports = r.GetUShort();
-            if (ports > MaxPorts) throw new System.FormatException("market port count " + ports);
+            if (ports > MaxPorts || ports * 8 > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("market port count " + ports);
             Ports = new MarketPort[ports];
             for (int i = 0; i < ports; i++)
             {
                 var p = new MarketPort { Port = r.GetShort(), Bonus = r.GetFloat() };
                 int goods = r.GetUShort();
-                if (goods > MaxGoods) throw new System.FormatException("market good count " + goods);
+                if (goods > MaxGoods || goods * sizeof(float) > r.AvailableBytes)
+                    throw new System.IO.InvalidDataException("market good count " + goods);
                 p.Supply = new float[goods];
                 for (int g = 0; g < goods; g++) p.Supply[g] = r.GetFloat();
                 Ports[i] = p;
@@ -3043,7 +3062,8 @@ namespace SailwindCoop.Net
         {
             Seq = r.GetUInt();
             int count = r.GetUShort();
-            if (count > MaxChanges) throw new System.FormatException("market change count " + count);
+            if (count > MaxChanges || count * 8 > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("market change count " + count);
             Changes = new MarketChange[count];
             for (int i = 0; i < count; i++)
                 Changes[i] = new MarketChange { Port = r.GetShort(), Good = r.GetShort(), Delta = r.GetFloat() };
@@ -3104,7 +3124,8 @@ namespace SailwindCoop.Net
         public static double[] GetDoubles(NetDataReader r)
         {
             int count = r.GetByte();
-            if (count > EconomyStateMsg.MaxDoubles) throw new System.FormatException("double count " + count);
+            if (count > EconomyStateMsg.MaxDoubles || count * sizeof(double) > r.AvailableBytes)
+                throw new System.IO.InvalidDataException("double count " + count);
             var values = new double[count];
             for (int i = 0; i < count; i++) values[i] = r.GetDouble();
             return values;
