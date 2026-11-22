@@ -10,7 +10,7 @@ namespace SailwindCoop.Sync
     {
         public static BoatAuthority Instance { get; private set; }
         private readonly CoopNet _net;
-        private sealed class Pose { public ushort Boat; public CoordFrame Frame; public Vector3 Pos; public float Received; }
+        private struct Pose { public ushort Boat; public CoordFrame Frame; public Vector3 Pos; public float Received; }
         private readonly Dictionary<uint, Pose> _poses = new Dictionary<uint, Pose>();
         public BoatAuthority(CoopNet net) { _net = net; Instance = this; }
 

@@ -13,6 +13,7 @@ namespace SailwindCoop.Runtime
     {
         private static StartMenu _openMenu;
         private static bool _ownsClock;
+        private static bool _savingOwnWorld;
         private static float _resumeScale;
         private static bool _resumeAutoSync;
 
@@ -25,8 +26,10 @@ namespace SailwindCoop.Runtime
             }
         }
 
+        internal static bool SavingOwnWorld => _savingOwnWorld;
+
         internal static bool HoldsMovement =>
-            _openMenu != null && GameState.inCursorMenu && InSession;
+            _savingOwnWorld || (_openMenu != null && GameState.inCursorMenu && InSession);
 
         internal static void Apply(Harmony harmony)
         {
@@ -91,7 +94,7 @@ namespace SailwindCoop.Runtime
         {
             _openMenu = menu;
             _ownsClock = false;
-            if (!InSession) TakeClock(scale);
+            if (!InSession && !_savingOwnWorld) TakeClock(scale);
         }
 
         private static void CloseClock(float vanillaResumeScale, StartMenu menu)
@@ -123,8 +126,42 @@ namespace SailwindCoop.Runtime
 
         internal static void ReturnToSolo()
         {
-            if (_openMenu != null && !_ownsClock && GameState.playing && GameState.inCursorMenu)
+            if (_openMenu != null && !_ownsClock && !_savingOwnWorld && GameState.playing && GameState.inCursorMenu)
                 TakeClock(0f);
+        }
+
+        /// <summary>Temporarily releases a solo Escape-menu pause so the game can save before joining,
+        /// while keeping movement suppressed until the save completes or aborts.</summary>
+        internal static void BeginOwnSaveHold()
+        {
+            _savingOwnWorld = true;
+            if (_ownsClock)
+            {
+                Time.timeScale = _resumeScale > 0f ? _resumeScale : 1f;
+                Physics.autoSyncTransforms = true;
+                _ownsClock = false;
+            }
+        }
+
+        /// <summary>Ends the pre-join save hold, restoring the solo Escape-menu pause if the world stays open.</summary>
+        internal static void EndOwnSaveHold(bool restorePause)
+        {
+            if (!_savingOwnWorld) return;
+            _savingOwnWorld = false;
+            if (restorePause && _openMenu != null && !_ownsClock && !InSession &&
+                GameState.playing && GameState.inCursorMenu)
+                TakeClock(0f);
+        }
+
+        /// <summary>Clears static Escape-menu pause state across a full scene reload.</summary>
+        internal static void Reset()
+        {
+            _openMenu = null;
+            _ownsClock = false;
+            _savingOwnWorld = false;
+            _resumeScale = 1f;
+            _resumeAutoSync = true;
+            Physics.autoSyncTransforms = true;
         }
 
         private static void TakeClock(float scale)

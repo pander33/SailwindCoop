@@ -392,7 +392,12 @@ namespace SailwindCoop.Runtime
             Net.OnGameplayNotice += msg => _notifications.Add(msg, Net);
             Net.OnGameplayNotice += msg => Sleep.OnNotice(msg);
             Net.OnGameplayNotice += msg => OriginCatchUp.OnNotice(msg, Net);
-            Net.OnMemberGone += netId => Players.ForgetRemote(netId);
+            Net.OnMemberGone += netId =>
+            {
+                Players?.ForgetRemote(netId);
+                Belts?.PlayerLeft(netId);
+                Wallet?.ClearRemoteActor(netId);
+            };
             Net.OnPlayerLeft += netId =>
             {
                 Players.RemoveRemote(netId);
@@ -700,8 +705,12 @@ namespace SailwindCoop.Runtime
             }
             if (_activeJoinTarget != null && (Net.State == LinkState.Failed || Net.State == LinkState.Rejected))
             {
+                string reason = !string.IsNullOrEmpty(Net.LastError) ? Net.LastError
+                    : !string.IsNullOrEmpty(Net.LastDisconnectReason) ? Net.LastDisconnectReason
+                    : "The connection ended before your world was ready.";
                 _activeJoinTarget = null;
-                JoinFailure = string.IsNullOrEmpty(Net.LastError) ? "The connection ended before your world was ready." : Net.LastError;
+                TeardownSession("join-failed", saveClientProfile: false);
+                JoinFailure = reason;
                 if (_menuUI != null) _menuUI.Visible = true;
             }
 
@@ -1117,10 +1126,26 @@ namespace SailwindCoop.Runtime
         /// "save the world while the clock may be stopped" path at once.
         /// </summary>
         private int _streamingSaveEpoch;
+        private int _sessionGen;
 
         /// <summary>Ceiling on how long one join may hold the queue. Generous: the inner routine can
         /// legitimately spend 15 s waiting for a save window plus 10 s for the write, then transfer.</summary>
         private const float StreamSaveTimeoutSec = 60f;
+
+        private bool StreamQueueAborted(LiteNetLib.NetPeer peer, int sessionGen) =>
+            Net == null || Net.Role != Role.Host || sessionGen != _sessionGen ||
+            peer == null || peer.ConnectionState != LiteNetLib.ConnectionState.Connected;
+
+        private bool AbortIfSaveStopped(LiteNetLib.NetPeer peer, uint netId, int sessionGen, int epoch)
+        {
+            if (StreamQueueAborted(peer, sessionGen)) return true;
+            if (_streamingSaveEpoch == epoch) return false;
+            Plugin.Logger.LogWarning("[Coop] Save transfer for NetId=" + netId +
+                                     " timed out or was superseded - disconnecting client");
+            Net.SetMemberState(netId, MemberJoinState.Failed);
+            Net.DisconnectPlayer(netId, "World transfer timed out.", kicked: false);
+            return true;
+        }
 
         /// <summary>
         /// Is a join still occupying the host? True while the save is being produced/sent, and then
@@ -1169,26 +1194,29 @@ namespace SailwindCoop.Runtime
         /// </summary>
         private IEnumerator StreamSaveToClient(LiteNetLib.NetPeer peer, uint netId)
         {
+            int sessionGen = _sessionGen;
+            if (StreamQueueAborted(peer, sessionGen)) yield break;
             if (JoinInFlight())
                 Plugin.Logger.LogInfo("[Coop] NetId=" + netId + " is queued behind another join");
             Net.SetMemberState(netId, MemberJoinState.Queued);
             while (JoinInFlight())
             {
-                // A peer that gives up while queued must not keep the next one waiting.
-                if (peer == null || peer.ConnectionState != LiteNetLib.ConnectionState.Connected)
+                // A peer that gives up or a session that ends while queued must not keep the next one waiting.
+                if (StreamQueueAborted(peer, sessionGen))
                 {
-                    Plugin.Logger.LogWarning("[Coop] Client NetId=" + netId + " left while queued for the world transfer");
-                    Pause.Release(netId);
+                    if (Net != null && Net.Role == Role.Host && sessionGen == _sessionGen)
+                        Plugin.Logger.LogWarning("[Coop] Client NetId=" + netId + " left while queued for the world transfer");
                     yield break;
                 }
                 yield return null;
             }
+            if (StreamQueueAborted(peer, sessionGen)) yield break;
 
             _streamingSave = true;
             Net.SetMemberState(netId, MemberJoinState.ReceivingWorld);
             _streamingSaveDeadline = Time.realtimeSinceStartup + StreamSaveTimeoutSec;
             int epoch = ++_streamingSaveEpoch;
-            try { yield return StreamSaveToClientInner(peer, netId, epoch); }
+            try { yield return StreamSaveToClientInner(peer, netId, epoch, sessionGen); }
             finally { if (_streamingSaveEpoch == epoch) _streamingSave = false; }
         }
 
@@ -1200,10 +1228,11 @@ namespace SailwindCoop.Runtime
         /// transmission to the client entering the world. If a manual pause overlaps the save,
         /// it may finish under that pause; a blocked save waits for a player to resume.
         /// </summary>
-        private IEnumerator StreamSaveToClientInner(LiteNetLib.NetPeer peer, uint netId, int epoch)
+        private IEnumerator StreamSaveToClientInner(LiteNetLib.NetPeer peer, uint netId, int epoch, int sessionGen)
         {
             // Give the handshake a frame to settle.
             yield return null;
+            if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
 
             if (!GameState.playing)
             {
@@ -1213,7 +1242,7 @@ namespace SailwindCoop.Runtime
                                        "Load a save before accepting clients.");
                 Notice("Client rejected: this host has no world loaded. Load a save, then host again.");
                 Net.SetMemberState(netId, MemberJoinState.Failed);
-                Pause.Release(netId);
+                Net.DisconnectPlayer(netId, "Host has no world loaded.", kicked: false);
                 yield break;
             }
 
@@ -1221,12 +1250,14 @@ namespace SailwindCoop.Runtime
             Items.PrepareTradeSaleWorld(peer);
             while (Plugin.Cfg.ForceHostSaveOnJoin.Value && SaveLoadManager.instance != null)
             {
+                if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                 // SaveGame silently refuses while busy / in bed / in shipyard / not ready — wait for a
                 // window where it can run, then verify it really started (DoSaveGame flips its private
                 // 'busy' flag synchronously inside the SaveGame call).
                 bool started = false;
                 for (float t = 0f; !started && t < 15f; t += Time.unscaledDeltaTime)
                 {
+                    if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                     if (SaveLoadManager.readyToSave && !SaveTransferSync.HostSaveBusy() &&
                         !GameState.inBed && !GameState.currentShipyard)
                     {
@@ -1245,11 +1276,17 @@ namespace SailwindCoop.Runtime
                 {
                     // Wait for DoSaveGame to finish writing the file (timeout guards a stuck save).
                     for (float t = 0f; SaveTransferSync.HostSaveBusy() && t < 10f; t += Time.unscaledDeltaTime)
+                    {
+                        if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                         yield return null;
+                    }
+                    if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                     yield return new WaitForEndOfFrame();
+                    if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                     if (!SaveTransferSync.HostSaveBusy()) break;
                 }
 
+                if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                 if (!Pause.Manual)
                 {
                     Plugin.Logger.LogWarning("[Coop] Could not finish a fresh save for the joining player - using the last save on disk");
@@ -1260,16 +1297,15 @@ namespace SailwindCoop.Runtime
                 Net.SetMemberState(netId, MemberJoinState.WaitingForResume);
                 while (Pause.Manual)
                 {
-                    if (_streamingSaveEpoch != epoch || peer == null ||
-                        peer.ConnectionState != LiteNetLib.ConnectionState.Connected) yield break;
+                    if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                     _streamingSaveDeadline = Time.realtimeSinceStartup + StreamSaveTimeoutSec;
                     yield return null;
                 }
-                if (_streamingSaveEpoch != epoch || peer == null ||
-                    peer.ConnectionState != LiteNetLib.ConnectionState.Connected) yield break;
+                if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
                 Net.SetMemberState(netId, MemberJoinState.ReceivingWorld);
             }
 
+            if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
             byte[] bytes = SaveTransferSync.ReadHostSaveBytes();
             // Length check matters as much as null: SendSaveTo silently returns on an empty array, and
             // with the pause taken just below that would freeze the host until the 120 s safety timeout,
@@ -1280,26 +1316,19 @@ namespace SailwindCoop.Runtime
                                        (bytes == null ? "unreadable" : "empty file") + ")");
                 Notice("Could not read this host's save file - the world was not sent to the client.");
                 Net.SetMemberState(netId, MemberJoinState.Failed);
-                Pause.Release(netId);
+                Net.DisconnectPlayer(netId, "Host could not read its save file.", kicked: false);
                 yield break;
             }
             if (peer == null || peer.ConnectionState != LiteNetLib.ConnectionState.Connected)
             {
                 Plugin.Logger.LogWarning("[Coop] Client disconnected before save transfer");
-                Pause.Release(netId);
                 yield break;
             }
             // Commit point. Everything above is read-only; below we freeze the host and put bytes on the
             // wire. If the session was torn down or our slot was force-released while we waited for the
             // save (up to 25 s of yields), do neither — a freeze taken here would have no client left to
             // release it and would sit until the 120 s safety timeout.
-            if (_streamingSaveEpoch != epoch)
-            {
-                Plugin.Logger.LogWarning("[Coop] Save transfer for NetId=" + netId +
-                                         " was superseded before it could start - dropping it");
-                Pause.Release(netId);
-                yield break;
-            }
+            if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
 
             // The snapshot is on disk and about to go out — freeze now so items/anchor/moorings/waves
             // still match it by the time the client is standing in the world.
@@ -1380,6 +1409,7 @@ namespace SailwindCoop.Runtime
         private void OnDestroy()
         {
             SaveClientProfileBeforeStop("destroy");
+            _sessionGen++;
             ResetJoinStreaming();
             Mods?.Reset();
             Shipyard?.Clear();
@@ -1405,9 +1435,11 @@ namespace SailwindCoop.Runtime
             CrestWater?.Clear();
             NpcBoats?.Clear();
             Boats?.Clear();
+            BoatAuthority.Instance?.Clear();
             Players?.Clear();
             Pause?.Clear();
             HostPause?.Clear();
+            GameMenuPause.Reset();
             LanSearch.Stop();
             Net?.Stop();
             SteamLink.Shutdown();
@@ -1511,7 +1543,7 @@ namespace SailwindCoop.Runtime
                 Notice("Load a save or start a new game, then open a co-op session.");
                 return;
             }
-            if (_leavingWorld) return;
+            if (_leavingWorld || _waitingForOwnSave) return;
             Plugin.Logger.LogInfo("[Coop] Starting host via UI" + (steam ? " (Steam + LAN)" : ""));
             ForgetJoinAttempt();
             TeardownSession("start-host", saveClientProfile: true);
@@ -1525,6 +1557,7 @@ namespace SailwindCoop.Runtime
             Net.StartHost(port);
             if (Net.Role == Role.Host)
             {
+                _sessionGen++;
                 GameMenuPause.HandOffToSession();
                 Mods.BeginHost();
             }
@@ -1767,11 +1800,21 @@ namespace SailwindCoop.Runtime
 
         private IEnumerator LeaveWorld(System.Action join)
         {
-            if (!Guarded("Leaving the world", PrepareToLeaveWorld)) { _leavingWorld = false; yield break; }
+            if (!Guarded("Leaving the world", PrepareToLeaveWorld))
+            {
+                _leavingWorld = false;
+                GameMenuPause.ReturnToSolo();
+                yield break;
+            }
             yield return null;
             for (float t = 0f; t < 10f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
 
-            if (!Guarded("Returning to the title screen", ReloadGameScenes)) { _leavingWorld = false; yield break; }
+            if (!Guarded("Returning to the title screen", ReloadGameScenes))
+            {
+                _leavingWorld = false;
+                GameMenuPause.ReturnToSolo();
+                yield break;
+            }
 
             bool title = false;
             for (float t = 0f; t < 90f && !title; t += Time.unscaledDeltaTime)
@@ -1813,10 +1856,12 @@ namespace SailwindCoop.Runtime
                 path = SaveSlots.GetCurrentSavePath();
                 before = System.IO.File.Exists(path) ? System.IO.File.GetLastWriteTimeUtc(path) : System.DateTime.MinValue;
                 oldLength = System.IO.File.Exists(path) ? new System.IO.FileInfo(path).Length : -1;
+                GameMenuPause.BeginOwnSaveHold();
                 SaveLoadManager.instance.SaveGame(compressed: true);
             }
             catch (System.Exception e)
             {
+                GameMenuPause.EndOwnSaveHold(restorePause: true);
                 CancelWorldJoin();
                 Notice("Could not start saving your world: " + e.Message + ". Your world was not left.");
                 return;
@@ -1827,32 +1872,39 @@ namespace SailwindCoop.Runtime
 
         private IEnumerator CompleteOwnSave(string path, System.DateTime before, long oldLength, System.Action join)
         {
-            bool started = false;
-            for (float t = 0f; t < 10f; t += Time.unscaledDeltaTime)
-            {
-                if (SaveTransferSync.HostSaveBusy()) { started = true; break; }
-                yield return null;
-            }
-            if (started)
-            {
-                for (float t = 0f; t < 30f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
-                if (SaveTransferSync.HostSaveBusy()) started = false;
-            }
             bool written = false;
-            if (started)
+            try
             {
-                try
+                bool started = false;
+                for (float t = 0f; t < 10f; t += Time.unscaledDeltaTime)
                 {
-                    var info = new System.IO.FileInfo(path);
-                    written = info.Exists && info.Length > 0 &&
-                              (info.LastWriteTimeUtc > before || info.Length != oldLength);
-                    if (written)
-                        using (var stream = System.IO.File.OpenRead(path))
-                            written = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter().Deserialize(stream) is SaveContainer;
+                    if (SaveTransferSync.HostSaveBusy()) { started = true; break; }
+                    yield return null;
                 }
-                catch (System.Exception e) { written = false; Plugin.Logger.LogError("[Coop] Save verification failed: " + e); }
+                if (started)
+                {
+                    for (float t = 0f; t < 30f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
+                    if (SaveTransferSync.HostSaveBusy()) started = false;
+                }
+                if (started)
+                {
+                    try
+                    {
+                        var info = new System.IO.FileInfo(path);
+                        written = info.Exists && info.Length > 0 &&
+                                  (info.LastWriteTimeUtc > before || info.Length != oldLength);
+                        if (written)
+                            using (var stream = System.IO.File.OpenRead(path))
+                                written = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter().Deserialize(stream) is SaveContainer;
+                    }
+                    catch (System.Exception e) { written = false; Plugin.Logger.LogError("[Coop] Save verification failed: " + e); }
+                }
             }
-            _waitingForOwnSave = false;
+            finally
+            {
+                _waitingForOwnSave = false;
+                GameMenuPause.EndOwnSaveHold(restorePause: !written);
+            }
             if (!written)
             {
                 _leavingWorld = false;
@@ -1887,6 +1939,7 @@ namespace SailwindCoop.Runtime
         private void ReloadGameScenes()
         {
             Time.timeScale = 1f;
+            GameMenuPause.Reset();
             GameState.playing = GameState.justStarted = GameState.currentlyLoading = GameState.loadingBoatLocalItems = false;
             GameState.changingStartRegion = GameState.recovering = false;
             GameState.loadingScenes = 0;
@@ -1981,6 +2034,7 @@ namespace SailwindCoop.Runtime
             Pause.Clear();
             // An in-flight StreamSaveToClient is now pointless (its peer is going away) and must not
             // leave the queue slot held for the next session.
+            _sessionGen++;
             ResetJoinStreaming();
             Net.Stop();
             Dice.Clear();
@@ -2019,9 +2073,10 @@ namespace SailwindCoop.Runtime
             CrestWater.Clear();
             NpcBoats.Clear();
             Boats.Clear();
+            BoatAuthority.Instance?.Clear();
             Players.Clear();
             _rosterTimer = 0f;
-            GameMenuPause.ReturnToSolo();
+            if (!_leavingWorld) GameMenuPause.ReturnToSolo();
         }
 
     }
