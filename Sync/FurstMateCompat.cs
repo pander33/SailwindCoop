@@ -316,65 +316,89 @@ namespace SailwindCoop.Sync
 
         // ================================================================== patches
 
+        private static HarmonyLib.Harmony _harmony;
+
         public static void ApplyPatches(HarmonyLib.Harmony harmony)
         {
             if (!SyncEnabled) return;
+            if (_harmony != null)
+            {
+                try { _harmony.UnpatchSelf(); } catch { }
+                _harmony = null;
+            }
+            var dedicated = new HarmonyLib.Harmony((harmony?.Id ?? Plugin.Guid) + ".furstmate");
             try
             {
                 var me = typeof(FurstMateCompat);
                 HarmonyMethod H(string n) => new HarmonyMethod(me, n);
                 MethodInfo Own(Type t, string n, params Type[] a) => AccessTools.Method(t, n, a);
+                MethodInfo Require(MethodInfo m, string label) => m ?? throw new MissingMethodException("FurstMate", label);
 
                 // Guests: FurstMate's own decisions and save loading stay off; the host's state builds the pets.
-                foreach (var m in new[]
+                var guestSkips = new[]
                 {
-                    Own(_plugin, "DogTick"), Own(_plugin, "SpawnFromSave", typeof(string)),
-                    Own(_catKeeper, "Tick"), Own(_catKeeper, "FromSave", typeof(string)),
-                    Own(_birdKeeper, "Tick"), Own(_flight, "Tick", typeof(float)), Own(_gameBird, "DropFish", typeof(Vector3)),
-                })
-                    if (m != null) harmony.Patch(m, prefix: H(nameof(GuestSkipPrefix)));
+                    Require(Own(_plugin, "DogTick"), "FurstMatePlugin.DogTick"),
+                    Require(Own(_plugin, "SpawnFromSave", typeof(string)), "FurstMatePlugin.SpawnFromSave(string)"),
+                    Require(Own(_catKeeper, "Tick"), "CatKeeper.Tick"),
+                    Require(Own(_catKeeper, "FromSave", typeof(string)), "CatKeeper.FromSave(string)"),
+                    Require(Own(_birdKeeper, "Tick"), "BirdKeeper.Tick"),
+                    Require(Own(_flight, "Tick", typeof(float)), "BirdFlight.Tick(float)"),
+                    Require(Own(_gameBird, "DropFish", typeof(Vector3)), "GameBird.DropFish(Vector3)"),
+                };
+                foreach (var m in guestSkips)
+                    dedicated.Patch(m, prefix: H(nameof(GuestSkipPrefix)));
 
-                harmony.Patch(Own(_dog, "Update"), prefix: H(nameof(DogUpdatePrefix)), postfix: H(nameof(DogUpdatePostfix)));
-                harmony.Patch(Own(_cat, "Update"), prefix: H(nameof(CatUpdatePrefix)));
-                harmony.Patch(Own(_birdKeeper, "LateUpdate"), postfix: H(nameof(BirdLateUpdatePostfix)));
+                dedicated.Patch(Require(Own(_dog, "Update"), "ShepherdDog.Update"), prefix: H(nameof(DogUpdatePrefix)), postfix: H(nameof(DogUpdatePostfix)));
+                dedicated.Patch(Require(Own(_cat, "Update"), "ShipCat.Update"), prefix: H(nameof(CatUpdatePrefix)));
+                dedicated.Patch(Require(Own(_birdKeeper, "LateUpdate"), "BirdKeeper.LateUpdate"), postfix: H(nameof(BirdLateUpdatePostfix)));
 
                 // Host: what the pets say and do, for the crew.
-                harmony.Patch(_dSay, prefix: H(nameof(DogSayPrefix)));
-                harmony.Patch(_dBark, postfix: H(nameof(DogBarkPostfix)));
-                harmony.Patch(_dRunLoop, prefix: H(nameof(DogRunLoopPrefix)));
-                harmony.Patch(_cSay, prefix: H(nameof(CatSayPrefix)));
-                harmony.Patch(_wSetState, postfix: H(nameof(WalkerSetStatePostfix)));
-                harmony.Patch(_gPlay, postfix: H(nameof(BirdPlayPostfix)));
-                harmony.Patch(_gSplash, postfix: H(nameof(BirdSplashPostfix)));
-                harmony.Patch(_fCarry, postfix: H(nameof(BirdCarryPostfix)));
-                harmony.Patch(Own(_gameBird, "DropFish", typeof(Vector3)), prefix: H(nameof(HostDropFishPrefix)));
-                harmony.Patch(Own(_gameBird, "FishLook"), prefix: H(nameof(GuestFishLookPrefix)));
-                harmony.Patch(_pNote, prefix: H(nameof(NotePrefix)));
+                dedicated.Patch(_dSay, prefix: H(nameof(DogSayPrefix)));
+                dedicated.Patch(_dBark, postfix: H(nameof(DogBarkPostfix)));
+                dedicated.Patch(_dRunLoop, prefix: H(nameof(DogRunLoopPrefix)));
+                dedicated.Patch(_cSay, prefix: H(nameof(CatSayPrefix)));
+                dedicated.Patch(_wSetState, postfix: H(nameof(WalkerSetStatePostfix)));
+                dedicated.Patch(_gPlay, postfix: H(nameof(BirdPlayPostfix)));
+                dedicated.Patch(_gSplash, postfix: H(nameof(BirdSplashPostfix)));
+                dedicated.Patch(_fCarry, postfix: H(nameof(BirdCarryPostfix)));
+                dedicated.Patch(Require(Own(_gameBird, "DropFish", typeof(Vector3)), "GameBird.DropFish(Vector3)"), prefix: H(nameof(HostDropFishPrefix)));
+                dedicated.Patch(Require(Own(_gameBird, "FishLook"), "GameBird.FishLook"), prefix: H(nameof(GuestFishLookPrefix)));
+                dedicated.Patch(_pNote, prefix: H(nameof(NotePrefix)));
 
                 // Host: "you" is the nearest crewmate aboard when the host is not.
-                harmony.Patch(_wPlayerAboard, postfix: H(nameof(WalkerPlayerAboardPostfix)));
-                harmony.Patch(Own(_walker, "PlayerFeet"), postfix: H(nameof(WalkerPlayerFeetPostfix)));
-                harmony.Patch(AccessTools.PropertyGetter(_gameBird, "PlayerAboard"), postfix: H(nameof(BirdPlayerAboardPostfix)));
-                harmony.Patch(AccessTools.PropertyGetter(_gameBird, "PlayerFeet"), postfix: H(nameof(BirdPlayerFeetPostfix)));
+                dedicated.Patch(_wPlayerAboard, postfix: H(nameof(WalkerPlayerAboardPostfix)));
+                dedicated.Patch(Require(Own(_walker, "PlayerFeet"), "DeckWalker.PlayerFeet"), postfix: H(nameof(WalkerPlayerFeetPostfix)));
+                dedicated.Patch(Require(AccessTools.PropertyGetter(_gameBird, "PlayerAboard"), "GameBird.get_PlayerAboard"), postfix: H(nameof(BirdPlayerAboardPostfix)));
+                dedicated.Patch(Require(AccessTools.PropertyGetter(_gameBird, "PlayerFeet"), "GameBird.get_PlayerFeet"), postfix: H(nameof(BirdPlayerFeetPostfix)));
 
                 // Guests: what they do to a pet goes to the host.
-                harmony.Patch(_dGive, prefix: H(nameof(GuestGivePrefix)));
-                harmony.Patch(Own(_dog, "MarkSleepSpot"), prefix: H(nameof(GuestSleepSpotPrefix)));
-                harmony.Patch(Own(_dog, "GetPetted"), prefix: H(nameof(PetUntilPrefix)), postfix: H(nameof(DogPettedPostfix)));
-                harmony.Patch(Own(_cat, "GetPetted"), prefix: H(nameof(CatPetUntilPrefix)), postfix: H(nameof(CatPettedPostfix)));
-                harmony.Patch(Own(_plugin, "Feed", typeof(PickupableItem)), prefix: H(nameof(DogFoodPrefix)), postfix: H(nameof(DogFoodPostfix)));
-                harmony.Patch(Own(_catKeeper, "FeedAboard", typeof(PickupableItem)), prefix: H(nameof(CatFoodPrefix)), postfix: H(nameof(CatFoodPostfix)));
-                harmony.Patch(Own(_catKeeper, "FeedAtTavern", typeof(PickupableItem)), prefix: H(nameof(CatFedPrefix)), postfix: H(nameof(CatTavernPostfix)));
-                harmony.Patch(Own(_birdKeeper, "Offer", typeof(PickupableItem)), prefix: H(nameof(BirdOfferPrefix)), postfix: H(nameof(BirdOfferPostfix)));
-                harmony.Patch(_fBeg, prefix: H(nameof(GuestBegPrefix)));
-                harmony.Patch(Own(_plugin, "CallHere"), prefix: H(nameof(GuestCallHerePrefix)));
-                harmony.Patch(Own(_plugin, "BuyClick"), prefix: H(nameof(GuestBuyClickPrefix)));
+                dedicated.Patch(_dGive, prefix: H(nameof(GuestGivePrefix)));
+                dedicated.Patch(Require(Own(_dog, "MarkSleepSpot"), "ShepherdDog.MarkSleepSpot"), prefix: H(nameof(GuestSleepSpotPrefix)));
+                dedicated.Patch(Require(Own(_dog, "GetPetted"), "ShepherdDog.GetPetted"), prefix: H(nameof(PetUntilPrefix)), postfix: H(nameof(DogPettedPostfix)));
+                dedicated.Patch(Require(Own(_cat, "GetPetted"), "ShipCat.GetPetted"), prefix: H(nameof(CatPetUntilPrefix)), postfix: H(nameof(CatPettedPostfix)));
+                dedicated.Patch(Require(Own(_plugin, "Feed", typeof(PickupableItem)), "FurstMatePlugin.Feed(PickupableItem)"), prefix: H(nameof(DogFoodPrefix)), postfix: H(nameof(DogFoodPostfix)));
+                dedicated.Patch(Require(Own(_catKeeper, "FeedAboard", typeof(PickupableItem)), "CatKeeper.FeedAboard(PickupableItem)"), prefix: H(nameof(CatFoodPrefix)), postfix: H(nameof(CatFoodPostfix)));
+                dedicated.Patch(Require(Own(_catKeeper, "FeedAtTavern", typeof(PickupableItem)), "CatKeeper.FeedAtTavern(PickupableItem)"), prefix: H(nameof(CatFedPrefix)), postfix: H(nameof(CatTavernPostfix)));
+                dedicated.Patch(Require(Own(_birdKeeper, "Offer", typeof(PickupableItem)), "BirdKeeper.Offer(PickupableItem)"), prefix: H(nameof(BirdOfferPrefix)), postfix: H(nameof(BirdOfferPostfix)));
+                dedicated.Patch(_fBeg, prefix: H(nameof(GuestBegPrefix)));
+                dedicated.Patch(Require(Own(_plugin, "CallHere"), "FurstMatePlugin.CallHere"), prefix: H(nameof(GuestCallHerePrefix)));
+                dedicated.Patch(Require(Own(_plugin, "BuyClick"), "FurstMatePlugin.BuyClick"), prefix: H(nameof(GuestBuyClickPrefix)));
+
+                _harmony = dedicated;
             }
             catch (Exception e)
             {
+                try { dedicated.UnpatchSelf(); } catch { }
+                _harmony = null;
                 SyncEnabled = false;
                 Plugin.Logger.LogWarning("[FurstMateCompat] Patching threw. Pet sync disabled. " + e);
             }
+        }
+
+        public static void Unpatch()
+        {
+            try { _harmony?.UnpatchSelf(); } catch { }
+            _harmony = null;
         }
 
         public static void Reset()
@@ -756,10 +780,23 @@ namespace SailwindCoop.Sync
 
         private static bool DogUpdatePrefix(Component __instance, out float __state)
         {
-            __state = Get<float>(_dCallUntil, __instance);
-            if (!Guest) return true;
-            DrivePet(__instance, _dogPose, _dogGen, isDog: true);
-            return false;
+            __state = float.NaN;
+            if (!SyncEnabled) return true;
+            try
+            {
+                if (Guest)
+                {
+                    DrivePet(__instance, _dogPose, _dogGen, isDog: true);
+                    return false;
+                }
+                if (Host) __state = Get<float>(_dCallUntil, __instance);
+                return true;
+            }
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                return true;
+            }
         }
 
         // Host: a howl for being left alone starts a timer inside UpdateVoice; that timer moving is the howl.
@@ -767,7 +804,7 @@ namespace SailwindCoop.Sync
         {
             try
             {
-                if (!Host) return;
+                if (!Host || float.IsNaN(__state)) return;
                 if (!Mathf.Approximately(Get<float>(_dCallUntil, __instance), __state))
                 {
                     bool pup = PluginInst != null && (bool)_pPuppyVoice.GetValue(PluginInst, null);
@@ -779,9 +816,18 @@ namespace SailwindCoop.Sync
 
         private static bool CatUpdatePrefix(Component __instance)
         {
-            if (!Guest) return true;
-            DrivePet(__instance, _catPose, _catGen, isDog: false);
-            return false;
+            if (!SyncEnabled) return true;
+            try
+            {
+                if (!Guest) return true;
+                DrivePet(__instance, _catPose, _catGen, isDog: false);
+                return false;
+            }
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                return true;
+            }
         }
 
         private static void DrivePet(Component pet, PetPose pose, int gen, bool isDog)
@@ -945,7 +991,12 @@ namespace SailwindCoop.Sync
             Send(MsgEvent, w => { w.Write(pet); w.Write(ev); w.Write(name ?? ""); WriteV3(w, v); w.Write(i); });
         }
 
-        private static void DogSayPrefix(string sound) { if (Host) SendEvent(PetDog, EvSay, sound, Vector3.zero, 0); }
+        private static void DogSayPrefix(string sound)
+        {
+            if (!SyncEnabled) return;
+            try { if (Host) SendEvent(PetDog, EvSay, sound, Vector3.zero, 0); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
         private static void DogBarkPostfix()
         {
             try
@@ -954,13 +1005,23 @@ namespace SailwindCoop.Sync
             }
             catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
-        private static void CatSayPrefix(string sound) { if (Host) SendEvent(PetCat, EvSay, sound, Vector3.zero, 0); }
+        private static void CatSayPrefix(string sound)
+        {
+            if (!SyncEnabled) return;
+            try { if (Host) SendEvent(PetCat, EvSay, sound, Vector3.zero, 0); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
 
         private static void DogRunLoopPrefix(AudioClip want)
         {
-            if (!Host) return;
-            string n = want != null ? want.name : "";
-            _dogLoop = n.StartsWith("furstmate ", StringComparison.Ordinal) ? n.Substring(10) : n;
+            if (!SyncEnabled) return;
+            try
+            {
+                if (!Host) return;
+                string n = want != null ? want.name : "";
+                _dogLoop = n.StartsWith("furstmate ", StringComparison.Ordinal) ? n.Substring(10) : n;
+            }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
         // The cat's pounce lasts only until her animator enters it, which a 10 Hz pose can miss.
@@ -1038,18 +1099,27 @@ namespace SailwindCoop.Sync
         private static bool GuestFishLookPrefix(object __instance, ref GameObject __result)
         {
             if (!Guest) return true;
-            __result = null;
-            var fish = _guestFish;
-            _gFish.SetValue(__instance, fish);
-            var mf = fish != null ? fish.GetComponent<MeshFilter>() : null;
-            var mr = fish != null ? fish.GetComponent<MeshRenderer>() : null;
-            if (mf == null || mr == null) return false;
-            var go = new GameObject("the fish in her bill");
-            go.AddComponent<MeshFilter>().sharedMesh = mf.sharedMesh;
-            go.AddComponent<MeshRenderer>().sharedMaterials = mr.sharedMaterials;
-            go.transform.localScale = fish.transform.lossyScale;
-            __result = go;
-            return false;
+            try
+            {
+                __result = null;
+                var fish = _guestFish;
+                _gFish.SetValue(__instance, fish);
+                var mf = fish != null ? fish.GetComponent<MeshFilter>() : null;
+                var mr = fish != null ? fish.GetComponent<MeshRenderer>() : null;
+                if (mf == null || mr == null) return false;
+                var go = new GameObject("the fish in her bill");
+                go.AddComponent<MeshFilter>().sharedMesh = mf.sharedMesh;
+                go.AddComponent<MeshRenderer>().sharedMaterials = mr.sharedMaterials;
+                go.transform.localScale = fish.transform.lossyScale;
+                __result = go;
+                return false;
+            }
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                __result = null;
+                return false;
+            }
         }
 
         private static bool NotePrefix() => !_replaying;
@@ -1181,23 +1251,49 @@ namespace SailwindCoop.Sync
         private static bool GuestGivePrefix(object[] __args)
         {
             if (!Guest) return true;
-            int c = Convert.ToInt32(__args[0]);
-            Request(ReqDogCmd, w => w.Write(c));
-            return false;
+            try
+            {
+                if (__args == null || __args.Length == 0) return false;
+                int c = Convert.ToInt32(__args[0]);
+                Request(ReqDogCmd, w => w.Write(c));
+                return false;
+            }
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                return false;
+            }
         }
 
         private static void GuestSleepSpotPrefix(Component __instance)
         {
             if (!Guest) return;
-            var args = new object[] { Vector3.zero };
-            if (!(bool)_wPlayerAboard.Invoke(__instance, args)) return;
-            var spot = (Vector3)Call(_wSettle, __instance, (Vector3)args[0], 0.2f, 2.5f);
-            int idx = SceneIndexOf(Get<BoatRefs>(_wBoat, __instance));
-            Request(ReqSleepSpot, w => { w.Write(idx); WriteV3(w, spot); });
+            try
+            {
+                var args = new object[] { Vector3.zero };
+                if (!(bool)_wPlayerAboard.Invoke(__instance, args)) return;
+                var spot = (Vector3)Call(_wSettle, __instance, (Vector3)args[0], 0.2f, 2.5f);
+                int idx = SceneIndexOf(Get<BoatRefs>(_wBoat, __instance));
+                Request(ReqSleepSpot, w => { w.Write(idx); WriteV3(w, spot); });
+            }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
-        private static void PetUntilPrefix(Component __instance, out float __state) => __state = Get<float>(_dPetUntil, __instance);
-        private static void CatPetUntilPrefix(Component __instance, out float __state) => __state = Get<float>(_cPetUntil, __instance);
+        private static void PetUntilPrefix(Component __instance, out float __state)
+        {
+            __state = float.MaxValue;
+            if (!Guest) return;
+            try { __state = Get<float>(_dPetUntil, __instance); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
+
+        private static void CatPetUntilPrefix(Component __instance, out float __state)
+        {
+            __state = float.MaxValue;
+            if (!Guest) return;
+            try { __state = Get<float>(_cPetUntil, __instance); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
 
         private static void DogPettedPostfix(Component __instance, float __state)
         {
@@ -1217,7 +1313,13 @@ namespace SailwindCoop.Sync
             catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
-        private static void DogFoodPrefix(object __instance, out float __state) => __state = Get<float>(_pFood, __instance);
+        private static void DogFoodPrefix(object __instance, out float __state)
+        {
+            __state = float.MaxValue;
+            if (!Guest) return;
+            try { __state = Get<float>(_pFood, __instance); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
 
         private static void DogFoodPostfix(object __instance, float __state)
         {
@@ -1229,7 +1331,13 @@ namespace SailwindCoop.Sync
             catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
-        private static void CatFoodPrefix(object __instance, out float __state) => __state = Get<float>(_kFood, __instance);
+        private static void CatFoodPrefix(object __instance, out float __state)
+        {
+            __state = float.MaxValue;
+            if (!Guest) return;
+            try { __state = Get<float>(_kFood, __instance); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
 
         private static void CatFoodPostfix(object __instance, float __state)
         {
@@ -1241,7 +1349,13 @@ namespace SailwindCoop.Sync
             catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
-        private static void CatFedPrefix(object __instance, out bool __state) => __state = Get<bool>(_kFed, __instance);
+        private static void CatFedPrefix(object __instance, out bool __state)
+        {
+            __state = true;
+            if (!Guest) return;
+            try { __state = Get<bool>(_kFed, __instance); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
+        }
 
         private static void CatTavernPostfix(object __instance, bool __state)
         {
@@ -1258,14 +1372,17 @@ namespace SailwindCoop.Sync
 
         private static void BirdOfferPrefix(object __instance, out float __state)
         {
-            __state = Get<float>(_bFood, __instance) + 1000f * Convert.ToInt32(_bStage.GetValue(__instance));
+            __state = float.NaN;
+            if (!Guest) return;
+            try { __state = Get<float>(_bFood, __instance) + 1000f * Convert.ToInt32(_bStage.GetValue(__instance)); }
+            catch (Exception error) { PatchGuard.Fail(Report, error); }
         }
 
         private static void BirdOfferPostfix(object __instance, float __state, bool __result)
         {
             try
             {
-                if (!Guest || !__result) return;
+                if (!Guest || !__result || float.IsNaN(__state)) return;
                 int stageBefore = Mathf.FloorToInt((__state + 1f) / 1000f);
                 float foodBefore = __state - stageBefore * 1000f;
                 int stageNow = Convert.ToInt32(_bStage.GetValue(__instance));
@@ -1279,27 +1396,43 @@ namespace SailwindCoop.Sync
         private static bool GuestBegPrefix()
         {
             if (!Guest) return true;
-            Request(ReqBirdBeg, w => { });
-            return false;
+            try
+            {
+                Request(ReqBirdBeg, w => { });
+                return false;
+            }
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                return false;
+            }
         }
 
         private static bool GuestCallHerePrefix()
         {
             if (!Guest) return true;
-            BoatRefs target = BoatOf(GameState.currentBoat);
-            if (target == null)
+            try
             {
-                try { target = AccessTools.Method(_home, "Here")?.Invoke(null, null) as BoatRefs; } catch { }
-            }
-            if (target == null)
-            {
-                Note("Stand on a ship of yours, or in a home of yours, to call her.");
+                BoatRefs target = BoatOf(GameState.currentBoat);
+                if (target == null)
+                {
+                    try { target = AccessTools.Method(_home, "Here")?.Invoke(null, null) as BoatRefs; } catch { }
+                }
+                if (target == null)
+                {
+                    Note("Stand on a ship of yours, or in a home of yours, to call her.");
+                    return false;
+                }
+                int idx = SceneIndexOf(target);
+                var feet = LocalFeet(target);
+                Request(ReqHere, w => { w.Write(idx); WriteV3(w, feet); });
                 return false;
             }
-            int idx = SceneIndexOf(target);
-            var feet = LocalFeet(target);
-            Request(ReqHere, w => { w.Write(idx); WriteV3(w, feet); });
-            return false;
+            catch (Exception error)
+            {
+                PatchGuard.Fail(Report, error);
+                return false;
+            }
         }
 
         private static bool GuestBuyClickPrefix(object __instance)

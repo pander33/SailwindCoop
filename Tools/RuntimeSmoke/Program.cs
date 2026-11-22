@@ -238,6 +238,37 @@ internal static class Program
                 repair.UpdateAuthority(Damage(0f), true);
                 Assert(!repair.TrySend(false, out _, out _), "mend repeated after acknowledgement");
             });
+            Test("sail repair timeout clears non-idempotent deltas, lets mend supersede, and retries mend", () => {
+                var repair = new SailRepairQueue(new float[6]);
+                float[] Damage(float amount) => new[] { amount, 0f, 0f, 0f, 0f, 0f };
+                float timeout = SailRepairQueue.RetryTimeoutSeconds;
+
+                // (a) A timed-out non-mend delta is cleared rather than re-sent.
+                repair.UpdateAuthority(Damage(0.8f), false);
+                repair.MarkDisplayed(repair.Preview());
+                repair.Observe(Damage(0.6f));
+                Assert(repair.TrySend(true, 10f, out var delta, out bool mend) && !mend && Math.Abs(delta[0] + 0.2f) < 0.0001f, "initial delta send");
+                Assert(!repair.TrySend(false, 10f + timeout - 0.5f, out _, out _), "delta expired early");
+                Assert(Math.Abs(repair.Preview()[0] - 0.6f) < 0.0001f, "in-flight delta preview lost before timeout");
+                Assert(!repair.TrySend(false, 10f + timeout, out _, out _), "timed-out non-mend delta must not be re-sent");
+                Assert(Math.Abs(repair.Preview()[0] - 0.8f) < 0.0001f, "timed-out non-mend delta was not cleared");
+                repair.MarkDisplayed(repair.Preview());
+                repair.Observe(Damage(0.7f));
+                Assert(repair.TrySend(true, 11f + timeout, out delta, out mend) && !mend && Math.Abs(delta[0] + 0.1f) < 0.0001f, "queue stayed blocked after timeout");
+
+                // (b) A queued Mend supersedes a timed-out in-flight delta.
+                repair.Mend(Damage(0f));
+                Assert(!repair.TrySend(false, 11f + 2f * timeout - 0.5f, out _, out _), "mend overtook non-timed-out delta");
+                Assert(repair.TrySend(false, 11f + 2f * timeout, out _, out mend) && mend, "queued mend did not supersede timed-out delta");
+                Assert(repair.Preview()[0] == 0f, "mend preview");
+
+                // (c) A timed-out Mend retries (idempotent) without duplicating preview state.
+                Assert(!repair.TrySend(false, 11f + 3f * timeout - 0.5f, out _, out _), "mend retried early");
+                Assert(repair.TrySend(false, 11f + 3f * timeout, out _, out mend) && mend, "timed-out mend did not retry");
+                Assert(repair.Preview()[0] == 0f, "mend retry altered preview");
+                repair.UpdateAuthority(Damage(0f), true);
+                Assert(!repair.TrySend(false, 11f + 5f * timeout, out _, out _), "acked mend still retried");
+            });
             Test("LAN join input normalizes optional address and rejects malformed endpoints", () => {
                 JoinTarget target;
                 Assert(JoinPreferences.TryParseLan("  ", "7777", "  Sailor ", out target), "empty address should use localhost");

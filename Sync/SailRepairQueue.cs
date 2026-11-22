@@ -4,9 +4,11 @@ namespace SailwindCoop.Sync
 {
     internal sealed class SailRepairQueue
     {
+        internal const float RetryTimeoutSeconds = 30f;
         private readonly float[] _whole;
         private float[] _authority, _displayed, _sending;
         private bool _mend, _sendingMend;
+        private float _sentAt = float.NaN;
         internal float[] Queued { get; private set; }
 
         internal SailRepairQueue(float[] whole)
@@ -36,6 +38,7 @@ namespace SailwindCoop.Sync
             if (!ack) return;
             _sending = null;
             _sendingMend = false;
+            _sentAt = float.NaN;
         }
 
         internal float[] Preview()
@@ -50,10 +53,38 @@ namespace SailwindCoop.Sync
         }
 
         internal bool TrySend(bool sendDelta, out float[] values, out bool mend)
+            => TrySend(sendDelta, float.NaN, out values, out mend);
+
+        internal bool TrySend(bool sendDelta, float now, out float[] values, out bool mend)
         {
             values = null;
             mend = false;
-            if (_sending != null || (!_mend && !sendDelta)) return false;
+            if (_sending != null)
+            {
+                if (float.IsNaN(now) || float.IsNaN(_sentAt) || now - _sentAt < RetryTimeoutSeconds)
+                    return false;
+                if (_mend)
+                {
+                    mend = _sendingMend = true;
+                    values = _sending = _whole;
+                    _mend = false;
+                    _sentAt = now;
+                    return true;
+                }
+                if (_sendingMend)
+                {
+                    values = _sending;
+                    mend = true;
+                    _sentAt = now;
+                    return true;
+                }
+                // Non-mend deltas are additive on the host: never re-send a timed-out delta.
+                // Clear the stalled in-flight slot so later repairs proceed and host authority reconciles.
+                _sending = null;
+                _sentAt = float.NaN;
+                if (!sendDelta) return false;
+            }
+            if (!_mend && !sendDelta) return false;
             mend = _sendingMend = _mend;
             if (mend)
             {
@@ -65,6 +96,7 @@ namespace SailwindCoop.Sync
                 values = _sending = Queued;
                 Queued = new float[_whole.Length];
             }
+            _sentAt = now;
             return true;
         }
     }

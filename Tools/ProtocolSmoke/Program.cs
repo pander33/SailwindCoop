@@ -357,6 +357,53 @@ namespace ProtocolSmoke
             chunk.Put((ushort)0); chunk.Put((ushort)0); chunk.Put(0); chunk.Put(ushort.MaxValue);
             if (Protocol.ReadBody(MsgType.ModFileChunk, new NetDataReader(chunk.Data, 0, chunk.Length)) != null)
                 failures.Add("ModFileChunkMsg: oversized chunk accepted");
+            var chart = new NetDataWriter();
+            chart.Put(1); chart.Put(2); chart.Put(3u); chart.Put(4u); chart.Put(5u);
+            chart.Put((ushort)0); chart.Put((ushort)(ChartStateMsg.MaxChunks + 1)); chart.Put(false); chart.Put((ushort)0);
+            if (Protocol.ReadBody(MsgType.ChartState, new NetDataReader(chart.Data, 0, chart.Length)) != null)
+                failures.Add("ChartStateMsg: chunk count above MaxChunks accepted");
+            var dirt = new NetDataWriter();
+            dirt.Put(1); dirt.Put(2u); dirt.Put(3u); dirt.Put(4u);
+            dirt.Put((ushort)0); dirt.Put((ushort)(DirtStateMsg.MaxChunks + 1)); dirt.Put((byte)0); dirt.Put((ushort)0);
+            if (Protocol.ReadBody(MsgType.DirtState, new NetDataReader(dirt.Data, 0, dirt.Length)) != null)
+                failures.Add("DirtStateMsg: chunk count above MaxChunks accepted");
+            var journal = new NetDataWriter();
+            journal.Put((byte)5);
+            if (Protocol.ReadBody(MsgType.MissionJournal, new NetDataReader(journal.Data, 0, journal.Length)) != null)
+                failures.Add("MissionJournalMsg: entry count beyond payload accepted");
+            var storm = new NetDataWriter();
+            storm.Put((byte)2);
+            if (Protocol.ReadBody(MsgType.StormState, new NetDataReader(storm.Data, 0, storm.Length)) != null)
+                failures.Add("StormStateMsg: storm count beyond payload accepted");
+            var npc = new NetDataWriter();
+            npc.Put(0L); npc.Put((byte)2);
+            if (Protocol.ReadBody(MsgType.NpcBoatState, new NetDataReader(npc.Data, 0, npc.Length)) != null)
+                failures.Add("NpcBoatStateMsg: boat count beyond payload accepted");
+            var econEvents = new NetDataWriter();
+            econEvents.Put(0u); econEvents.Put(false); econEvents.Put(true); econEvents.Put((byte)2);
+            if (Protocol.ReadBody(MsgType.EconomyState, new NetDataReader(econEvents.Data, 0, econEvents.Length)) != null)
+                failures.Add("EconomyStateMsg: demand event count beyond payload accepted");
+            var econPorts = new NetDataWriter();
+            econPorts.Put(0u); econPorts.Put(false); econPorts.Put(false); econPorts.Put((ushort)2);
+            if (Protocol.ReadBody(MsgType.EconomyState, new NetDataReader(econPorts.Data, 0, econPorts.Length)) != null)
+                failures.Add("EconomyStateMsg: port count beyond payload accepted");
+            var econGoods = new NetDataWriter();
+            econGoods.Put(0u); econGoods.Put(false); econGoods.Put(false); econGoods.Put((ushort)1);
+            econGoods.Put((short)1); econGoods.Put(0f); econGoods.Put((ushort)10);
+            if (Protocol.ReadBody(MsgType.EconomyState, new NetDataReader(econGoods.Data, 0, econGoods.Length)) != null)
+                failures.Add("EconomyStateMsg: good count beyond payload accepted");
+            var econDelta = new NetDataWriter();
+            econDelta.Put(0u); econDelta.Put((ushort)4);
+            if (Protocol.ReadBody(MsgType.EconomyDelta, new NetDataReader(econDelta.Data, 0, econDelta.Length)) != null)
+                failures.Add("EconomyDeltaMsg: change count beyond payload accepted");
+            var saveChunk = new NetDataWriter();
+            saveChunk.Put(0); saveChunk.Put((ushort)100); saveChunk.Put((byte)1);
+            if (Protocol.ReadBody(MsgType.SaveSnapshotChunk, new NetDataReader(saveChunk.Data, 0, saveChunk.Length)) != null)
+                failures.Add("SaveSnapshotChunkMsg: byte length beyond payload accepted");
+            var pet = new NetDataWriter();
+            pet.Put((ushort)100); pet.Put((byte)1);
+            if (Protocol.ReadBody(MsgType.PetState, new NetDataReader(pet.Data, 0, pet.Length)) != null)
+                failures.Add("PetStateMsg: byte length beyond payload accepted");
         }
 
         /// <summary>The mod versions sit after the members: a roster without them is a valid roster

@@ -53,6 +53,7 @@ namespace SailwindCoop.Sync
         private class PendingAttach
         {
             public HookAttachmentMsg Packet;
+            public NetPeer Sender;
             public float Time;
         }
 
@@ -181,15 +182,17 @@ namespace SailwindCoop.Sync
             return item is ShipItem shipItem && items.TrySharedIdentity(shipItem, out packet.ItemId, out packet.ItemPrefab);
         }
 
-        private static void Send(HookAttachmentMsg packet)
-            => Net.SendMod(packet, ModFeatures.HooksHangMore, DeliveryMethod.ReliableOrdered);
+        private static void Send(HookAttachmentMsg packet, NetPeer except = null)
+            => Net.SendMod(packet, ModFeatures.HooksHangMore, DeliveryMethod.ReliableOrdered, except);
 
         /// <summary>Host: the save data for a hook's anchor is not in the join snapshot, so tell the joiner everything.</summary>
         public static void ResyncTo(NetPeer peer)
         {
             if (!Active || !Host || (Net.FeaturesOf(peer) & ModFeatures.HooksHangMore) == 0) return;
             peer.Send(new HookAttachmentMsg { Kind = HookAttachmentKind.ClearAll }, DeliveryMethod.ReliableOrdered);
-            foreach (DictionaryEntry entry in AttachedDictionary())
+            var dictionary = AttachedDictionary();
+            if (dictionary == null) return;
+            foreach (DictionaryEntry entry in dictionary)
                 if (TryDescribe(entry.Value as Component, entry.Key as PickupableItem, true, out var packet))
                     peer.Send(packet, DeliveryMethod.ReliableOrdered);
         }
@@ -217,21 +220,23 @@ namespace SailwindCoop.Sync
                 var item = Resolve(packet);
                 var hook = ItemSync.Instance?.FindSharedItem(packet.HookId, packet.HookPrefab);
                 var holder = hook != null ? hook.GetComponent(_holderType) : null;
-                if (item != null && holder != null && ReferenceEquals(AttachedDictionary()[item], holder))
+                var dictionary = AttachedDictionary();
+                if (item != null && holder != null && dictionary != null && ReferenceEquals(dictionary[item], holder))
                     DetachLocally(item);
-                if (Host) Send(packet);
+                if (Host) Send(packet, sender);
                 return;
             }
 
             if (TryApply(packet))
             {
-                if (Host) Send(packet);
+                if (Host) Send(packet, sender);
             }
-            else _pending[key] = new PendingAttach { Packet = packet, Time = Time.unscaledTime };
+            else _pending[key] = new PendingAttach { Packet = packet, Sender = sender, Time = Time.unscaledTime };
         }
 
         public static void Tick()
         {
+            if (!Active) return;
             if (_pending.Count == 0 || Time.unscaledTime < _nextPendingPoll) return;
             _nextPendingPoll = Time.unscaledTime + PendingPollInterval;
 
@@ -245,7 +250,7 @@ namespace SailwindCoop.Sync
                 }
                 else if (TryApply(kvp.Value.Packet))
                 {
-                    if (Host) Send(kvp.Value.Packet);
+                    if (Host) Send(kvp.Value.Packet, kvp.Value.Sender);
                     _pendingScratch.Add(kvp.Key);
                 }
             }
@@ -275,6 +280,7 @@ namespace SailwindCoop.Sync
             if (holder == null || attachable == null) return false;
 
             var dictionary = AttachedDictionary();
+            if (dictionary == null) return false;
             if (ReferenceEquals(dictionary[item], holder)) return true;
 
             _applying = true;
@@ -303,7 +309,8 @@ namespace SailwindCoop.Sync
 
         private static void DetachLocally(PickupableItem item)
         {
-            var holder = AttachedDictionary()[item];
+            var dictionary = AttachedDictionary();
+            var holder = dictionary != null ? dictionary[item] : null;
             if (holder == null) return;
 
             bool wasApplying = _applying;
@@ -315,7 +322,9 @@ namespace SailwindCoop.Sync
 
         private static void DetachEverything()
         {
-            var items = AttachedDictionary().Keys.Cast<PickupableItem>().ToList();
+            var dictionary = AttachedDictionary();
+            if (dictionary == null) return;
+            var items = dictionary.Keys.Cast<PickupableItem>().ToList();
             foreach (var item in items)
                 if (item != null) DetachLocally(item);
         }
@@ -330,7 +339,11 @@ namespace SailwindCoop.Sync
         internal static bool IsAttached(PickupableItem item)
         {
             if (!Active || item == null) return false;
-            try { return AttachedDictionary().Contains(item); }
+            try
+            {
+                var dictionary = AttachedDictionary();
+                return dictionary != null && dictionary.Contains(item);
+            }
             catch (Exception error) { PatchGuard.Fail(Report, error); return false; }
         }
 

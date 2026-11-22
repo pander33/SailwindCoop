@@ -19,6 +19,7 @@ namespace SailwindCoop.Net
     }
     public sealed class DirtStateMsg : INetMessage
     {
+        public const int MaxChunks = 2048;
         public int SceneIndex;
         public uint Revision, Requester, RequestId;
         public ushort Chunk, Chunks = 1;
@@ -35,7 +36,7 @@ namespace SailwindCoop.Net
         {
             SceneIndex = r.GetInt(); Revision = r.GetUInt(); Requester = r.GetUInt(); RequestId = r.GetUInt();
             Chunk = r.GetUShort(); Chunks = r.GetUShort(); Outcome = (DirtOutcome)r.GetByte();
-            if (Chunks == 0 || Chunk >= Chunks) throw new InvalidDataException("invalid dirt chunk header");
+            if (Chunks == 0 || Chunks > MaxChunks || Chunk >= Chunks) throw new InvalidDataException("invalid dirt chunk header");
             int size = r.GetUShort(); if (size > r.AvailableBytes) throw new InvalidDataException("truncated dirt texture");
             Png = new byte[size]; r.GetBytes(Png, size);
         }

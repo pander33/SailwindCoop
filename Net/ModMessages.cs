@@ -76,10 +76,20 @@ namespace SailwindCoop.Net
 
     public abstract class PetMessage : INetMessage
     {
+        public const int MaxBytes = ushort.MaxValue;
         public byte[] Data = Array.Empty<byte>();
         public abstract MsgType Type { get; }
         public void Serialize(NetDataWriter w) => w.PutBytesWithLength(Data);
-        public void Deserialize(NetDataReader r) => Data = r.GetBytesWithLength();
+        public void Deserialize(NetDataReader r)
+        {
+            if (r.AvailableBytes < sizeof(ushort))
+                throw new InvalidDataException("Truncated pet message length");
+            int len = r.GetUShort();
+            if (len > MaxBytes || len > r.AvailableBytes)
+                throw new InvalidDataException("Truncated pet message");
+            Data = len == 0 ? Array.Empty<byte>() : new byte[len];
+            if (len > 0) r.GetBytes(Data, len);
+        }
     }
 
     public sealed class PetStateMsg : PetMessage { public override MsgType Type => MsgType.PetState; }

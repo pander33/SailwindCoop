@@ -67,6 +67,7 @@ namespace SailwindCoop.Sync
         private SHA256 _sha;
         private int _received;
         private int _nextChunk;
+        private bool _ignoredStaleEnd;
 
         public long TotalBytes { get; private set; }
         public long ReceivedBytes { get; private set; }
@@ -104,7 +105,7 @@ namespace SailwindCoop.Sync
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             _stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             _sha = SHA256.Create();
-            _received = 0; _nextChunk = 0;
+            _received = 0; _nextChunk = 0; _ignoredStaleEnd = false;
             mod = (ushort)_mods[_mod].Key; file = (ushort)_file;
             return true;
         }
@@ -118,6 +119,25 @@ namespace SailwindCoop.Sync
             _stream.Write(data, 0, data.Length);
             _sha.TransformBlock(data, 0, data.Length, null, 0);
             _received += data.Length; ReceivedBytes += data.Length; _nextChunk++;
+        }
+
+        /// <summary>Processes a chunk, or ignores stale pre-cancel traffic when <paramref name="ignoreStale"/>
+        /// is set after a cancelled download is retried. Returns false when the chunk was ignored.</summary>
+        public bool TryOnChunk(ushort mod, ushort file, int index, byte[] data, bool ignoreStale)
+        {
+            if (!ignoreStale)
+            {
+                OnChunk(mod, file, index, data);
+                return true;
+            }
+            if (_stream == null || _mod >= _mods.Count || _mods[_mod].Key != mod || _file != file)
+                return false;
+            if (_nextChunk == 0 && index > 0)
+                return false;
+            if (_nextChunk > 0 && index == 0)
+                RestartCurrentFile();
+            OnChunk(mod, file, index, data);
+            return true;
         }
 
         /// <summary>Closes the current file and verifies it. Throws when the host could not send it
@@ -134,6 +154,32 @@ namespace SailwindCoop.Sync
             CloseStream();
         }
 
+        /// <summary>Processes a file end marker, or ignores stale pre-cancel markers when
+        /// <paramref name="ignoreStale"/> is set. Returns false when the marker was ignored.</summary>
+        public bool TryOnEnd(ushort mod, ushort file, bool ok, bool ignoreStale)
+        {
+            if (!ignoreStale)
+            {
+                OnEnd(mod, file, ok);
+                return true;
+            }
+            if (_stream == null || _mod >= _mods.Count || _mods[_mod].Key != mod || _file != file)
+                return false;
+            ModListFile expected = _mods[_mod].Value.Files[_file];
+            if (_received == 0)
+            {
+                if (ok && expected.Size > 0)
+                    return false;
+                if (!ok && !_ignoredStaleEnd)
+                {
+                    _ignoredStaleEnd = true;
+                    return false;
+                }
+            }
+            OnEnd(mod, file, ok);
+            return true;
+        }
+
         /// <summary>Moves every staged mod into the plugins folder and returns what was installed
         /// (paths relative to it). Call only after <see cref="TryNext"/> returned false.</summary>
         public List<string> Commit(string source)
@@ -145,20 +191,26 @@ namespace SailwindCoop.Sync
             for (int i = 0; i < _mods.Count; i++)
             {
                 ModEntry entry = _mods[i].Value;
+                string name;
+                string target;
                 if (string.IsNullOrEmpty(entry.Folder))
                 {
-                    targets[i] = ModPathRules.Resolve(_plugins, entry.Files[0].Path);
-                    if (File.Exists(targets[i]) || Directory.Exists(targets[i]))
-                        throw new IOException("'" + entry.Files[0].Path + "' already exists in the plugins folder");
-                    continue;
+                    name = entry.Files[0].Path;
+                    target = ModPathRules.Resolve(_plugins, name);
+                    if (File.Exists(target) || Directory.Exists(target))
+                        throw new IOException("'" + name + "' already exists in the plugins folder");
                 }
-                string name = entry.Folder;
-                if (Exists(name)) name = entry.Folder + " (coop)";
-                if (Exists(name)) throw new IOException("folder '" + entry.Folder + "' already exists in the plugins folder");
+                else
+                {
+                    name = entry.Folder;
+                    if (Exists(name)) name = entry.Folder + " (coop)";
+                    if (Exists(name)) throw new IOException("folder '" + entry.Folder + "' already exists in the plugins folder");
+                    target = ModPathRules.Resolve(_plugins, name);
+                }
                 for (int j = 0; j < i; j++)
-                    if (string.Equals(targets[j], ModPathRules.Resolve(_plugins, name), StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(targets[j], target, StringComparison.OrdinalIgnoreCase))
                         throw new IOException("two mods would install into '" + name + "'");
-                targets[i] = ModPathRules.Resolve(_plugins, name);
+                targets[i] = target;
             }
 
             var installed = new List<string>();
@@ -196,6 +248,20 @@ namespace SailwindCoop.Sync
             if (_stream == null || _mod >= _mods.Count || _mods[_mod].Key != mod || _file != file)
                 throw new InvalidDataException("data for a file that was not requested (mod " + mod + ", file " + file + ")");
             return _mods[_mod].Value.Files[_file];
+        }
+
+        private void RestartCurrentFile()
+        {
+            CloseStream();
+            ReceivedBytes -= _received;
+            _received = 0;
+            _nextChunk = 0;
+            _ignoredStaleEnd = false;
+            ModEntry entry = _mods[_mod].Value;
+            string path = ModPathRules.Resolve(StageRoot(_mod), entry.Files[_file].Path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            _stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+            _sha = SHA256.Create();
         }
 
         private void CloseStream()

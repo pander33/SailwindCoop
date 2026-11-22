@@ -179,6 +179,67 @@ internal static class ModSharingTests
             Assert(mods.Count == 1 && !mods[0].Complete && mods[0].Files.Length == 1 && mods[0].Files[0].Path == "Big.dll" && log.Count == 1, "comparison-only entry");
             Assert(ModPathRules.Validate(mods[0]) == null, "comparison-only entry must still validate");
         }));
+
+        test("mod download detects single-file target collisions and drains stale chunks on retry", () => WithDirs((host, client, staging) => {
+            List<ModEntry> mods = ModCatalog.Build(host, HostFixture(host), new[] { "personal.translator" }, null);
+            ModEntry lone = mods[0];
+            var duplicateSingle = new ModEntry { Folder = "", Complete = true, Plugins = lone.Plugins,
+                Files = new[] { new ModListFile { Path = lone.Files[0].Path.ToUpperInvariant(), Size = lone.Files[0].Size, Hash = lone.Files[0].Hash } } };
+            using (var download = new ModDownload(staging, client, new[] { new KeyValuePair<int, ModEntry>(0, lone), new KeyValuePair<int, ModEntry>(1, duplicateSingle) }))
+            {
+                byte[] bytes = File.ReadAllBytes(Path.Combine(host, "Lone.dll"));
+                Assert(download.TryNext(out ushort m0, out ushort f0) && m0 == 0 && f0 == 0, "first single file");
+                download.OnChunk(m0, f0, 0, bytes);
+                download.OnEnd(m0, f0, true);
+                Assert(download.TryNext(out ushort m1, out ushort f1) && m1 == 1 && f1 == 0, "second single file");
+                download.OnChunk(m1, f1, 0, bytes);
+                download.OnEnd(m1, f1, true);
+                Assert(!download.TryNext(out _, out _), "finished");
+                ExpectFailure(() => download.Commit("host"));
+            }
+            Assert(Directory.GetFileSystemEntries(client).Length == 0, "colliding single-file mods installed something");
+
+            // Retry resilience: stale chunks/ends from a cancelled download are ignored cleanly.
+            ModEntry sea = mods[1];
+            using (var download = new ModDownload(staging, client, new[] { new KeyValuePair<int, ModEntry>(1, sea) }))
+            {
+                Assert(download.TryNext(out ushort mod, out ushort file) && mod == 1 && file == 0, "sea file 0");
+                Assert(!download.TryOnChunk(99, 0, 0, new byte[] { 1 }, ignoreStale: true), "wrong mod chunk not ignored");
+                Assert(!download.TryOnChunk(mod, 2, 0, new byte[] { 1 }, ignoreStale: true), "wrong file chunk not ignored");
+                Assert(!download.TryOnChunk(mod, file, 2, new byte[] { 1 }, ignoreStale: true), "stale tail chunk not ignored");
+                Assert(!download.TryOnEnd(mod, file, true, ignoreStale: true), "stale end before any bytes not ignored");
+                Assert(!download.TryOnEnd(mod, file, false, ignoreStale: true), "first stale Ok=false before any bytes not ignored");
+                Assert(!download.TryOnEnd(99, 0, false, ignoreStale: true), "wrong mod end not ignored");
+                // A second Ok=false on the same file with zero bytes received fails immediately (genuine refusal).
+                ExpectFailure(() => download.TryOnEnd(mod, file, false, ignoreStale: true));
+
+                // Simulate stale chunk 0 followed by fresh retry chunk 0 on multi-chunk file 1.
+                byte[] f0Bytes = File.ReadAllBytes(Path.Combine(host, "SeaLife", "SeaLife.dll"));
+                Assert(download.TryOnChunk(mod, file, 0, f0Bytes, ignoreStale: true), "fresh file 0 chunk 0");
+                Assert(download.TryOnEnd(mod, file, true, ignoreStale: true), "fresh file 0 end");
+
+                // Once the first file finishes and ignoreStale is cleared, foreign or unexpected markers fail strictly.
+                Assert(download.TryNext(out mod, out file) && mod == 1 && file == 1, "sea file 1");
+                ExpectFailure(() => download.TryOnChunk(99, 0, 0, new byte[] { 1 }, ignoreStale: false));
+                ExpectFailure(() => download.TryOnEnd(mod, file, false, ignoreStale: false));
+                using (var upload = new ModUpload(Path.Combine(host, "SeaLife", "data", "assets"), sea.Files[1], mod, file))
+                {
+                    var chunks = new List<byte[]>();
+                    while (!upload.Done) chunks.Add(upload.NextChunk(out _));
+                    Assert(download.TryOnChunk(mod, file, 0, chunks[0], ignoreStale: true), "stale chunk 0 accepted");
+                    Assert(download.TryOnChunk(mod, file, 0, chunks[0], ignoreStale: true), "fresh retry chunk 0 restarted file");
+                    for (int i = 1; i < chunks.Count; i++)
+                        Assert(download.TryOnChunk(mod, file, i, chunks[i], ignoreStale: true), "fresh chunk " + i);
+                    Assert(download.TryOnEnd(mod, file, true, ignoreStale: true), "fresh file 1 end");
+                }
+                Assert(download.TryNext(out mod, out file) && mod == 1 && file == 2, "sea file 2 (empty)");
+                Assert(download.TryOnEnd(mod, file, true, ignoreStale: true), "empty file end");
+                Assert(!download.TryNext(out _, out _), "all sea files done");
+                Assert(download.ReceivedBytes == download.TotalBytes, "byte count after restart");
+                List<string> installed = download.Commit("host");
+                Assert(installed.SequenceEqual(new[] { "SeaLife" }), "commit after stale drain");
+            }
+        }));
     }
 
     // Host fixture: a folder mod with two plugins and nested data, a lone DLL, and a personal mod.

@@ -18,6 +18,7 @@ namespace SailwindCoop.Sync
         private static bool HostOffersDownloads => Plugin.Cfg.ShareMods.Value;
 
         private const int ChunksPerFrame = 8;
+        private const int MaxReliableQueue = 32;
         private const float StallSeconds = 20f;
         private const ushort CancelIndex = ushort.MaxValue;
 
@@ -27,6 +28,7 @@ namespace SailwindCoop.Sync
         private ModDownload _download;
         private float _lastDataTime;
         private bool _leaveAfterInstall;
+        private bool _drainingStale;
 
         private sealed class Upload
         {
@@ -82,6 +84,7 @@ namespace SailwindCoop.Sync
                     }
                     for (int i = 0; i < ChunksPerFrame && !file.Done; i++)
                     {
+                        if (upload.Peer.GetPacketsCountInReliableQueue(0, true) >= MaxReliableQueue) break;
                         byte[] data = file.NextChunk(out int index);
                         upload.Peer.Send(new ModFileChunkMsg { Mod = file.Mod, File = file.File, Index = index, Data = data },
                                          DeliveryMethod.ReliableOrdered);
@@ -129,8 +132,8 @@ namespace SailwindCoop.Sync
             if (_phase != Phase.Downloading || _download == null) return;
             try
             {
-                _download.OnChunk(msg.Mod, msg.File, msg.Index, msg.Data);
-                _lastDataTime = Time.realtimeSinceStartup;
+                if (_download.TryOnChunk(msg.Mod, msg.File, msg.Index, msg.Data, _drainingStale))
+                    _lastDataTime = Time.realtimeSinceStartup;
             }
             catch (Exception e) { Fail(e.Message); }
         }
@@ -140,8 +143,11 @@ namespace SailwindCoop.Sync
             if (_phase != Phase.Downloading || _download == null) return;
             try
             {
-                _download.OnEnd(msg.Mod, msg.File, msg.Ok);
-                RequestNext();
+                if (_download.TryOnEnd(msg.Mod, msg.File, msg.Ok, _drainingStale))
+                {
+                    _drainingStale = false;
+                    RequestNext();
+                }
             }
             catch (Exception e) { Fail(e.Message); }
         }
@@ -171,19 +177,21 @@ namespace SailwindCoop.Sync
         {
             Plugin.Logger.LogError("[Mods] role=Client mod download failed, nothing was installed: " + reason);
             bool wasDownloading = _download != null;
-            DropDownload();
+            DropDownload(clearStale: false);
             _phase = Phase.Failed;
             _message = "Mod download failed, nothing was installed: " + reason;
             // Stop the host's stream so a retry does not meet chunks of the abandoned file.
             if (wasDownloading)
             {
+                _drainingStale = true;
                 try { _net.Broadcast(new ModFileRequestMsg { Mod = CancelIndex, File = CancelIndex }, DeliveryMethod.ReliableOrdered); }
                 catch { }
             }
         }
 
-        private void DropDownload()
+        private void DropDownload(bool clearStale = true)
         {
+            if (clearStale) _drainingStale = false;
             if (_download == null) return;
             _download.Dispose();
             _download = null;
