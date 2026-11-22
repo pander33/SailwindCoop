@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Mono.Cecil;
+using SailwindCoop.Sync;
 
 internal static class HandoffProductionTests
 {
@@ -61,6 +62,58 @@ internal static class HandoffProductionTests
                 assert(anchor.Fields.Single(f => f.Name == "_slave").FieldType.Name == "SupportPoseBuffer" &&
                     mooring.Fields.Single(f => f.Name == "Pose").FieldType.Name == "SupportPoseBuffer", "specialized carry still clears a single-frame buffer");
             }
+        });
+        test("AnchorStateGate pending request expires after timeout so host updates resume", () =>
+        {
+            var prevClock = AnchorStateGate.Clock;
+            long now = 1000;
+            AnchorStateGate.Clock = () => now;
+            try
+            {
+                var gate = new AnchorStateGate();
+                gate.Begin(7);
+                assert(gate.HasPending, "pending request should be active immediately");
+                assert(!gate.Receive(1, requester: 0, request: 0, localPlayer: 2), "unrelated snapshot blocked before timeout");
+                now += AnchorStateGate.PendingTimeoutMs - 1;
+                assert(gate.HasPending, "pending request should stay active right before timeout");
+                assert(!gate.Receive(2, requester: 0, request: 0, localPlayer: 2), "unrelated snapshot still blocked before timeout");
+                now += 1;
+                assert(!gate.HasPending, "pending request should expire at timeout");
+                assert(gate.Receive(2, requester: 0, request: 0, localPlayer: 2), "host snapshot accepted after timeout");
+                assert(!gate.Receive(2, requester: 0, request: 0, localPlayer: 2), "duplicate revision still rejected");
+
+                gate.Begin(8);
+                assert(gate.Receive(3, requester: 2, request: 8, localPlayer: 2), "matching ack clears pending immediately");
+                assert(!gate.HasPending, "pending cleared by ack");
+            }
+            finally { AnchorStateGate.Clock = prevClock; }
+        });
+        test("PendingMooringState pending request expires after timeout so host state applies", () =>
+        {
+            var prevClock = PendingMooringState<string>.Clock;
+            long now = 2000;
+            PendingMooringState<string>.Clock = () => now;
+            try
+            {
+                var pending = new PendingMooringState<string>();
+                pending.BeginRequest(11);
+                assert(pending.HasPending, "pending mooring request should be active");
+                assert(!pending.Receive(0, 0, localPlayer: 2, state: "stale"), "host state blocked before timeout");
+                assert(!pending.Receive(2, 11, localPlayer: 2, state: "wait", waitingTarget: true), "waitingTarget does not clear pending");
+                now += PendingMooringState<string>.PendingTimeoutMs - 1;
+                assert(pending.HasPending, "still pending before timeout");
+                now += 1;
+                assert(!pending.HasPending, "expired at timeout");
+                assert(pending.Receive(0, 0, localPlayer: 2, state: "host"), "host state accepted after timeout");
+                string applied = null;
+                pending.TryApply(false, s => { applied = s; return true; });
+                assert(applied == "host", "host state applied after timeout");
+
+                pending.BeginRequest(12);
+                assert(pending.Receive(2, 12, localPlayer: 2, state: "acked"), "matching ack accepted before timeout");
+                assert(!pending.HasPending, "matching ack cleared pending");
+            }
+            finally { PendingMooringState<string>.Clock = prevClock; }
         });
     }
 }

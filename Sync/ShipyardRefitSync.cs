@@ -285,7 +285,7 @@ namespace SailwindCoop.Sync
             if (!hull.Gate.Receive(message.Generation, 0, message.Requester, message.RequestId, _net.MyNetId, out _, out _)) return;
             if (hull.Editing) { hull.Deferred = message; return; }
             hull.Deferred = message; // A Unity bind/apply fault keeps the full result retryable.
-            Install(hull, message);
+            PatchGuard.Run(() => Install(hull, message), e => Report("client refit boat=" + hull.Id, e));
         }
         private void Adopt(Hull hull, RefitStateMsg message)
         {
@@ -356,8 +356,12 @@ namespace SailwindCoop.Sync
             foreach (var packet in refits)
             {
                 if (packet.Peer == null || packet.Peer.ConnectionState != ConnectionState.Connected) continue;
-                if (packet.Message is RefitRequestMsg request) OnRefitRequest(request, packet.Peer);
-                else OnRefitState((RefitStateMsg)packet.Message, packet.Peer);
+                var current = packet;
+                PatchGuard.Run(() =>
+                {
+                    if (current.Message is RefitRequestMsg request) OnRefitRequest(request, current.Peer);
+                    else OnRefitState((RefitStateMsg)current.Message, current.Peer);
+                }, e => Report("queued refit " + current.Type, e));
             }
             foreach (var hull in _hulls.Values)
             {
@@ -420,7 +424,7 @@ namespace SailwindCoop.Sync
         }
         // Called for every sail in the scene on every physics step: resolve the hull only while one is held.
         internal static bool PauseSail(Sail sail) => AnySuspended() && sail != null && sail.shipRigidbody != null && Suspended(ResolveHull(sail.shipRigidbody.transform));
-        private static bool AnySuspended()
+        internal static bool AnySuspended()
         {
             if (Instance == null || Instance._hulls.Count == 0) return false;
             int frame = Time.frameCount;

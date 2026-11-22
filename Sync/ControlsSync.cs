@@ -85,6 +85,10 @@ namespace SailwindCoop.Sync
         // Per-rope capture and acknowledged input; held/pending protection has no timeout.
         private float[] _hostLen = System.Array.Empty<float>();
         private float[] _lastSentLen = System.Array.Empty<float>();
+        private bool[] _ropeHostPending = System.Array.Empty<bool>();
+        private float[] _hostWheelInput = System.Array.Empty<float>();
+        private bool[] _hostWheelLocked = System.Array.Empty<bool>();
+        private bool[] _wheelHostPending = System.Array.Empty<bool>();
         private float _reqTimer;
 
         private int _lastReqIndex = -1;
@@ -267,8 +271,21 @@ namespace SailwindCoop.Sync
             if (wheelsMatch)
             {
                 for (int i = 0; i < _wheels.Length; i++)
-                    if (_wheels[i] != null && !_wheelDirty[i] && _wheelTracks[i].Receive(msg.WheelEpochs[i], msg.Tick, _net.MyNetId) && !WheelHeld(_wheels[i]))
-                        ApplyWheel(_wheels[i], msg.WheelInputs[i], msg.WheelLocks[i]);
+                {
+                    var wheel = _wheels[i];
+                    if (wheel == null || _wheelDirty[i] || !_wheelTracks[i].Receive(msg.WheelEpochs[i], msg.Tick, _net.MyNetId)) continue;
+                    _hostWheelInput[i] = msg.WheelInputs[i];
+                    _hostWheelLocked[i] = msg.WheelLocks[i];
+                    if (WheelHeld(wheel))
+                    {
+                        _wheelHostPending[i] = true;
+                    }
+                    else
+                    {
+                        _wheelHostPending[i] = false;
+                        ApplyWheel(wheel, msg.WheelInputs[i], msg.WheelLocks[i]);
+                    }
+                }
             }
             else WarnMismatch("wheels", msg.WheelInputs.Length, _wheels.Length);
 
@@ -287,10 +304,19 @@ namespace SailwindCoop.Sync
                         if (rc == null) continue;
                         if (_ropeDirty[i] || !_ropeTracks[i].Receive(msg.RopeEpochs[i], msg.Tick, _net.MyNetId)) continue;
                         _hostLen[i] = msg.Lengths[i];
-                        if (!IsLocalRopeHeld(rc, held) && !rc.currentLength.Equals(msg.Lengths[i]))
+                        if (IsLocalRopeHeld(rc, held))
                         {
-                            rc.currentLength = msg.Lengths[i];
-                            rc.changed = true;   // let the controller's Update re-apply
+                            _ropeHostPending[i] = true;
+                        }
+                        else
+                        {
+                            _ropeHostPending[i] = false;
+                            _lastSentLen[i] = msg.Lengths[i];
+                            if (!rc.currentLength.Equals(msg.Lengths[i]))
+                            {
+                                rc.currentLength = msg.Lengths[i];
+                                rc.changed = true;   // let the controller's Update re-apply
+                            }
                         }
                     }
                 }
@@ -417,6 +443,18 @@ namespace SailwindCoop.Sync
         /// </summary>
         private void ForwardSteering(float dt, GoPointerButton heldBtn)
         {
+            // Apply host wheel updates that arrived while the local player held the wheel without turning it.
+            for (int idx = 0; idx < _wheels.Length; idx++)
+            {
+                var wheel = _wheels[idx];
+                if (wheel == null || !_wheelHostPending[idx]) continue;
+                if (_wheelDirty[idx] || _wheelTracks[idx].Gate.Pending) { _wheelHostPending[idx] = false; continue; }
+                if (WheelHeld(wheel)) continue;
+                _wheelHostPending[idx] = false;
+                using (InteractionContext.Begin(InteractionSource.RemoteApply))
+                    ApplyWheel(wheel, _hostWheelInput[idx], _hostWheelLocked[idx]);
+            }
+
             _steerTimer += dt;
             float interval = 1f / Mathf.Max(1f, ControlHz);
             if (_steerTimer < interval) return;
@@ -427,6 +465,7 @@ namespace SailwindCoop.Sync
                 var wheel = _wheels[idx];
                 if (wheel == null || !_wheelDirty[idx]) continue;
                 float input = _wheelInput[idx];
+                _wheelHostPending[idx] = false;
                 _net.Broadcast(new SteerRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)idx,
                     Input = input, RequestId = Request(_wheelTracks[idx]) }, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 _steerLastSent[idx] = input; _wheelDirty[idx] = false;
@@ -499,7 +538,30 @@ namespace SailwindCoop.Sync
                 var rc = _ropes[i];
                 if (rc == null) continue;
                 if (IsLocalRopeHeld(rc, held))
-                    if (!rc.currentLength.Equals(_lastSentLen[i])) _ropeDirty[i] = true;
+                {
+                    if (!rc.currentLength.Equals(_lastSentLen[i]))
+                    {
+                        _ropeDirty[i] = true;
+                        _ropeHostPending[i] = false;
+                    }
+                }
+                else if (_ropeHostPending[i])
+                {
+                    if (_ropeDirty[i] || _ropeTracks[i].Gate.Pending)
+                    {
+                        _ropeHostPending[i] = false;
+                    }
+                    else
+                    {
+                        _ropeHostPending[i] = false;
+                        _lastSentLen[i] = _hostLen[i];
+                        if (!rc.currentLength.Equals(_hostLen[i]))
+                        {
+                            rc.currentLength = _hostLen[i];
+                            rc.changed = true;
+                        }
+                    }
+                }
             }
 
             // Throttle the request stream; reliable delivery guarantees the final value lands.
@@ -588,7 +650,7 @@ namespace SailwindCoop.Sync
             }
             RefreshNodes();
             int index = winch == null ? -1 : System.Array.IndexOf(_ropes, winch.rope);
-            if (index >= 0) _ropeDirty[index] = true;
+            if (index >= 0) { _ropeDirty[index] = true; _ropeHostPending[index] = false; }
         }
 
         private void RefreshNodes()
@@ -621,6 +683,10 @@ namespace SailwindCoop.Sync
                 _nodes = System.Array.Empty<Node>();
                 _hostLen = System.Array.Empty<float>();
                 _lastSentLen = System.Array.Empty<float>();
+                _ropeHostPending = System.Array.Empty<bool>();
+                _hostWheelInput = System.Array.Empty<float>();
+                _hostWheelLocked = System.Array.Empty<bool>();
+                _wheelHostPending = System.Array.Empty<bool>();
                 ResetControlTracks();
                 ResetCranks();
                 return;
@@ -630,8 +696,16 @@ namespace SailwindCoop.Sync
             _winches = boat.GetComponentsInChildren<GPButtonRopeWinch>(true);
             _wheels = boat.GetComponentsInChildren<GPButtonSteeringWheel>(true);
             _steerLastSent = new float[_wheels.Length];
+            _hostWheelInput = new float[_wheels.Length];
+            _hostWheelLocked = new bool[_wheels.Length];
+            _wheelHostPending = new bool[_wheels.Length];
             for (int i = 0; i < _wheels.Length; i++)
-                _steerLastSent[i] = _wheels[i] != null ? _wheels[i].currentInput : 0f;
+            {
+                float input = _wheels[i] != null ? _wheels[i].currentInput : 0f;
+                _steerLastSent[i] = input;
+                _hostWheelInput[i] = input;
+                _hostWheelLocked[i] = _wheels[i] != null && Locked(_wheels[i]);
+            }
 
             // Diagnostics references (first of each kind is enough for the readout).
             _steerRope = boat.GetComponentInChildren<RopeControllerSteeringWheel>(true);
@@ -641,6 +715,7 @@ namespace SailwindCoop.Sync
             // Stage 2 bookkeeping, seeded from current values so we don't false-trigger.
             _hostLen = new float[_ropes.Length];
             _lastSentLen = new float[_ropes.Length];
+            _ropeHostPending = new bool[_ropes.Length];
             for (int i = 0; i < _ropes.Length; i++)
             {
                 float v = _ropes[i] != null ? _ropes[i].currentLength : 0f;
@@ -707,12 +782,16 @@ namespace SailwindCoop.Sync
 
         private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held)
         {
+            if (rope == null) return false;
             if (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false)) return true;
-            var winch = FindWinchForRope(rope);
-            if (winch != null && Grabbed(winch.rotHandle)) return true;
+            if (held is GPButtonRopeWinch heldWinch && heldWinch.rope == rope) return true;
+            for (int i = 0; i < _winches.Length; i++)
+            {
+                var w = _winches[i];
+                if (w != null && w.rope == rope && Grabbed(w.rotHandle)) return true;
+            }
             if (held == null) return false;
-            return FindWinchForRope(rope) == held ||
-                (rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat));
+            return rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat);
         }
 
         private GPButtonRopeWinch FindWinchForRope(RopeController rope)
@@ -754,6 +833,10 @@ namespace SailwindCoop.Sync
             _targetRots = System.Array.Empty<Quaternion>();
             _hostLen = System.Array.Empty<float>();
             _lastSentLen = System.Array.Empty<float>();
+            _ropeHostPending = System.Array.Empty<bool>();
+            _hostWheelInput = System.Array.Empty<float>();
+            _hostWheelLocked = System.Array.Empty<bool>();
+            _wheelHostPending = System.Array.Empty<bool>();
             ResetControlTracks();
             _haveTargets = false;
             _rotBuf.Clear();

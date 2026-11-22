@@ -284,12 +284,43 @@ namespace SailwindCoop.Sync
                 if (pair.Value.Actor == actor) { _dockRequests.Remove(pair.Key); SendMissingObject(pair.Value.Request, actor); }
             foreach (var carry in _carries.Values) if (carry.Holder == actor && carry.Item != null)
             {
-                carry.Holder = 0; RestoreCarry(carry);
+                carry.Holder = 0; carry.RemoteHeldPose = null; RestoreCarry(carry);
                 using (InteractionContext.Begin(InteractionSource.RemoteApply)) carry.Item.OnDrop();
                 SendCarryState(carry, true);
             }
         }
         private void ClearCarry()
-        { foreach (var carry in _carries.Values) RestoreCarry(carry); _carries.Clear(); _carryTimer = 0; }
+        {
+            foreach (var carry in _carries.Values)
+            {
+                if (carry.Holder != 0 && carry.Item != null && carry.Item.held == null)
+                {
+                    uint previous = carry.Holder;
+                    carry.Holder = 0;
+                    carry.RemoteHeldPose = null;
+                    RestoreCarry(carry);
+                    using (InteractionContext.Begin(InteractionSource.RemoteApply))
+                    {
+                        try
+                        {
+                            if (carry.Item.gameObject.activeInHierarchy) carry.Item.OnDrop();
+                            else UpdateCarryVisual(carry, previous);
+                        }
+                        catch
+                        {
+                            try { UpdateCarryVisual(carry, previous); } catch { }
+                        }
+                    }
+                }
+                else
+                {
+                    carry.Holder = 0;
+                    carry.RemoteHeldPose = null;
+                    RestoreCarry(carry);
+                }
+            }
+            _carries.Clear();
+            _carryTimer = 0;
+        }
     }
 }

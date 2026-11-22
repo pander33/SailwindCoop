@@ -196,6 +196,7 @@ namespace SailwindCoop.Sync
         public void OnNpcBoatState(NpcBoatStateMsg msg, LiteNetLib.NetPeer fromPeer)
         {
             if (_net.Role != Role.Client || msg == null || msg.Boats == null) return;
+            if (!InWorld()) return;
 
             try
             {
@@ -301,7 +302,7 @@ namespace SailwindCoop.Sync
         public void ApplyRemote()
         {
             if (_net.Role != Role.Client || _client.Count == 0) return;
-            if (!CoordSpace.Ready) return;
+            if (!InWorld() || !CoordSpace.Ready || Time.timeScale <= 0.0001f) return;
 
             double localNow = _net.Clock.LocalTimeMs;
             double serverNow = localNow + _net.Clock.OffsetMs;
@@ -310,6 +311,12 @@ namespace SailwindCoop.Sync
                 if (cb.Controller == null || !cb.Net.HasData) continue;
                 cb.Net.ApplyAt(cb.Controller.transform, cb.Playback.AdvanceExact(serverNow, localNow, MinimumPlaybackDelay));
             }
+        }
+
+        private static bool InWorld()
+        {
+            try { return GameState.playing && !GameState.currentlyLoading; }
+            catch { return false; }
         }
 
         /// <summary>Ведём ли мы эту лодку по сети — спрашивают патчи в <see cref="NpcBoatPatches"/>.</summary>

@@ -9,26 +9,34 @@ namespace SailwindCoop.Sync
     internal sealed class BoatContexts<T> where T : class
     {
         private sealed class Entry { public Transform Boat; public long Stamp; public T Context; }
+        private static readonly List<T> Empty = new List<T>(0);
         private readonly Dictionary<ushort, Entry> _entries = new Dictionary<ushort, Entry>();
+        private readonly HashSet<ushort> _alive = new HashSet<ushort>();
+        private readonly List<ushort> _gone = new List<ushort>();
         private readonly Func<Transform, ushort, T> _create;
         private readonly Action<T> _clear;
         private readonly Func<Transform, long> _stamp;
+        private List<T> _values = Empty;
+        private List<T> _existing = Empty;
+        private bool _hadSuspended;
         private float _nextScan;
 
         public BoatContexts(Func<Transform, ushort, T> create, Action<T> clear, Func<Transform, long> stamp)
         { _create = create; _clear = clear; _stamp = stamp; }
 
-        public IEnumerable<T> Values
+        public List<T> Values
         {
             get
             {
-                if (!GameState.playing || GameState.currentlyLoading) yield break;
-                Refresh(); foreach (var pair in _entries)
-                    if (!ShipyardSync.Suspended(pair.Key)) yield return pair.Value.Context;
+                if (!GameState.playing || GameState.currentlyLoading) return Empty;
+                Refresh();
+                bool anySuspended = ShipyardSync.AnySuspended();
+                if (anySuspended || _hadSuspended) RebuildValues(anySuspended);
+                return _values;
             }
         }
 
-        public IEnumerable<T> Existing { get { foreach (var e in _entries.Values) yield return e.Context; } }
+        public List<T> Existing => _existing;
 
         public string Describe(Func<T, string> describe)
         {
@@ -56,12 +64,13 @@ namespace SailwindCoop.Sync
             if (!GameState.playing || GameState.currentlyLoading) return;
             if (Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + BoatLocator.CacheSeconds;
-            var alive = new HashSet<ushort>();
+            _alive.Clear();
+            bool changed = false;
             foreach (Transform boat in BoatLocator.FindBoats())
             {
                 ushort id = BoatLocator.IndexOf(boat);
                 if (boat == null || id == BoatLocator.NoBoat) continue;
-                alive.Add(id);
+                _alive.Add(id);
                 if (ShipyardSync.Suspended(id)) continue;
                 long stamp = _stamp(boat);
                 if (_entries.TryGetValue(id, out var old))
@@ -71,23 +80,89 @@ namespace SailwindCoop.Sync
                     _entries.Remove(id);
                 }
                 _entries.Add(id, new Entry { Boat = boat, Stamp = stamp, Context = _create(boat, id) });
+                changed = true;
             }
-            var gone = new List<ushort>();
+            _gone.Clear();
             foreach (var kv in _entries)
-                if (!alive.Contains(kv.Key)) { _clear(kv.Value.Context); gone.Add(kv.Key); }
-            foreach (ushort id in gone) _entries.Remove(id);
+                if (!_alive.Contains(kv.Key)) { _clear(kv.Value.Context); _gone.Add(kv.Key); }
+            if (_gone.Count > 0)
+            {
+                for (int i = 0; i < _gone.Count; i++) _entries.Remove(_gone[i]);
+                _gone.Clear();
+                changed = true;
+            }
+            _alive.Clear();
+            if (changed) RebuildCache();
+        }
+
+        private void RebuildCache()
+        {
+            if (_entries.Count == 0)
+            {
+                _existing = Empty;
+                _values = Empty;
+                _hadSuspended = false;
+                return;
+            }
+            var existing = new List<T>(_entries.Count);
+            foreach (var e in _entries.Values) existing.Add(e.Context);
+            _existing = existing;
+            RebuildValues(ShipyardSync.AnySuspended());
+        }
+
+        private void RebuildValues(bool anySuspended)
+        {
+            if (!anySuspended)
+            {
+                _hadSuspended = false;
+                _values = _existing;
+                return;
+            }
+            int activeCount = 0;
+            bool same = true;
+            foreach (var pair in _entries)
+            {
+                if (ShipyardSync.Suspended(pair.Key)) continue;
+                if (activeCount >= _values.Count || !ReferenceEquals(_values[activeCount], pair.Value.Context))
+                    same = false;
+                activeCount++;
+            }
+            if (same && activeCount == _values.Count)
+            {
+                _hadSuspended = activeCount != _existing.Count;
+                return;
+            }
+            if (activeCount == 0)
+            {
+                _values = Empty;
+                _hadSuspended = _existing.Count != 0;
+                return;
+            }
+            var next = new List<T>(activeCount);
+            foreach (var pair in _entries)
+                if (!ShipyardSync.Suspended(pair.Key)) next.Add(pair.Value.Context);
+            _values = next;
+            _hadSuspended = activeCount != _existing.Count;
         }
 
         public void Clear()
         {
             foreach (var e in _entries.Values) _clear(e.Context);
             _entries.Clear();
+            _existing = Empty;
+            _values = Empty;
+            _hadSuspended = false;
             _nextScan = 0f;
         }
 
         public void Invalidate(ushort id)
         {
-            if (_entries.TryGetValue(id, out var entry)) { _clear(entry.Context); _entries.Remove(id); }
+            if (_entries.TryGetValue(id, out var entry))
+            {
+                _clear(entry.Context);
+                _entries.Remove(id);
+                RebuildCache();
+            }
             _nextScan = 0f;
         }
     }

@@ -53,6 +53,8 @@ namespace SailwindCoop.Sync
             = new Dictionary<ushort, PendingMooringState<MooringStateMsg>>();
         private readonly HashSet<ushort> _missingApplyDock = new HashSet<ushort>();
         private readonly HashSet<ushort> _missingSendDock = new HashSet<ushort>();
+        private readonly Func<MooringStateMsg, bool> _applyClientMsg;
+        private float _nextClientDockRetry;
 
         private string _lastAction = "—";
         private long _lastActionTick;
@@ -68,6 +70,7 @@ namespace SailwindCoop.Sync
         private MooringSync(CoopNet net, Transform boat, ushort id)
         {
             _net = net; _boundBoat = boat; _boatId = id;
+            _applyClientMsg = msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in", recordInteraction: msg.IsInteraction, dockId: msg.DockId);
             Tick(0f);
         }
 
@@ -100,7 +103,15 @@ namespace SailwindCoop.Sync
             TickCarry(dt);
             RetryDockRequests();
             if (_net.Role == Role.Client && _net.State == LinkState.Connected)
-                foreach (var entry in _clientStates) ApplyClientState(entry.Key, entry.Value);
+            {
+                bool retryMissing = _missingApplyDock.Count > 0 && Time.unscaledTime >= _nextClientDockRetry;
+                if (retryMissing) _nextClientDockRetry = Time.unscaledTime + DockRetrySeconds;
+                foreach (var entry in _clientStates)
+                {
+                    if (_missingApplyDock.Contains(entry.Key) && !retryMissing) continue;
+                    ApplyClientState(entry.Key, entry.Value);
+                }
+            }
             if (_net.Role == Role.Host && _net.State == LinkState.Connected && _bm != null)
             {
                 _snapshotTimer += dt;
@@ -263,7 +274,12 @@ namespace SailwindCoop.Sync
             { SendMissingObject(msg, actor); return; }
             _dockRequests.Remove(msg.Index);
             if (!Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in request", applyMoorLength: false, dockId: msg.DockId))
-            { _dockRequests[msg.Index] = new DeferredDock { Request = msg, Actor = actor }; SendWaitingDock(msg, actor); return; }
+            {
+                if (_dockRequests.Count == 0) _nextDockRetry = Time.unscaledTime + DockRetrySeconds;
+                _dockRequests[msg.Index] = new DeferredDock { Request = msg, Actor = actor };
+                SendWaitingDock(msg, actor);
+                return;
+            }
             SendRopeState(msg.Index, actor, msg.RequestId);
             // The acknowledgement and snapshots share ReliableOrdered, including to the requester.
         }
@@ -311,7 +327,7 @@ namespace SailwindCoop.Sync
             if (ropes == null || index >= ropes.Length || ropes[index] == null) return;
             var rope = ropes[index];
             bool held = IsLocallyHeld(rope) || CarryPending(index);
-            state.TryApply(held, msg => Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in", recordInteraction: msg.IsInteraction, dockId: msg.DockId));
+            state.TryApply(held, _applyClientMsg);
         }
 
         private bool Apply(ushort index, MooringKind kind, Vector3 dockReal, float lengthSq, string tag, bool applyMoorLength = true, bool recordInteraction = true, string dockId = "")
@@ -341,9 +357,12 @@ namespace SailwindCoop.Sync
                     if (dock == null)
                     {
                         if (_missingApplyDock.Add(index))
+                        {
+                            if (_net.Role == Role.Client) _nextClientDockRetry = Time.unscaledTime + DockRetrySeconds;
                             Plugin.Logger.LogWarning("[MooringSync] " + _net.Role + " cannot apply Moor boat=" + _boatId +
                                 " rope #" + index + " dockReal=" + dockReal + ": no loaded dock within 3 m" +
                                 "; target deferred, dockId=" + dockId);
+                        }
                         return false;
                     }
                     _missingApplyDock.Remove(index);
@@ -499,14 +518,17 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private static GPButtonDockMooring FindDockNear(Vector3 real)
+        private static GPButtonDockMooring FindDockNear(Vector3 real, GPButtonDockMooring[] docks = null)
         {
             if (!CoordSpace.Ready) return null;
+            if (docks == null) docks = UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>();
             Vector3 local = CoordSpace.RealToLocal(real);
             GPButtonDockMooring best = null;
             float bestSqr = 9f;   // within 3 m
-            foreach (var d in UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>())
+            for (int i = 0; i < docks.Length; i++)
             {
+                var d = docks[i];
+                if (d == null) continue;
                 float sqr = (d.transform.position - local).sqrMagnitude;
                 if (sqr < bestSqr) { bestSqr = sqr; best = d; }
             }
@@ -532,6 +554,9 @@ namespace SailwindCoop.Sync
             _clientStates.Clear();
             _missingApplyDock.Clear();
             _missingSendDock.Clear();
+            _nextClientDockRetry = 0f;
+            _nextDockRetry = 0f;
+            _dockRetryScratch.Clear();
             _snapshotTimer = 0f;
             _applying = false;
             _lastAction = "—";
