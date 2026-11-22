@@ -376,6 +376,9 @@ internal static class ItemReliabilityTests
             var clear = Method(items, "Clear");
             Assert(Calls(clear, "RestoreTeardownItem") && !Calls(clear, "ReleaseRemoteActorItem"),
                 "Clear must use RestoreTeardownItem instead of remote-actor release");
+            var teardown = Method(items, "RestoreTeardownItem");
+            Assert(Calls(teardown, "set_detectCollisions") && Calls(teardown, "RestoreHiddenVisualsOnly"),
+                "RestoreTeardownItem must restore detectCollisions and hidden visuals safely");
             var clearRemote = Method(items, "ClearRemoteActor");
             Assert(Calls(clearRemote, "CancelPendingDynamic") && Calls(clearRemote, "ReleaseRemoteActorItem"),
                 "ClearRemoteActor must cancel pending dynamic and use ReleaseRemoteActorItem");
@@ -385,8 +388,12 @@ internal static class ItemReliabilityTests
                 "ProcessPendingDynamic missing re-entry guard");
 
             var tickOps = Method(items, "TickOperations");
-            Assert(Calls(tickOps, "ExpireWaitingOperation"),
-                "TickOperations missing stalled waiting-operation expiration");
+            Assert(Calls(tickOps, "ExpireWaitingOperation") && Calls(tickOps, "get_timeScale"),
+                "TickOperations must gate waiting-operation expiration on unpaused time");
+
+            var notifyDrop = Method(items, "NotifyDrop");
+            Assert(Calls(notifyDrop, "PreparePendingBeforeBindDrop"),
+                "NotifyDrop missing before-bind F-place preparation");
 
             var warehouseSell = Method(patches, "PreWarehouseSellGood");
             Assert(warehouseSell.Body.Instructions.Any(ins => ins.Operand is MethodReference m &&

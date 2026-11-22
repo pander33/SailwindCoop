@@ -73,7 +73,7 @@ namespace SailwindCoop.Sync
         private sealed class WaitingOperation
         {
             internal ItemOperationRequestMsg Request;
-            internal float QueuedAt;
+            internal float Waited;
         }
         private readonly HashSet<ulong> _completedOperationResults = new HashSet<ulong>();
         private readonly OperationLedger<byte[]> _operationResults = new OperationLedger<byte[]>();
@@ -321,7 +321,7 @@ namespace SailwindCoop.Sync
             if (_waitingOperations.TryGetValue(key, out var existing))
                 existing.Request = msg;
             else
-                _waitingOperations[key] = new WaitingOperation { Request = msg, QueuedAt = UnityEngine.Time.unscaledTime };
+                _waitingOperations[key] = new WaitingOperation { Request = msg, Waited = 0f };
             if (peer != null) peer.Send(new ItemOperationResultMsg {
                 Actor = msg.Actor, OperationId = msg.OperationId, Status = ItemOperationBody.WaitingTarget
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -542,7 +542,7 @@ namespace SailwindCoop.Sync
             return hull != null && (hull.GetComponent<BoatDamage>() != null || hull.GetComponentInParent<BoatDamage>() != null ||
                 hull.GetComponentInChildren<BoatDamage>(true) != null);
         }
-        private void TickOperations()
+        private void TickOperations(float dt)
         {
             if (_net.Role == Role.Client)
             {
@@ -562,6 +562,12 @@ namespace SailwindCoop.Sync
             }
             if (_net.Role != Role.Host) return;
             if (_waitingOperations.Count == 0) return;
+            bool unpaused = UnityEngine.Time.timeScale > 0f && !GameState.currentlyLoading;
+            if (unpaused && dt > 0f)
+            {
+                foreach (var waiting in _waitingOperations.Values)
+                    if (waiting != null) waiting.Waited += dt;
+            }
             float now = UnityEngine.Time.unscaledTime;
             if (now < _nextOperationRetry) return;
             _nextOperationRetry = now + OperationRetryInterval;
@@ -576,7 +582,7 @@ namespace SailwindCoop.Sync
                     if (waiting?.Request == null) continue;
                     ulong key = ((ulong)waiting.Request.Actor << 32) | waiting.Request.OperationId;
                     if (!_waitingOperations.ContainsKey(key)) continue;
-                    if (now - waiting.QueuedAt >= WaitingOperationTimeoutSeconds)
+                    if (unpaused && waiting.Waited >= WaitingOperationTimeoutSeconds)
                     {
                         ExpireWaitingOperation(waiting.Request, key);
                         continue;
