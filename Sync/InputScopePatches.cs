@@ -11,6 +11,7 @@ namespace SailwindCoop.Sync
     internal static class InputScopePatches
     {
         private static readonly FieldInfo ClickedButton = AccessTools.Field(typeof(GoPointer), "clickedButton");
+        private static readonly FieldInfo StickyClickedButton = AccessTools.Field(typeof(GoPointer), "stickyClickedButton");
 
         internal static void Apply(Harmony harmony)
         {
@@ -70,32 +71,64 @@ namespace SailwindCoop.Sync
 
         internal static void ReleaseClick(GoPointer pointer)
         {
+            if (pointer == null) return;
             var clicked = ClickedButton?.GetValue(pointer) as GoPointerButton;
-            if (clicked == null) return;
-            clicked.OnUnactivate();
-            clicked.OnUnactivate(pointer);
-            clicked.Unclick();
-            ClickedButton.SetValue(pointer, null);
+            if (clicked != null)
+            {
+                try
+                {
+                    clicked.OnUnactivate();
+                    clicked.OnUnactivate(pointer);
+                    clicked.Unclick();
+                }
+                catch (Exception e) { Report(e); }
+                finally { ClickedButton.SetValue(pointer, null); }
+            }
+            var sticky = StickyClickedButton?.GetValue(pointer) as GoPointerButton;
+            if (sticky != null)
+            {
+                try
+                {
+                    sticky.UnStickyClick();
+                    var coop = CoopBehaviour.Instance;
+                    bool frozen = coop?.HostPause?.Frozen == true;
+                    if (frozen || coop?.Knockdown?.Down == true)
+                    {
+                        if (frozen) coop.HostPause.RestoreControlWhenReady();
+                        Refs.SetPlayerControl(false);
+                    }
+                }
+                catch (Exception e) { Report(e); }
+                finally { StickyClickedButton.SetValue(pointer, null); }
+            }
         }
 
         private struct LengthState { internal bool Captured; internal float Before; }
         private static void PreLength(GPButtonRopeWinch __instance, out LengthState __state)
         {
-            var state = new LengthState();
-            PatchGuard.Run(() => {
+            __state = default(LengthState);
+            try
+            {
                 if (__instance != null && __instance.rope != null)
-                { state.Before = __instance.rope.currentLength; state.Captured = true; }
-            }, Report);
-            __state = state;
+                {
+                    __state.Before = __instance.rope.currentLength;
+                    __state.Captured = true;
+                }
+            }
+            catch (Exception e) { Report(e); }
         }
         private static void PostLength(GPButtonRopeWinch __instance, LengthState __state)
-            => PatchGuard.Run(() => {
+        {
+            try
+            {
                 if (!__state.Captured || __instance == null || __instance.rope == null ||
                     __instance.rope.currentLength.Equals(__state.Before) || InteractionContext.Suppressed) return;
                 // DeltaToLength is invoked only by the grabbed-winch input branch, after quick-release.
                 using (InteractionContext.Begin(InteractionSource.ActiveHold))
                     ControlsSync.Instance?.NotifyLocalWinchChanged(__instance);
-            }, Report);
+            }
+            catch (Exception e) { Report(e); }
+        }
         private struct WheelState { internal bool Captured, Locked, Held; internal float Input; }
         private sealed class WheelPresentation
         {
@@ -120,7 +153,10 @@ namespace SailwindCoop.Sync
             __state = default(WheelState);
             try
             {
-                if (CoopBehaviour.Instance?.HostPause?.Frozen == true) return false;
+                var coop = CoopBehaviour.Instance;
+                if (coop?.HostPause?.Frozen == true ||
+                    (coop?.Knockdown?.Down == true && __instance != null && ControlsSync.WheelHeld(__instance)))
+                    return false;
                 if (__instance != null && !InteractionContext.Suppressed)
                 {
                     __state.Input = __instance.currentInput;
@@ -181,12 +217,17 @@ namespace SailwindCoop.Sync
             }
         }
         private static void PostTouchWheel(GPButtonSteeringWheel __instance, float rotation)
-            => PatchGuard.Run(() => {
+        {
+            try
+            {
                 if (__instance == null || InteractionContext.Suppressed || !ControlsSync.WheelHeld(__instance)) return;
                 float input = rotation * __instance.gearRatio;
                 if (__instance.currentInput.Equals(input)) return;
                 // Touch/VR writes the rudder transform directly and otherwise leaves currentInput stale.
-                __instance.currentInput = input; ControlsSync.Instance?.NotifyWheelInput(__instance);
-            }, Report);
+                __instance.currentInput = input;
+                ControlsSync.Instance?.NotifyWheelInput(__instance);
+            }
+            catch (Exception e) { Report(e); }
+        }
     }
 }

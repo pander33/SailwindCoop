@@ -36,6 +36,8 @@ namespace SailwindCoop.Runtime
         private static readonly Color Dusk = new Color(0.07f, 0.05f, 0.03f, 1f);
         private static readonly Color Brass = new Color(0.86f, 0.70f, 0.42f, 1f);
 
+        private static EmoteWheelUI _active;
+
         private bool _open;
         private int _hover = -1;
         private float _openedAt;
@@ -82,9 +84,12 @@ namespace SailwindCoop.Runtime
             if (_open) Close();
         }
 
+        internal static void CancelActive() => _active?.Cancel();
+
         private void Open()
         {
             _open = true;
+            _active = this;
             _hover = -1;
             _openedAt = Time.unscaledTime;
             _prevCursorVisible = Cursor.visible;
@@ -102,12 +107,16 @@ namespace SailwindCoop.Runtime
         private void Close()
         {
             _open = false;
+            if (ReferenceEquals(_active, this)) _active = null;
             _hover = -1;
-            // Колесо открывается только из игры, поэтому возвращаем ровно то, что было.
-            Cursor.visible = _prevCursorVisible;
-            Cursor.lockState = _prevLockState;
-            GameState.inCursorMenu = _prevInCursorMenu;
-            MouseLook.ToggleMouseLook(_prevMouseLook);
+            // Колесо открывается только из игры; если поверх открылось меню F8, курсор остаётся у него.
+            if (CoopBehaviour.Instance?.CoopMenuOpen != true)
+            {
+                Cursor.visible = _prevCursorVisible;
+                Cursor.lockState = _prevLockState;
+                GameState.inCursorMenu = _prevInCursorMenu;
+                MouseLook.ToggleMouseLook(_prevMouseLook);
+            }
         }
 
         private static int HoverIndex()

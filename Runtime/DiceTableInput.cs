@@ -520,6 +520,7 @@ namespace SailwindCoop.Runtime
 		private static Texture2D MakeSolidTex(Color color)
 		{
 			var tex = new Texture2D(1, 1, TextureFormat.ARGB32, false);
+			tex.hideFlags = HideFlags.HideAndDontSave;
 			tex.SetPixel(0, 0, color);
 			tex.Apply();
 			return tex;

@@ -127,7 +127,11 @@ namespace SailwindCoop.Avatar
 				model.name = "NpcSkin";
 
 				Material mat = null;
-				_materials.TryGetValue(matName, out mat);
+				if (!string.IsNullOrEmpty(matName) && (!_materials.TryGetValue(matName, out mat) || mat == null))
+				{
+					Scan(force: false);
+					_materials.TryGetValue(matName, out mat);
+				}
 
 				int matched = 0;
 				foreach (var smr in model.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -236,7 +240,7 @@ namespace SailwindCoop.Avatar
 		{
 			if (mat == null) return;
 			string name = CleanMatName(mat.name);
-			if (string.IsNullOrEmpty(name) || _materials.ContainsKey(name)) return;
+			if (string.IsNullOrEmpty(name) || (_materials.TryGetValue(name, out var existing) && existing != null)) return;
 			_materials[name] = mat;
 		}
 

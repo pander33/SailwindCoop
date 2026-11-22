@@ -77,6 +77,33 @@ internal static class DiceTests
 			game.Seats[1].Connected = false;
 			Check(game.Rematch() && game.Seats.Count == 2 && game.Seats.All(p => p.Connected) && game.FirstSeat < 2, "rematch seats");
 		});
+		test("dice leave after rematch clamps Seat and FirstSeat within Seats.Count", () =>
+		{
+			var game = Game(2);
+			Check(game.Cancel() && game.Rematch(), "rematch");
+			Check(game.Seats.Count == 2 && game.FirstSeat == 1 && game.Seat == 1, "rematch rotated seat");
+			Check(game.Leave(1) && game.Seats.Count == 1 && game.Seat == 0 && game.FirstSeat == 0 && game.Seat < game.Seats.Count, "leave clamped seat");
+			Check(game.Leave(0) && game.Seats.Count == 0 && game.Seat == 0 && game.FirstSeat == 0, "leave last seat");
+
+			game = Game(2);
+			Check(game.Cancel() && game.Rematch() && game.Seat == 1 && game.FirstSeat == 1, "second rematch");
+			Check(game.Leave(0) && game.Seats.Count == 1 && game.Seat == 0 && game.FirstSeat == 0 && game.Seat < game.Seats.Count, "leave first seat after rematch");
+			Check(game.Join(Guid.NewGuid(), 9, "C") && game.Start() && game.Seat < game.Seats.Count, "restart after leave");
+
+			// 3-player rematch rotates FirstSeat/Seat to index 1 (player B); leaving before FirstSeat preserves player B.
+			game = Game(3);
+			Guid second = game.Seats[1].Identity;
+			Guid third = game.Seats[2].Identity;
+			Check(game.Cancel() && game.Rematch() && game.Seats.Count == 3 && game.FirstSeat == 1 && game.Seat == 1, "3p rematch");
+			Check(game.Leave(0) && game.Seats.Count == 2 && game.FirstSeat == 0 && game.Seat == 0 && game.Seats[game.Seat].Identity == second, "3p leave before FirstSeat");
+
+			// 3-player rematch leaving at FirstSeat advances cleanly to the next player without skipping or going OOB.
+			game = Game(3);
+			third = game.Seats[2].Identity;
+			Check(game.Cancel() && game.Rematch() && game.Seats.Count == 3 && game.FirstSeat == 1 && game.Seat == 1, "3p second rematch");
+			Check(game.Leave(1) && game.Seats.Count == 2 && game.FirstSeat == 1 && game.Seat == 1 && game.Seats[game.Seat].Identity == third, "3p leave at FirstSeat");
+			Check(game.Leave(1) && game.Seats.Count == 1 && game.FirstSeat == 0 && game.Seat == 0 && game.Seat < game.Seats.Count, "3p leave tail wraps to 0");
+		});
 		test("dice stake asks for a new confirmation, a cancelled party can be played again, a paused table can be folded", () =>
 		{
 			var lobby = new DiceGame { Phase = DicePhase.Lobby }; lobby.Join(Guid.NewGuid(), 1, "A"); lobby.Join(Guid.NewGuid(), 2, "B");
