@@ -275,7 +275,7 @@ namespace SailwindCoop.Sync
             foreach (var pair in _instruments)
             {
                 var child = pair.Value;
-                if (child.Item == null || child.Body == null || !child.Slaved || !RemoteInstrument(child.Item) ||
+                if (child.Item == null || child.Body == null || child.Joint == null || !child.Slaved || !RemoteInstrument(child.Item) ||
                     !_byInstanceId.TryGetValue(pair.Key, out var entry)) continue;
                 ApplyPendingInstrumentSamples(entry, child);
                 if (child.Visuals.Count == 0) continue;
@@ -448,13 +448,17 @@ namespace SailwindCoop.Sync
         // Every frame per instrument and per fish: a plain try/catch, not PatchGuard (no closure per call).
         private static bool PreSimulation(ShipItem __instance)
         {
-            try { return !(ItemSync.Instance?.SuppressInstrumentSimulation(__instance) ?? false); }
-            catch (Exception e) { Report(e); return false; }
+            var sync = ItemSync.Instance;
+            if (sync == null || !sync.IsSessionActive) return true;
+            try { return !sync.SuppressInstrumentSimulation(__instance); }
+            catch (Exception e) { Report(e); return true; }
         }
         private static bool PreFish(FishingRodFish __instance)
         {
-            try { return !(ItemSync.Instance?.SuppressInstrumentSimulation(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")) ?? false); }
-            catch (Exception e) { Report(e); return false; }
+            var sync = ItemSync.Instance;
+            if (sync == null || !sync.IsSessionActive) return true;
+            try { return !sync.SuppressInstrumentSimulation(ItemComponents.Read<ShipItemFishingRod>(__instance, "rod")); }
+            catch (Exception e) { Report(e); return true; }
         }
         private static void PostInput(ShipItem __instance) => PatchGuard.Run(() => { if (InteractionContext.HasInput && !InteractionContext.Suppressed) ItemSync.Instance?.InstrumentFinal(__instance); }, Report);
         private static void PreDrop(GoPointer __instance, out ShipItem __state)

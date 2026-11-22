@@ -71,6 +71,12 @@ namespace SailwindCoop.Sync
             public bool FuelResolved;
             public float LampFull;
             public bool LampResolved;
+            public bool Cargo;
+            public bool CargoResolved;
+            public bool PuppetApplied;
+            public bool PuppetSolid;
+            public bool PuppetProbed;
+            public bool PuppetWallAttachDriver;
             /// <summary>Client: the last report of this item from the local hand (SendHolderReport).</summary>
             public uint HolderReport;
         }
@@ -176,6 +182,11 @@ namespace SailwindCoop.Sync
         // Client: a player-local belt item just withdrawn to hand and re-authored on the host; once the host
         // assigns it an id (remap), we send a Pickup so the host marks it held by us.
         private ShipItem _pendingHeldItem;
+        // Client: items withdrawn from the personal belt awaiting host SpawnObject binding (need interactive
+        // ItemAction.State to preserve ItemDetails/LightOn and must not record TradeAuthor).
+        private readonly HashSet<ShipItem> _pendingBeltWithdrawals = new HashSet<ShipItem>();
+        // Client: pending client-authored items dropped before host SpawnObject arrived (send Drop on bind).
+        private readonly HashSet<ShipItem> _droppedBeforeBind = new HashSet<ShipItem>();
 
         private GoPointer _gp;
         private readonly HashSet<int> _rejectedPoseLogged = new HashSet<int>();
@@ -221,10 +232,10 @@ namespace SailwindCoop.Sync
         private readonly ItemAuthoring<ShipItem> _pendingClientItems = new ItemAuthoring<ShipItem>();
         private readonly HashSet<ShipItem> _baselineItems = new HashSet<ShipItem>();
         private readonly ItemSaveIdentity _saveIdentity = new ItemSaveIdentity();
-        private readonly OperationLedger<List<ItemEntry>> _authoredResults = new OperationLedger<List<ItemEntry>>();
+        private readonly OperationLedger<List<int>> _authoredResults = new OperationLedger<List<int>>();
         private ShipItem _authoringItem;
         private ShipItem _consumingItem;
-        private readonly Dictionary<ShipItem, List<ItemEntry>> _pendingAuthored = new Dictionary<ShipItem, List<ItemEntry>>();
+        private readonly Dictionary<ShipItem, List<int>> _pendingAuthored = new Dictionary<ShipItem, List<int>>();
         private readonly List<ItemEntry> _completedAuthors = new List<ItemEntry>();
         private readonly List<ItemEntry> _authorSpawnRetries = new List<ItemEntry>();
         private bool _receivingBatch, _consumeRefresh;
@@ -322,7 +333,7 @@ namespace SailwindCoop.Sync
                 HeldProbe.Tick(hand != null && _byItem.ContainsKey(hand) ? hand : null);
             }
             TickInstruments(dt);
-            TickOperations();
+            TickOperations(dt);
             TickPuppetsAwaitingStart();
 
             if (_net.Role != Role.Host) return;
@@ -383,6 +394,40 @@ namespace SailwindCoop.Sync
             _nextPendingStateRetry = Time.unscaledTime + 0.1f;
         }
 
+        private void CancelPendingDynamic(ShipItem item)
+        {
+            if (item == null || _pendingDynamic.Count == 0) return;
+            for (int i = _pendingDynamic.Count - 1; i >= 0; i--)
+            {
+                var p = _pendingDynamic[i];
+                if (p == null || p.Item == null || p.Item == item)
+                    _pendingDynamic.RemoveAt(i);
+            }
+        }
+
+        private static bool IsHanging(ShipItem item)
+        {
+            try
+            {
+                var hangable = item != null ? item.GetComponent<HangableItem>() : null;
+                return hangable != null && hangable.IsHanging();
+            }
+            catch { return false; }
+        }
+
+        private bool CanEnterPendingDynamic(ShipItem item)
+        {
+            if (item == null || _destroyingItems.Contains(item)) return false;
+            if (item.held != null) return false;
+            if (_byItem.TryGetValue(item, out var e) && (e.HolderNetId != 0 || e.InventorySlot >= 0)) return false;
+            if (InPersonalInventory(item) || CrateIdOf(item) != 0 || CargoPortOf(item) >= 0) return false;
+            if (ItemComponents.InStove(item) || IsHanging(item)) return false;
+            var irb = item.GetItemRigidbody();
+            if (irb != null && (irb.attached || irb.inStove || irb.GetCurrentBox() != null || irb.GetCurrentInventorySlot() != null))
+                return false;
+            return true;
+        }
+
         private void ProcessPendingDynamic()
         {
             if (_pendingDynamic.Count == 0) return;
@@ -396,8 +441,9 @@ namespace SailwindCoop.Sync
                 }
                 if (Time.time < p.ReleaseAt) continue;
 
-                EnterFreeDynamic(p.Item, p.Frame, p.Vel, p.Reason);
                 _pendingDynamic.RemoveAt(i);
+                if (!CanEnterPendingDynamic(p.Item)) continue;
+                EnterFreeDynamic(p.Item, p.Frame, p.Vel, p.Reason);
             }
         }
 
@@ -420,6 +466,7 @@ namespace SailwindCoop.Sync
             ItemComponents.RetryBindings();
             double localNow = _net.Clock.LocalTimeMs;
             double serverNow = localNow + _net.Clock.OffsetMs;
+            if (Time.frameCount % 600 == 0 && _solidCargo.Count > 0) _solidCargo.RemoveWhere(IsNullShipItem);
 
             foreach (var e in _items)
             {
@@ -437,7 +484,7 @@ namespace SailwindCoop.Sync
                 bool held = e.HolderNetId != 0;
                 UpdateSolidCargo(e, held);
                 PrepareForRemotePose(e.Item, held);   // layer 2 while in a hand, else 0
-                SetPuppet(e.Item, true);
+                SetPuppet(e, true);
                 ApplyItemPose(e, localNow, serverNow);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
@@ -526,15 +573,21 @@ namespace SailwindCoop.Sync
         /// send the hand's checker a fresh OnTriggerEnter each time without an exit.
         /// </summary>
         private static readonly HashSet<ShipItem> _solidCargo = new HashSet<ShipItem>();
+        private static readonly Predicate<ShipItem> IsNullShipItem = item => item == null;
 
         private static bool SolidCargo(ShipItem item)
             => item != null && item.held == null && _solidCargo.Contains(item);
 
         private void UpdateSolidCargo(ItemEntry e, bool held)
         {
-            if (Time.frameCount % 600 == 0) _solidCargo.RemoveWhere(i => i == null);
-            if (!held && e.InventorySlot < 0 && IsCargo(e.Item) && FreeProxy(e.Item)) _solidCargo.Add(e.Item);
+            if (!held && e.InventorySlot < 0 && IsCargo(e) && FreeProxy(e.Item)) _solidCargo.Add(e.Item);
             else _solidCargo.Remove(e.Item);
+        }
+
+        private static bool IsCargo(ItemEntry e)
+        {
+            if (!e.CargoResolved) { e.Cargo = IsCargo(e.Item); e.CargoResolved = true; }
+            return e.Cargo;
         }
 
         /// <summary>Cargo: what the game carries in both hands, trade goods and crates.</summary>
@@ -587,6 +640,62 @@ namespace SailwindCoop.Sync
             _puppetStartScratch.Clear();
         }
 
+        private static void InvalidatePuppetState(ShipItem item)
+        {
+            if (item != null && Instance != null && Instance._byItem.TryGetValue(item, out var entry))
+                entry.PuppetApplied = false;
+        }
+
+        /// <summary>
+        /// Entry-backed fast path for <see cref="SetPuppet(ShipItem, bool)"/> called every frame in
+        /// <see cref="ApplyRemote"/>: avoids collider hierarchy scans and reflection on already-puppeted
+        /// items whose puppet/solid/probe/wall-attach flags and rigidbody state have not changed.
+        /// </summary>
+        private static void SetPuppet(ItemEntry e, bool puppet)
+        {
+            if (e == null || e.Item == null) return;
+            var item = e.Item;
+            if (!puppet)
+            {
+                e.PuppetApplied = false;
+                SetPuppet(item, false);
+                return;
+            }
+            try
+            {
+                var irb = item.GetItemRigidbody();
+                var body = irb != null ? irb.GetBody() : null;
+                if (irb != null && body != null)
+                {
+                    bool keepWallAttachDriver = item.wallAttachment && item.held != null;
+                    bool probed = !keepWallAttachDriver && HeldProbe.Holds(item);
+                    bool solid = !probed && !keepWallAttachDriver && SolidCargo(item);
+                    if (e.PuppetApplied &&
+                        e.PuppetWallAttachDriver == keepWallAttachDriver &&
+                        e.PuppetProbed == probed &&
+                        e.PuppetSolid == solid &&
+                        irb.enabled == keepWallAttachDriver &&
+                        body.isKinematic &&
+                        (probed || body.detectCollisions == solid))
+                    {
+                        if (!probed && item.colChecker != null &&
+                            (item.colChecker.collisions != 0 || !item.colChecker.allowObstructedDropping))
+                            ClearCollisionChecker(item);
+                        return;
+                    }
+                    SetPuppet(item, true);
+                    e.PuppetApplied = !_puppetAwaitingStart.Contains(item);
+                    e.PuppetWallAttachDriver = keepWallAttachDriver;
+                    e.PuppetProbed = probed;
+                    e.PuppetSolid = solid;
+                    return;
+                }
+            }
+            catch { }
+            e.PuppetApplied = false;
+            SetPuppet(item, true);
+        }
+
         /// <summary>
         /// Turn the game's own physics for an item on/off. As a puppet (true) its ItemRigidbody is
         /// disabled, its body is kinematic, and collision detection is off. This is used for remote
@@ -597,6 +706,7 @@ namespace SailwindCoop.Sync
         {
             try
             {
+                if (!puppet) InvalidatePuppetState(item);
                 var irb = item != null ? item.GetItemRigidbody() : null;
                 _puppetAwaitingStart.Remove(item);
                 // ItemRigidbody.Start creates the body and the floater. Unity never runs Start on a
@@ -609,6 +719,7 @@ namespace SailwindCoop.Sync
                     if (!irb.enabled) irb.enabled = true;
                     // An inactive proxy (a log in a stove) gets its Start when it is activated.
                     _puppetAwaitingStart.Add(item);
+                    InvalidatePuppetState(item);
                     return;
                 }
                 bool keepWallAttachDriver = puppet && item != null && item.wallAttachment && item.held != null;
@@ -691,6 +802,8 @@ namespace SailwindCoop.Sync
             if (_net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
+            CancelPendingDynamic(item);
+            _droppedBeforeBind.Remove(item);
             if (pointer != null && pointer.GetHeldItem() == item) InstrumentPickedUp(item);
             if (_net.Role != Role.Client) return;
             if (pointer != null) _gp = pointer;   // HeldItem() reads _gp
@@ -715,13 +828,28 @@ namespace SailwindCoop.Sync
             _localHeld[item] = _net.MyNetId;
             // A player-local item (just withdrawn from our belt) has no host id yet — don't send a Pickup the
             // host can't resolve. OnLocalInventory(slot<0) re-authors it; the deferred Pickup follows the remap.
-            if (!_hostIds.Contains(e.InstanceId))
+            if (!_hostIds.Contains(e.InstanceId) || _localClaimed.Contains(e.InstanceId))
             {
                 Remember("local pickup (player-local, waiting for authoring) '" + item.name + "'");
                 return;
             }
             SendRequest(e, ItemAction.Pickup, reliable: true);
             Remember("out pickup #" + e.Index + " '" + item.name + "'");
+        }
+
+        private void PreparePendingBeforeBindDrop(ShipItem item)
+        {
+            _droppedBeforeBind.Add(item);
+            RestoreLocalInventoryVisual(item, inInventory: false);
+            bool placedAttach = IsProxyAttached(item);
+            if (placedAttach) MoveItemToProxy(item);
+            if (LocalPlayerBoat(resolveNow: true) == null)
+                EnsureWorldParentState(item);
+            if (placedAttach) SetProxyAttached(item, true);
+            if (!placedAttach && ReferenceEquals(_seenHeld, item) && _seenHeldFrame == Time.frameCount)
+                item.transform.rotation = _seenHeldRot;
+            if (!placedAttach)
+                MoveProxyToItem(item, kinematic: true, Vector3.zero);
         }
 
         public void NotifyDrop(GoPointer pointer, PickupableItem pickup, Vector3 throwVelocity, bool surfacePlaced = false)
@@ -731,14 +859,13 @@ namespace SailwindCoop.Sync
             if (_net.State != LinkState.Connected) return;
             var item = pickup as ShipItem;
             if (item == null) return;
+            if (_pendingHeldItem == item) _pendingHeldItem = null;
             if (_rowingOar?.Item == item) FlushOarStroke();
             if (_suppressNextDrop.Remove(item))
             {
                 Remember("local drop suppressed '" + item.name + "'");
                 return;
             }
-            RefreshItems(force: true);
-            if (!_byItem.TryGetValue(item, out var e)) return;
 
             int personalSlot = PersonalInventorySlotOf(item);
             if (personalSlot >= 0)
@@ -748,7 +875,22 @@ namespace SailwindCoop.Sync
                 return;
             }
 
-            if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
+            RefreshItems(force: true);
+            if (!_byItem.TryGetValue(item, out var e))
+            {
+                if (_net.Role == Role.Client && _pendingClientItems.Contains(item))
+                    PreparePendingBeforeBindDrop(item);
+                _localHeld.Remove(item);
+                return;
+            }
+
+            if (_net.Role == Role.Client && (!_hostIds.Contains(e.InstanceId) || _localClaimed.Contains(e.InstanceId)))
+            {
+                if (_pendingClientItems.Contains(item))
+                    PreparePendingBeforeBindDrop(item);
+                _localHeld.Remove(item);
+                return;
+            }
 
             _localHeld.Remove(item);
             e.InventorySlot = -1;
@@ -764,7 +906,7 @@ namespace SailwindCoop.Sync
                 // not the stale hand pose.
                 bool placedAttach = IsProxyAttached(item);
                 if (placedAttach) MoveItemToProxy(item);
-                if (LocalPlayerBoat() == null)
+                if (LocalPlayerBoat(resolveNow: true) == null)
                     EnsureWorldParentState(item);
                 // The game drops from inside GoPointer.LateUpdate, right after it turned the item to
                 // the pointer: a mug or a bowl is then tilted by the pitch of the camera, and its
@@ -891,6 +1033,7 @@ namespace SailwindCoop.Sync
                 if (pose) ReceiveHistoricalHeldPose(e, msg, actor);
                 return;
             }
+            if (!pose) CancelPendingDynamic(e.Item);
             if (!continuous) ClearClientHeldPose(e);
             if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (consume)
@@ -902,6 +1045,12 @@ namespace SailwindCoop.Sync
                 if (ce != null && ce.Item != null)
                 {
                     var item = ce.Item;
+                    _localHeld.Remove(item);
+                    _authoredIdentity.Remove(item);
+                    _baselineItems.Remove(item);
+                    _hiddenVisuals.Remove(item);
+                    _hostHeldFromBelt.Remove(item);
+                    CancelPendingDynamic(item);
                     var previous = _consumingItem;
                     _consumingItem = item;
                     try { item.DestroyItem(); }
@@ -1016,6 +1165,8 @@ namespace SailwindCoop.Sync
                     if (msg.CargoPort >= 0)
                     {
                         ge.HolderNetId = 0;   // stored item is held by nobody
+                        _localHeld.Remove(ge.Item);
+                        RestoreHiddenVisualsOnly(ge.Item);
                     }
                     else
                     {
@@ -1104,6 +1255,8 @@ namespace SailwindCoop.Sync
                     e.InventorySlot = -1;
                     e.HolderNetId = 0;
                     _localHeld.Remove(e.Item);
+                    e.Item.held = null;
+                    RestoreHiddenVisualsOnly(e.Item);
                     SetProxyAttached(e.Item, false);
                     ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
                                   FoldableState.Capture(e.Item), e.Item.health, e.Item.sold, e.Item.nailed, held: false);
@@ -1118,6 +1271,7 @@ namespace SailwindCoop.Sync
                         // could not see it). The item stays where the client released it, free; the
                         // state tells the client it does not hang.
                         ClearStaleHangFlags(e.Item);
+                        EnterFreeDynamic(e.Item, msg.Frame, Vector3.zero, "host lamp-hook occupied #" + e.Index);
                         var freeState = BuildState(e, _net.Clock.ServerTick);
                         freeState.HolderNetId = 0;
                         freeState.Attached = false;
@@ -1128,13 +1282,40 @@ namespace SailwindCoop.Sync
                     SnapHangableToHook(e.Item, hook);
                     MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
                     SetProxyAttached(e.Item, true);
+                    RestoreInteractableLayer(e.Item);
+                    SetRootCollider(e.Item, true);
+                    try
+                    {
+                        var irb = e.Item.GetItemRigidbody();
+                        var body = irb != null ? irb.GetBody() : null;
+                        if (body != null) body.detectCollisions = true;   // MoveProxyToItem(kinematic) turned it off
+                    }
+                    catch { }
                     var hookState = BuildState(e, _net.Clock.ServerTick);
                     hookState.HolderNetId = 0;
                     hookState.Attached = true;
                     _net.Broadcast(hookState, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     Remember("in lamp-hook #" + e.Index + " -> hook=" + msg.CrateId + " actor=" + actor);
                 }
-                else Remember("reject lamp-hook item=" + msg.InstanceId + " hook=" + msg.CrateId);
+                else
+                {
+                    if (e.Item != null)
+                    {
+                        e.InventorySlot = -1;
+                        e.HolderNetId = 0;
+                        _localHeld.Remove(e.Item);
+                        e.Item.held = null;
+                        ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, Vector3.zero,
+                                      FoldableState.Capture(e.Item), e.Item.health, e.Item.sold, e.Item.nailed, held: false);
+                        ClearStaleHangFlags(e.Item);
+                        EnterFreeDynamic(e.Item, msg.Frame, Vector3.zero, "host lamp-hook missing #" + e.Index);
+                        var freeState = BuildState(e, _net.Clock.ServerTick);
+                        freeState.HolderNetId = 0;
+                        freeState.Attached = false;
+                        _net.Broadcast(freeState, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    }
+                    Remember("reject lamp-hook item=" + msg.InstanceId + " hook=" + msg.CrateId);
+                }
                 return;
             }
 
@@ -1386,11 +1567,12 @@ namespace SailwindCoop.Sync
             {
                 if (e == null || e.Item == null || e.HolderNetId != actorNetId) continue;
 
+                CancelPendingDynamic(e.Item);
                 e.HolderNetId = 0;
                 e.InventorySlot = -1;
                 if (_net.Role == Role.Host) ClearClientHeldPose(e);
                 _localHeld.Remove(e.Item);
-                RestoreDisconnectedItem(e.Item);
+                ReleaseRemoteActorItem(e.Item);
 
                 if (_net.Role == Role.Host && _net.State == LinkState.Connected)
                     _net.Broadcast(BuildState(e, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -1496,6 +1678,21 @@ namespace SailwindCoop.Sync
         private static readonly Dictionary<ShipItem, HiddenVisualState> _hiddenVisuals =
             new Dictionary<ShipItem, HiddenVisualState>();
 
+        private static void RestoreHiddenVisualsOnly(ShipItem item, bool restoreScale = true)
+        {
+            if (item == null || !_hiddenVisuals.TryGetValue(item, out var st)) return;
+            foreach (var r in st.Disabled)
+                if (r != null) r.enabled = true;
+            if (restoreScale)
+            {
+                item.transform.localScale = st.RootScale;
+                var tr = item.transform;
+                for (int i = 0; i < tr.childCount && i < st.ChildScales.Count; i++)
+                    tr.GetChild(i).localScale = st.ChildScales[i];
+            }
+            _hiddenVisuals.Remove(item);
+        }
+
         private static void SetRemoteInventoryVisual(ShipItem item, bool hidden)
         {
             try
@@ -1503,40 +1700,47 @@ namespace SailwindCoop.Sync
                 if (item == null) return;
                 if (hidden)
                 {
-                    // Запоминаем, что именно выключили/каким был масштаб: у сложных предметов
-                    // (мангал/печь) есть дочерние рендереры, которые ваниль ДЕРЖИТ выключенными,
-                    // и дети с неединичным масштабом. Слепое "включить всё и scale=1" при
-                    // разскрытии превращало такой предмет в белый куб.
-                    var st = new HiddenVisualState();
-                    foreach (var r in item.GetComponentsInChildren<Renderer>(true))
-                        if (r != null && r.enabled)
-                        {
-                            r.enabled = false;
-                            st.Disabled.Add(r);
-                        }
-                    st.RootScale = item.transform.localScale;
-                    var tr = item.transform;
-                    for (int i = 0; i < tr.childCount; i++)
-                        st.ChildScales.Add(tr.GetChild(i).localScale);
-                    _hiddenVisuals[item] = st;
+                    if (_hiddenVisuals.TryGetValue(item, out var existing))
+                    {
+                        foreach (var r in item.GetComponentsInChildren<Renderer>(true))
+                            if (r != null && r.enabled)
+                            {
+                                r.enabled = false;
+                                if (!existing.Disabled.Contains(r)) existing.Disabled.Add(r);
+                            }
+                    }
+                    else
+                    {
+                        // Запоминаем, что именно выключили/каким был масштаб: у сложных предметов
+                        // (мангал/печь) есть дочерние рендереры, которые ваниль ДЕРЖИТ выключенными,
+                        // и дети с неединичным масштабом. Слепое "включить всё и scale=1" при
+                        // разскрытии превращало такой предмет в белый куб.
+                        var st = new HiddenVisualState();
+                        foreach (var r in item.GetComponentsInChildren<Renderer>(true))
+                            if (r != null && r.enabled)
+                            {
+                                r.enabled = false;
+                                st.Disabled.Add(r);
+                            }
+                        st.RootScale = item.transform.localScale;
+                        var tr = item.transform;
+                        for (int i = 0; i < tr.childCount; i++)
+                            st.ChildScales.Add(tr.GetChild(i).localScale);
+                        _hiddenVisuals[item] = st;
+                    }
                 }
-                else if (_hiddenVisuals.TryGetValue(item, out var st))
+                else
                 {
                     // Восстанавливаем ровно то, что скрывали сами; без записи — не трогаем визуал
                     // (предмет и так виден, «включать всё» ему только вредит).
-                    foreach (var r in st.Disabled)
-                        if (r != null) r.enabled = true;
-                    item.transform.localScale = st.RootScale;
-                    var tr = item.transform;
-                    for (int i = 0; i < tr.childCount && i < st.ChildScales.Count; i++)
-                        tr.GetChild(i).localScale = st.ChildScales[i];
-                    _hiddenVisuals.Remove(item);
+                    RestoreHiddenVisualsOnly(item);
                 }
                 var irb = item.GetItemRigidbody();
                 if (irb != null)
                 {
                     irb.ToggleCollider(!hidden);
                     irb.disableCol = hidden;
+                    InvalidatePuppetState(item);
                 }
                 var col = item.GetComponent<Collider>();
                 if (col != null) col.enabled = !hidden;
@@ -1574,6 +1778,7 @@ namespace SailwindCoop.Sync
                 if (irb != null)
                 {
                     _puppetAwaitingStart.Remove(item);   // a belt slot needs vanilla ItemRigidbody
+                    InvalidatePuppetState(item);
                     if (!irb.enabled) irb.enabled = true;
                     irb.disableCol = false;
                     irb.ToggleCollider(!inInventory);
@@ -1780,6 +1985,7 @@ namespace SailwindCoop.Sync
             LogItemTransition("before pending-free " + reason, item);
             if (item != null)
             {
+                CancelPendingDynamic(item);
                 if (frame == CoordFrame.World)
                     EnsureWorldParentState(item);
                 SetRemoteInventoryVisual(item, hidden: false);
@@ -1822,18 +2028,97 @@ namespace SailwindCoop.Sync
             catch { }
         }
 
-        private static void RestoreDisconnectedItem(ShipItem item)
+        /// <summary>Release a single item that a disconnected remote player was holding or hiding.</summary>
+        private static void ReleaseRemoteActorItem(ShipItem item)
         {
             try
             {
                 if (item == null) return;
                 // A log burning in a stove stays the stove's child without a collider or physics.
                 if (ItemComponents.InStove(item)) return;
+                if (LocalHand(item)) return;
                 item.held = null;
                 SetRemoteInventoryVisual(item, hidden: false);
-                RestoreLocalInventoryVisual(item, inInventory: false);
                 RestoreInteractableLayer(item);
                 SetRootCollider(item, true);
+                ClearStaleHangFlags(item);
+                SetPuppet(item, false);
+                MoveProxyToItem(item, kinematic: false, Vector3.zero);
+            }
+            catch { }
+        }
+
+        /// <summary>Session teardown (<see cref="Clear"/>): restore remote-held puppets, client puppets,
+        /// and remote-hidden visuals without corrupting locally held, belt, crate, cargo, stove,
+        /// wall-attached, or hanging items.</summary>
+        private static void RestoreTeardownItem(ItemEntry entry)
+        {
+            try
+            {
+                var item = entry?.Item;
+                if (item == null) return;
+                if (ItemComponents.InStove(item)) return;
+
+                bool localHeld = LocalHand(item);
+                bool inBelt = InPersonalInventory(item);
+                bool inCrate = CrateIdOf(item) != 0;
+                bool inCargo = CargoPortOf(item) >= 0;
+                bool hanging = IsHanging(item);
+                var irb = item.GetItemRigidbody();
+                bool inContainerOrSlot = inBelt || inCrate || inCargo ||
+                    (irb != null && (irb.GetCurrentBox() != null || irb.GetCurrentInventorySlot() != null));
+                bool inStove = irb != null && irb.inStove;
+                bool wallAttached = irb != null && irb.attached;
+                bool protectedState = localHeld || inContainerOrSlot || hanging || inStove || wallAttached;
+
+                if (protectedState)
+                {
+                    if (!localHeld)
+                    {
+                        if (item.held != null) item.held = null;
+                        RestoreInteractableLayer(item);
+                    }
+                    RestoreHiddenVisualsOnly(item, restoreScale: !inBelt);
+                    _puppetAwaitingStart.Remove(item);
+                    if (irb != null)
+                    {
+                        if (!irb.enabled) irb.enabled = true;
+                        var body = irb.GetBody();
+                        if (body != null)
+                        {
+                            if (!body.detectCollisions) body.detectCollisions = true;
+                            if (!body.isKinematic && UsesSpeculativeMesh(body))
+                                body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+                        }
+                        if (localHeld || (wallAttached && !inContainerOrSlot && !inStove && !hanging && !irb.disableCol))
+                        {
+                            irb.ToggleCollider(true);
+                            irb.GetComponentsInChildren(true, PuppetColliders);
+                            try
+                            {
+                                foreach (var col in PuppetColliders)
+                                {
+                                    if (col == null) continue;
+                                    if (col.isTrigger) col.isTrigger = false;
+                                    if (!col.enabled) col.enabled = true;
+                                }
+                            }
+                            finally { PuppetColliders.Clear(); }
+                        }
+                    }
+                    return;
+                }
+
+                bool wasHidden = _hiddenVisuals.ContainsKey(item);
+                bool wasPuppetOrRemote = wasHidden || entry.HolderNetId != 0 ||
+                    (irb != null && !irb.enabled) || item.gameObject.layer == 2 || item.held != null;
+                if (!wasPuppetOrRemote) return;
+
+                item.held = null;
+                SetRemoteInventoryVisual(item, hidden: false);
+                RestoreInteractableLayer(item);
+                SetRootCollider(item, true);
+                ClearStaleHangFlags(item);
                 SetPuppet(item, false);
                 MoveProxyToItem(item, kinematic: false, Vector3.zero);
             }
@@ -1902,7 +2187,7 @@ namespace SailwindCoop.Sync
                     item.transform.localScale = Vector3.one;
                 }
 
-                if (LocalPlayerBoat() == null)
+                if (LocalPlayerBoat(resolveNow: true) == null)
                     EnsureWorldParentState(item);
                 MoveProxyToItem(item, kinematic: true, Vector3.zero);
                 var irb = item.GetItemRigidbody();
@@ -1975,7 +2260,7 @@ namespace SailwindCoop.Sync
                     item.transform.rotation = rot;
                 }
 
-                if (LocalPlayerBoat() == null)
+                if (LocalPlayerBoat(resolveNow: true) == null)
                     EnsureWorldParentState(item);
                 MoveProxyToItem(item, kinematic: true, Vector3.zero);
             }
@@ -2000,6 +2285,7 @@ namespace SailwindCoop.Sync
                 if (++_nextRequest == 0) ++_nextRequest;
                 e.LastLocalRequest = _nextRequest;
                 e.Gate.Begin(_nextRequest);
+                if (LocalHand(e.Item)) LocalPlayerBoat(resolveNow: true);
             }
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
             // On drop/throw the meaningful velocity is the impulse Sailwind just applied to the
@@ -2145,12 +2431,13 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private static Transform LocalPlayerBoat()
+        private static Transform LocalPlayerBoat(bool resolveNow = false)
         {
             try
             {
-                var emb = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
-                return emb != null ? emb.debugOutCurrentBoat : null;
+                var players = Runtime.CoopBehaviour.Instance?.Players;
+                if (players == null) return null;
+                return resolveNow ? players.ResolveLocalBoatNow() : players.LocalBoat;
             }
             catch { return null; }
         }
@@ -2600,21 +2887,26 @@ namespace SailwindCoop.Sync
                     pt.rotation = rot;
                 }
                 bool sleepingCargo = !kinematic && HoldsSleepingCargo(item);
+                bool wasKinematic = body.isKinematic;
                 if (sleepingCargo) FreezeCargoBody(body, deferRelease: true);
-                else SetKinematic(body, kinematic);
+                else if (wasKinematic != kinematic) SetKinematic(body, kinematic);
                 // While an item is in a hand (kinematic puppet) it must not push or collide with other
                 // items on this machine — a kinematic body still shoves dynamic ones, so turn collision
                 // detection off entirely; restore it when the item is freed to local physics. Free
                 // cargo on a client stays solid as an obstacle for the hand (_solidCargo).
-                body.detectCollisions = !kinematic || solid;
+                bool wantDetect = !kinematic || solid;
+                if (body.detectCollisions != wantDetect) body.detectCollisions = wantDetect;
                 // The drop pose can overlap the pile. Keep the correction speed capped even
                 // when the body will only become dynamic after someone gets out of bed.
                 if (!kinematic) body.maxDepenetrationVelocity = SettleDepenetration;
                 if (sleepingCargo) return;
                 if (kinematic)
                 {
-                    body.velocity = Vector3.zero;
-                    body.angularVelocity = Vector3.zero;
+                    if (!wasKinematic)
+                    {
+                        body.velocity = Vector3.zero;
+                        body.angularVelocity = Vector3.zero;
+                    }
                 }
                 else
                 {
@@ -2801,6 +3093,15 @@ namespace SailwindCoop.Sync
             if (e == null) return;
             _tombstones.Add(e.InstanceId);
             _net.Registry.Remove(e.NetId);
+            if (e.Item != null)
+            {
+                _localHeld.Remove(e.Item);
+                _authoredIdentity.Remove(e.Item);
+                _baselineItems.Remove(e.Item);
+                _hiddenVisuals.Remove(e.Item);
+                _hostHeldFromBelt.Remove(e.Item);
+                CancelPendingDynamic(e.Item);
+            }
             if (_operationApplying) return;
             _net.Broadcast(new DespawnObjectMsg { Kind = (byte)NetObjKind.Item, InstanceId = e.InstanceId },
                            LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -2868,7 +3169,8 @@ namespace SailwindCoop.Sync
 
         public void OnSpawnObject(SpawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
         {
-            if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item || _tombstones.Contains(msg.InstanceId)) return;
+            if (_net.Role != Role.Client || msg.Kind != (byte)NetObjKind.Item ||
+                _tombstones.Contains(msg.InstanceId) || _localClaimed.Contains(msg.InstanceId)) return;
             if (_pendingClientItems.TakeSoldBeforeBind(msg.AuthorRequester, _net.MyNetId, msg.AuthorRequestId,
                 msg.PrefabIndex, msg.InstanceId, out bool durableSale))
             {
@@ -2888,6 +3190,13 @@ namespace SailwindCoop.Sync
                     msg.Amount, msg.Health, msg.Sold, msg.Nailed, allowSpawn: true,
                     authorRequestId: msg.AuthorRequester == _net.MyNetId ? msg.AuthorRequestId : 0,
                     baseline: msg.IsBaselineItem && msg.AuthorRequestId == 0);
+                if (_localClaimed.Contains(msg.InstanceId))
+                {
+                    _pendingSpawns.Remove(msg.InstanceId);
+                    _pendingStates.Remove(msg.InstanceId);
+                    _spawnWait.Remove(msg.InstanceId);
+                    return;
+                }
                 if (e == null || e.Item == null) { _pendingSpawns[msg.InstanceId] = msg; return; }
                 // Before the state: applying it rebuilds the look text, which reads the mission.
                 ApplyMissionIndex(e.Item, msg.InstanceId, msg.MissionIndex);
@@ -2940,7 +3249,14 @@ namespace SailwindCoop.Sync
                     _items.Remove(claimed);
                     _byInstanceId.Remove(msg.InstanceId);
                     _net.Registry.Remove(claimed.NetId);
-                    if (claimed.Item != null) _byItem.Remove(claimed.Item);
+                    if (claimed.Item != null)
+                    {
+                        _byItem.Remove(claimed.Item);
+                        _localHeld.Remove(claimed.Item);
+                        _baselineItems.Remove(claimed.Item);
+                        RestoreHiddenVisualsOnly(claimed.Item, restoreScale: false);
+                        _solidCargo.Remove(claimed.Item);
+                    }
                 }
 
                 return;
@@ -3033,6 +3349,14 @@ namespace SailwindCoop.Sync
             {
                 _byItem.Remove(item);
                 _localHeld.Remove(item);
+                _authoredIdentity.Remove(item);
+                _baselineItems.Remove(item);
+                _hiddenVisuals.Remove(item);
+                _pendingBeltWithdrawals.Remove(item);
+                _droppedBeforeBind.Remove(item);
+                _solidCargo.Remove(item);
+                _puppetAwaitingStart.Remove(item);
+                if (_pendingHeldItem == item) _pendingHeldItem = null;
                 // Like vanilla DestroyItem: a destroyed prefab left in SaveLoadManager.currentPrefabs makes
                 // BoatLocalItems.CacheCurrentItems throw on it every frame once we leave its boat or house.
                 try { item.GetComponent<SaveablePrefab>()?.Unregister(); }
@@ -3209,11 +3533,16 @@ namespace SailwindCoop.Sync
             }
             if (_net.Role == Role.Client && !_hostIds.Contains(e.InstanceId)) return;
             int port = CargoPortOf(item);
+            if (port >= 0)
+            {
+                _localHeld.Remove(item);
+                RestoreHiddenVisualsOnly(item);
+            }
             if (_net.Role == Role.Client && port < 0)
             {
                 PrepareLocalWithdrawPickup(item);
                 e.DropWithoutProxyVelocity = true;
-                e.ForceWorldPoseUntilDrop = LocalPlayerBoat() == null;
+                e.ForceWorldPoseUntilDrop = LocalPlayerBoat(resolveNow: true) == null;
             }
             else if (_net.Role == Role.Host && port < 0)
             {
@@ -3271,6 +3600,8 @@ namespace SailwindCoop.Sync
             RefreshItems(force: true);
             PrepareLocalWithdrawPickup(item);
             _pendingHeldItem = item;
+            _pendingBeltWithdrawals.Add(item);
+            _droppedBeforeBind.Remove(item);
             NotifyClientAuthored(item);
             Remember("out belt->hand author '" + item.name + "'");
         }
@@ -3280,6 +3611,9 @@ namespace SailwindCoop.Sync
         /// this id (so the local belt item survives). Idempotent per id.</summary>
         private void ClaimItemToBelt(ShipItem item, int slot)
         {
+            if (_pendingHeldItem == item) _pendingHeldItem = null;
+            _pendingBeltWithdrawals.Remove(item);
+            _droppedBeforeBind.Remove(item);
             RefreshItems(force: true);
 
             if (_net.Role == Role.Host)
@@ -3295,6 +3629,7 @@ namespace SailwindCoop.Sync
             int prefab = PrefabIndexOf(item);
             if (id > 0 && prefab > 0 && _hostIds.Contains(id) && !_localClaimed.Contains(id))
             {
+                _hostIds.Remove(id);
                 _localClaimed.Add(id);
                 _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = id, PrefabIndex = prefab },
                                LiteNetLib.DeliveryMethod.ReliableOrdered);
@@ -3669,13 +4004,30 @@ namespace SailwindCoop.Sync
             finally { _refreshDepth--; buffers.Clear(); }
         }
 
+        private static void PruneDestroyedKeys<TValue>(Dictionary<ShipItem, TValue> map)
+        {
+            if (map.Count == 0) return;
+            List<ShipItem> dead = null;
+            foreach (var key in map.Keys)
+                if (key == null) (dead ?? (dead = new List<ShipItem>())).Add(key);
+            if (dead != null)
+                for (int i = 0; i < dead.Count; i++) map.Remove(dead[i]);
+        }
+
         private void RefreshItems(RefreshBuffers buffers)
         {
             // Previously-known entries (carry live ShipItem refs; a destroyed item reads Unity-null).
             var prev = buffers.Prev;
             foreach (var kv in _byInstanceId) prev.Add(kv.Key, kv.Value);
             _pendingClientItems.Prune(item => item != null);
-            _destroyingItems.RemoveWhere(item => item == null);
+            _destroyingItems.RemoveWhere(IsNullShipItem);
+            if (_baselineItems.Count > 0) _baselineItems.RemoveWhere(IsNullShipItem);
+            if (_hostHeldFromBelt.Count > 0) _hostHeldFromBelt.RemoveWhere(IsNullShipItem);
+            if (_pendingBeltWithdrawals.Count > 0) _pendingBeltWithdrawals.RemoveWhere(IsNullShipItem);
+            if (_droppedBeforeBind.Count > 0) _droppedBeforeBind.RemoveWhere(IsNullShipItem);
+            PruneDestroyedKeys(_localHeld);
+            PruneDestroyedKeys(_authoredIdentity);
+            PruneDestroyedKeys(_hiddenVisuals);
 
             // Alive set = previously-known still-alive (covers items that went temporarily inactive,
             // e.g. inside a crate, which FindObjectsOfType skips) + everything found this scan.
@@ -3759,6 +4111,8 @@ namespace SailwindCoop.Sync
                 {
                     e.FuelResolved = false;
                     e.LampResolved = false;
+                    e.CargoResolved = false;
+                    e.PuppetApplied = false;
                     e.AppliedRemoteState = null;
                     e.RemotePose = null;
                     ResetItemPose(e);
@@ -3895,21 +4249,66 @@ namespace SailwindCoop.Sync
             var pending = _pendingClientItems.Resolve(_net.MyNetId, _net.MyNetId, authorRequestId, prefabIndex, instanceId);
             if (pending != null)
             {
+                bool wasPendingHeld = pending == _pendingHeldItem;
+                bool wasBeltWithdrawal = _pendingBeltWithdrawals.Contains(pending);
+                bool wasDroppedBeforeBind = _droppedBeforeBind.Contains(pending);
+
+                if (InPersonalInventory(pending))
+                {
+                    // Re-belted before host SpawnObject arrived: immediately claim/consume the new host id
+                    // so the local belt item survives without spawning a shared duplicate.
+                    if (wasPendingHeld) _pendingHeldItem = null;
+                    _pendingBeltWithdrawals.Remove(pending);
+                    _droppedBeforeBind.Remove(pending);
+                    RemapLocalItem(pending, instanceId);
+                    _pendingClientItems.Bind(authorRequestId, instanceId);
+                    _hostIds.Remove(instanceId);
+                    _localClaimed.Add(instanceId);
+                    _localHeld.Remove(pending);
+                    _net.Broadcast(new ItemRequestMsg { Action = ItemAction.Consume, InstanceId = instanceId, PrefabIndex = prefabIndex },
+                                   LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    Remember("out claim->belt (re-belted before bind) id=" + instanceId);
+                    return null;
+                }
+
                 bool oldIdCollision = _byInstanceId.TryGetValue(InstanceIdOf(pending), out var previous) && previous.Item != pending;
                 RemapLocalItem(pending, instanceId);
                 _hostIds.Add(instanceId);
                 var fr = BindClientSpawn(pending, instanceId, prefabIndex, allowIncremental: !oldIdCollision);
                 if (fr != null && fr.Item == pending) _pendingClientItems.Bind(authorRequestId, instanceId);
-                // If this item was just withdrawn from our belt to hand, tell the host we hold it now.
-                if (pending == _pendingHeldItem || LocalHand(pending))
+                if (fr != null && fr.Item != null)
                 {
-                    _pendingHeldItem = null;
-                    if (fr != null && fr.Item != null)
+                    if (wasPendingHeld) _pendingHeldItem = null;
+                    _pendingBeltWithdrawals.Remove(pending);
+                    _droppedBeforeBind.Remove(pending);
+                    if (LocalHand(pending))
                     {
                         fr.HolderNetId = _net.MyNetId;
                         _localHeld[fr.Item] = _net.MyNetId;
                         SetPuppet(fr.Item, true);
                         SendRequest(fr, ItemAction.Pickup, reliable: true);
+                        if (wasBeltWithdrawal)
+                            SendRequest(fr, ItemAction.State, reliable: true);
+                    }
+                    else if (wasDroppedBeforeBind || wasPendingHeld)
+                    {
+                        _localHeld.Remove(fr.Item);
+                        fr.InventorySlot = -1;
+                        if (wasBeltWithdrawal)
+                            SendRequest(fr, ItemAction.State, reliable: true);
+                        bool placedAttach = IsProxyAttached(fr.Item);
+                        if (placedAttach) MoveItemToProxy(fr.Item);
+                        if (LocalPlayerBoat(resolveNow: true) == null)
+                            EnsureWorldParentState(fr.Item);
+                        if (placedAttach) SetProxyAttached(fr.Item, true);
+                        var dropMsg = BuildRequest(fr, ItemAction.Drop, _net.Clock.ServerTick);
+                        dropMsg.Attached = placedAttach;
+                        if (placedAttach) dropMsg.Vel = Vector3.zero;
+                        _net.Broadcast(dropMsg, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        fr.HolderNetId = _net.MyNetId;  // keep ApplyRemote off until the host sends the free state
+                        ResetItemPose(fr);
+                        SetPuppet(fr.Item, true);
+                        Remember("out drop (before bind) #" + fr.Index + " '" + fr.Item.name + "'");
                     }
                 }
                 return fr;
@@ -4371,11 +4770,14 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client || _net.State != LinkState.Connected || item == null) return;
             if (_pendingClientItems.Contains(item)) return;
             int currentId = InstanceIdOf(item);
-            if (_hostIds.Contains(currentId) && !_tombstones.Contains(currentId)) return;
+            if (_hostIds.Contains(currentId) && !_tombstones.Contains(currentId) && !_localClaimed.Contains(currentId)) return;
             uint requestId = ++_nextRequest;
             if (requestId == 0) requestId = ++_nextRequest;
-            Guid tradeAuthor = CanSendTradeSales ? Guid.NewGuid() : Guid.Empty;
+            // Only tradeable goods can ever be sold through TradeSaleJournal (not fish or belt withdrawals).
+            bool tradeableGood = CanSendTradeSales && !_pendingBeltWithdrawals.Contains(item) && item.GetComponent<Good>() != null;
+            Guid tradeAuthor = tradeableGood ? Guid.NewGuid() : Guid.Empty;
             _pendingClientItems.Add(requestId, item, PrefabIndexOf(item), tradeAuthor);
+            if (LocalHand(item)) LocalPlayerBoat(resolveNow: true);
             BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
@@ -4527,7 +4929,7 @@ namespace SailwindCoop.Sync
                 foreach (var pair in _pendingAuthored)
                 {
                     if (!_byItem.TryGetValue(pair.Key, out var entry)) continue;
-                    pair.Value.Add(entry);
+                    pair.Value.Add(entry.InstanceId);
                     _completedAuthors.Add(entry);
                 }
                 _pendingAuthored.Clear();
@@ -4609,11 +5011,13 @@ namespace SailwindCoop.Sync
                 if (tradeAuthor != Guid.Empty && TradeSaleJournal.FindAuthor(GameState.modData, tradeWorld, tradeAuthor) < 0)
                     return; // The matching sale arrived on a reconnected peer before this author request.
 
-                var retained = new List<ItemEntry>();
+                var retained = new List<int>();
                 if (!_authoredResults.TryBegin(actor, msg.RequestId, retained, out var previous))
                 {
                     if (previous.Count == 0) FlushReceivedItems();
-                    foreach (var entry in previous) BroadcastSpawn(entry, fromPeer, snapshot: true);
+                    foreach (int instanceId in previous)
+                        if (_byInstanceId.TryGetValue(instanceId, out var entry))
+                            BroadcastSpawn(entry, fromPeer, snapshot: true);
                     return;
                 }
                 var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
@@ -4670,7 +5074,14 @@ namespace SailwindCoop.Sync
             _solidCargo.Clear();
             foreach (var e in _items)
                 if (e != null && e.Item != null)
-                    RestoreDisconnectedItem(e.Item);
+                    RestoreTeardownItem(e);
+            if (_hiddenVisuals.Count > 0)
+            {
+                var leftoverHidden = new List<ShipItem>(_hiddenVisuals.Keys);
+                for (int i = 0; i < leftoverHidden.Count; i++)
+                    RestoreHiddenVisualsOnly(leftoverHidden[i], restoreScale: !InPersonalInventory(leftoverHidden[i]));
+                _hiddenVisuals.Clear();
+            }
 
             ClearInstruments();
 
@@ -4678,6 +5089,7 @@ namespace SailwindCoop.Sync
             _byItem.Clear();
             _byInstanceId.Clear();
             _localHeld.Clear();
+            _poseScratch.Clear();
             _pendingDynamic.Clear();
             _suppressNextDrop.Clear();
             _hostIds.Clear();
@@ -4691,6 +5103,11 @@ namespace SailwindCoop.Sync
             _pendingStateCursor = 0;
             _nextPendingStateRetry = 0f;
             _crateMembership.Clear();
+            _crateScan.Clear();
+            _crateScanFrame = -1;
+            _crateScanCount = -1;
+            _remoteUnsealed.Clear();
+            _remoteUnsealedLast = 0;
             _unsealedCrate = null;
             _cargoMembership.Clear();
             _pendingSpawns.Clear();
@@ -4700,8 +5117,11 @@ namespace SailwindCoop.Sync
             ClearTradeSaleSession();
             ClearOperations();
             _puppetAwaitingStart.Clear();
+            _puppetStartScratch.Clear();
             ItemComponents.Clear();
             _localClaimed.Clear();
+            _pendingBeltWithdrawals.Clear();
+            _droppedBeforeBind.Clear();
             _pendingClientItems.Clear();
             _cargoAfterAuthor.Clear();
             _cargoAfterAuthorDone.Clear();
@@ -4720,6 +5140,9 @@ namespace SailwindCoop.Sync
             _receivingClientLifecycle = _clientIndexDirty = false;
             _receivingBatch = _consumeRefresh = false;
             _pendingHeldItem = null;
+            _seenHeld = null;
+            _seenHeldFrame = -1;
+            _visualPointer = null;
             _gp = null;
             _rejectedPoseLogged.Clear();
             _fHeldItem = null;

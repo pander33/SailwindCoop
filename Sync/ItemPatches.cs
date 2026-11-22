@@ -526,7 +526,7 @@ namespace SailwindCoop.Sync
                 var item = good.GetComponent<ShipItem>();
                 var sv = good.GetComponent<SaveablePrefab>();
                 if (item != null && sv != null)
-                    ItemSync.Instance?.NotifySold(sv.instanceId, sv.prefabIndex);
+                    ItemSync.Instance?.NotifySold(item, sv.instanceId, sv.prefabIndex);
             }
             catch (Exception e) { WarnPatch("[ItemPatches] PreWarehouseSellGood: " + e.Message); }
         }

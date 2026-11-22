@@ -68,10 +68,19 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ulong, PendingItemResult> _receivedOperations = new Dictionary<ulong, PendingItemResult>();
         private readonly List<PendingItemResult> _unfinishedResults = new List<PendingItemResult>();
         internal void MarkOperationDestroy(ShipItem item) { if (item != null) _destroyingItems.Add(item); }
+        private const float OperationRetryInterval = 0.1f;
+        private const float WaitingOperationTimeoutSeconds = 20f;
+        private sealed class WaitingOperation
+        {
+            internal ItemOperationRequestMsg Request;
+            internal float Waited;
+        }
         private readonly HashSet<ulong> _completedOperationResults = new HashSet<ulong>();
         private readonly OperationLedger<byte[]> _operationResults = new OperationLedger<byte[]>();
         private readonly Dictionary<uint, Dictionary<int, ShipItem>> _operationLocalCreated = new Dictionary<uint, Dictionary<int, ShipItem>>();
-        private readonly Dictionary<ulong, ItemOperationRequestMsg> _waitingOperations = new Dictionary<ulong, ItemOperationRequestMsg>();
+        private readonly Dictionary<ulong, WaitingOperation> _waitingOperations = new Dictionary<ulong, WaitingOperation>();
+        private readonly List<WaitingOperation> _waitingOperationScratch = new List<WaitingOperation>();
+        private float _nextOperationRetry;
 
         private bool IsOperationCreated(ShipItem item)
         {
@@ -179,7 +188,7 @@ namespace SailwindCoop.Sync
             msg.Actor = actor; // never trust a packet's claimed author.
             ApplyOperation(msg, peer);
         }
-        private void ApplyOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer)
+        private void ApplyOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer, bool refreshItems = true)
         {
             ulong key = ((ulong)msg.Actor << 32) | msg.OperationId;
             if (_operationResults.TryGet(msg.Actor, msg.OperationId, out var retained))
@@ -187,7 +196,7 @@ namespace SailwindCoop.Sync
                 if (peer != null && retained != null) peer.Send(retained, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 return;
             }
-            RefreshItems(force: true);
+            if (refreshItems) RefreshItems(force: true);
             // Bind all existing targets before applying any effects; loading is a technical wait.
             foreach (var state in msg.Changed)
                 if (!_tombstones.Contains(state.InstanceId))
@@ -309,10 +318,36 @@ namespace SailwindCoop.Sync
         }
         private void WaitForOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer, ulong key)
         {
-            _waitingOperations[key] = msg;
+            if (_waitingOperations.TryGetValue(key, out var existing))
+                existing.Request = msg;
+            else
+                _waitingOperations[key] = new WaitingOperation { Request = msg, Waited = 0f };
             if (peer != null) peer.Send(new ItemOperationResultMsg {
                 Actor = msg.Actor, OperationId = msg.OperationId, Status = ItemOperationBody.WaitingTarget
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
+        private void ExpireWaitingOperation(ItemOperationRequestMsg msg, ulong key)
+        {
+            _waitingOperations.Remove(key);
+            if (!_operationResults.TryBegin(msg.Actor, msg.OperationId, null, out _)) return;
+            var result = new ItemOperationResultMsg
+            {
+                Actor = msg.Actor,
+                OperationId = msg.OperationId,
+                Status = ItemOperationBody.MissingTarget,
+                Hull = Array.Empty<BoatDamageStateMsg>(),
+                Changed = Array.Empty<ItemStateMsg>(),
+                Created = Array.Empty<CreatedItemState>(),
+                Consumed = Array.Empty<int>(),
+            };
+            var reply = Protocol.Write(result);
+            var retainedReply = new byte[reply.Length];
+            Buffer.BlockCopy(reply.Data, 0, retainedReply, 0, reply.Length);
+            _operationResults.Replace(msg.Actor, msg.OperationId, retainedReply);
+            _net.Broadcast(result, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Plugin.Logger.LogWarning("[ItemSync] Expired waiting operation actor=" + msg.Actor + " id=" + msg.OperationId +
+                " after " + WaitingOperationTimeoutSeconds + "s");
+            Remember("expired operation #" + msg.OperationId + " actor=" + msg.Actor);
         }
         /// <summary>Host: a request still waiting for its targets must not change the world after its
         /// author left. Results already applied stay in the ledger.</summary>
@@ -507,11 +542,15 @@ namespace SailwindCoop.Sync
             return hull != null && (hull.GetComponent<BoatDamage>() != null || hull.GetComponentInParent<BoatDamage>() != null ||
                 hull.GetComponentInChildren<BoatDamage>(true) != null);
         }
-        private void TickOperations()
+        private void TickOperations(float dt)
         {
             if (_net.Role == Role.Client)
             {
                 TickDrain();
+                if (_unfinishedResults.Count == 0) return;
+                float clientNow = UnityEngine.Time.unscaledTime;
+                if (clientNow < _nextOperationRetry) return;
+                _nextOperationRetry = clientNow + OperationRetryInterval;
                 // Only results still waiting for a target need progress and a payload.
                 for (int i = _unfinishedResults.Count - 1; i >= 0; i--)
                 {
@@ -523,12 +562,39 @@ namespace SailwindCoop.Sync
             }
             if (_net.Role != Role.Host) return;
             if (_waitingOperations.Count == 0) return;
-            var waiting = new List<ItemOperationRequestMsg>(_waitingOperations.Values);
-            foreach (var operation in waiting) ApplyOperation(operation, null);
+            bool unpaused = UnityEngine.Time.timeScale > 0f && !GameState.currentlyLoading;
+            if (unpaused && dt > 0f)
+            {
+                foreach (var waiting in _waitingOperations.Values)
+                    if (waiting != null) waiting.Waited += dt;
+            }
+            float now = UnityEngine.Time.unscaledTime;
+            if (now < _nextOperationRetry) return;
+            _nextOperationRetry = now + OperationRetryInterval;
+            RefreshItems(force: true);
+            _waitingOperationScratch.Clear();
+            _waitingOperationScratch.AddRange(_waitingOperations.Values);
+            try
+            {
+                for (int i = 0; i < _waitingOperationScratch.Count; i++)
+                {
+                    var waiting = _waitingOperationScratch[i];
+                    if (waiting?.Request == null) continue;
+                    ulong key = ((ulong)waiting.Request.Actor << 32) | waiting.Request.OperationId;
+                    if (!_waitingOperations.ContainsKey(key)) continue;
+                    if (unpaused && waiting.Waited >= WaitingOperationTimeoutSeconds)
+                    {
+                        ExpireWaitingOperation(waiting.Request, key);
+                        continue;
+                    }
+                    ApplyOperation(waiting.Request, null, refreshItems: false);
+                }
+            }
+            finally { _waitingOperationScratch.Clear(); }
         }
         private void ClearOperations()
         {
-            _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _operationLocalCreated.Clear();
+            _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _waitingOperationScratch.Clear(); _nextOperationRetry = 0f; _operationLocalCreated.Clear();
             _receivedOperations.Clear(); _completedOperationResults.Clear(); _unfinishedResults.Clear(); _destroyingItems.Clear();
             ItemOperationCapture.Clear();
         }
