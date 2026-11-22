@@ -372,8 +372,8 @@ namespace SailwindCoop.Sync
             if (!_pendingHatches.TryGetValue(context._boatId, out var hatches)) return;
             foreach (var pair in hatches)
             {
-                BoatLayout.Matches(context._boatId, pair.Value.LayoutHash, context._layoutHash, "InteractionSync");
-                context.ReceiveHatchTarget(pair.Key, pair.Value.Target.Target, pair.Value.Target.HasInteraction);
+                if (BoatLayout.Matches(context._boatId, pair.Value.LayoutHash, context._layoutHash, "InteractionSync"))
+                    context.ReceiveHatchTarget(pair.Key, pair.Value.Target.Target, pair.Value.Target.HasInteraction);
             }
             _pendingHatches.Remove(context._boatId);
         }

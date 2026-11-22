@@ -30,6 +30,7 @@ namespace SailwindCoop.Sync
 		/// <summary>The game puts a player in a bed to sleep below this.</summary>
 		private const float NeedsSleepBelow = 99f;
 		private const float AlarmPeriod = 10f;
+		private const float DeferredEntranceRetryPeriod = 1f;
 		/// <summary>The game's recovery takes a few seconds plus the loading of the port.</summary>
 		private const float MaxRecoverySeconds = 120f;
 
@@ -45,12 +46,13 @@ namespace SailwindCoop.Sync
 		private readonly SharedSleepTiming _timing = new SharedSleepTiming();
 		private readonly Dictionary<string, SleepAddress> _entrances = new Dictionary<string, SleepAddress>();
 		private readonly Dictionary<string, SleepAddress> _deferredEntrances = new Dictionary<string, SleepAddress>();
+		private readonly List<string> _appliedEntrances = new List<string>();
 		private readonly Dictionary<uint, byte> _presence = new Dictionary<uint, byte>();
 		private readonly Dictionary<int, float> _alarmAt = new Dictionary<int, float>();
 		private SleepAddress _address = new SleepAddress();
 		private SleepRequestMsg _pendingEntrance;
 		private uint _nextRequest;
-		private float _entranceRetryAt, _entrancePendingAge;
+		private float _entranceRetryAt, _entrancePendingAge, _deferredEntranceRetryAt;
 		private float _presenceAt, _presenceResendAt, _personalAge, _recoveryAge;
 		private int _sentPresence = -1;
 		// _blackout: the shared sleep is shown here, and only then are the game's own sleep flags
@@ -270,8 +272,17 @@ namespace SailwindCoop.Sync
 
 		public void SendBaseline(NetPeer peer)
 		{
-			if (_net.Role != Role.Host || _net.PlayerNetIdForPeer(peer) == 0) return;
-			peer.Send(State(), DeliveryMethod.ReliableOrdered);
+			uint actor = _net.PlayerNetIdForPeer(peer);
+			if (_net.Role != Role.Host || actor == 0) return;
+			// A player who just loaded in is awake: end an active shared sleep cleanly instead of
+			// handing him Sleeping only to cancel it on the next presence tick.
+			bool cancelled = false;
+			if (_order.Phase == SleepPhase.Sleeping && (!_presence.TryGetValue(actor, out byte flags) || !Ready(flags)))
+			{
+				HostEnd(SleepPhase.Cancel, "player joined awake");
+				cancelled = true;
+			}
+			if (!cancelled) peer.Send(State(), DeliveryMethod.ReliableOrdered);
 			foreach (var entrance in _entrances.Values)
 				peer.Send(State(entrance: entrance), DeliveryMethod.ReliableOrdered);
 		}
@@ -358,7 +369,9 @@ namespace SailwindCoop.Sync
 				if (_blackout)
 				{
 					Log("shared sleep over here: " + _order.Phase);
-					if (_order.Phase == SleepPhase.Cancel && !_leftShared) SleepOnAlone();
+					if (_order.Phase == SleepPhase.Cancel && !_leftShared &&
+					    (GameState.inBed != null || GameState.sleepingInTavern || PlayerNeeds.sleep < RestedSleep))
+						SleepOnAlone();
 					else EndEffects(true);
 				}
 
@@ -367,6 +380,14 @@ namespace SailwindCoop.Sync
 			}
 
 			if (_leftShared) return;
+			// A late-joining client who never lay down must not be pulled into an active shared sleep.
+			if (_net.Role == Role.Client && !_personal && !_blackout && GameState.inBed == null)
+			{
+				_leftShared = true;
+				global::Sleep.timeskipSleep = false;
+				try { SendPresence(0); } catch { }
+				return;
+			}
 			bool startingPresentation = !_blackout, wasPersonal = _personal;
 			_blackout = true;
 			_personal = false;
@@ -452,12 +473,20 @@ namespace SailwindCoop.Sync
 
 			if (_deferredEntrances.Count != 0 && PresentationReady())
 			{
-				var applied = new List<string>();
-				foreach (var entrance in _deferredEntrances)
-					if (ApplyEntrance(entrance.Value))
-						applied.Add(entrance.Key);
-				foreach (var path in applied) _deferredEntrances.Remove(path);
+				_deferredEntranceRetryAt += dt;
+				if (_deferredEntranceRetryAt >= DeferredEntranceRetryPeriod)
+				{
+					_deferredEntranceRetryAt = 0f;
+					_appliedEntrances.Clear();
+					foreach (var entrance in _deferredEntrances)
+						if (ApplyEntrance(entrance.Value))
+							_appliedEntrances.Add(entrance.Key);
+					for (int i = 0; i < _appliedEntrances.Count; i++)
+						_deferredEntrances.Remove(_appliedEntrances[i]);
+					_appliedEntrances.Clear();
+				}
 			}
+			else _deferredEntranceRetryAt = 0f;
 
 			// Not behind the pause check below: a client's recovery runs on its own clock while the
 			// host's world is stopped. With the own clock stopped the game's recovery waits too.
@@ -806,6 +835,8 @@ namespace SailwindCoop.Sync
 			_timing.Reset();
 			_entrances.Clear();
 			_deferredEntrances.Clear();
+			_appliedEntrances.Clear();
+			_deferredEntranceRetryAt = 0f;
 			_presence.Clear();
 			_alarmAt.Clear();
 			_leftShared = false;

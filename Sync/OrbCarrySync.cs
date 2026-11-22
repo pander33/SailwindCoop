@@ -253,9 +253,31 @@ namespace SailwindCoop.Sync
         }
         public void ClearRemoteActor(uint actor)
         {
-            if (_net.Role != Role.Host) return;
-            foreach (var carry in _orbs.Values) if (carry.Holder == actor && carry.Orb != null)
-            { carry.Holder = 0; RestoreOrb(carry); carry.Orb.OnDrop(); SendOrbState(carry, true); }
+            if (_net.Role != Role.Host || actor == 0) return;
+            foreach (var carry in _orbs.Values)
+            {
+                if (carry.Holder != actor) continue;
+                carry.RemoteHeldPose = null;
+                if (carry.Orb == null || carry.Orb.totem == null)
+                {
+                    carry.Holder = 0;
+                    carry.Slaved = false;
+                    carry.Pose.Clear();
+                    carry.ParentPose.Clear();
+                    continue;
+                }
+                if (Local(carry.Orb))
+                {
+                    carry.Holder = _net.MyNetId;
+                    RestoreOrb(carry);
+                    if (CoordSpace.Ready) SendOrbState(carry, true);
+                    continue;
+                }
+                carry.Holder = 0;
+                RestoreOrb(carry);
+                carry.Orb.OnDrop();
+                if (CoordSpace.Ready) SendOrbState(carry, true);
+            }
         }
         private void ClearOrbs()
         {

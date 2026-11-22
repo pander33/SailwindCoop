@@ -9,7 +9,10 @@ namespace SailwindCoop.Sync
     public sealed partial class MooringSync
     {
         private sealed class DeferredDock { internal MooringRequestMsg Request; internal uint Actor; }
+        private const float DockRetrySeconds = 1f;
         private readonly Dictionary<ushort, DeferredDock> _dockRequests = new Dictionary<ushort, DeferredDock>();
+        private readonly List<KeyValuePair<ushort, DeferredDock>> _dockRetryScratch = new List<KeyValuePair<ushort, DeferredDock>>();
+        private float _nextDockRetry;
         private static string DockIdentity(GPButtonDockMooring dock)
         {
             if (dock == null) return "";
@@ -43,16 +46,19 @@ namespace SailwindCoop.Sync
         }
         private static GPButtonDockMooring FindDock(string id, Vector3 real)
         {
+            var docks = UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>();
             if (!string.IsNullOrEmpty(id))
             {
                 // The full identity walks every ancestor's siblings and reads names (each read
-                // allocates); a pending request retries every frame. Compare the dock's own name,
-                // the last step of the identity, first.
-                foreach (var dock in UnityEngine.Object.FindObjectsOfType<GPButtonDockMooring>())
-                    if (EndsWithStep(id, dock.name) && DockIdentity(dock) == id) return dock;
+                // allocates); compare the dock's own name, the last step of the identity, first.
+                for (int i = 0; i < docks.Length; i++)
+                {
+                    var dock = docks[i];
+                    if (dock != null && EndsWithStep(id, dock.name) && DockIdentity(dock) == id) return dock;
+                }
             }
             // Identity fallback locates a loaded object, not action eligibility.
-            var near = FindDockNear(real);
+            var near = FindDockNear(real, docks);
             // The position fallback assumes docks do not move. A mooring point on a boat (Towable
             // Boats) moves, and on an interpolated copy the nearest one can be the other cleat of a
             // pair: with an identity given, wait for that identity instead.
@@ -81,14 +87,20 @@ namespace SailwindCoop.Sync
         private void RetryDockRequests()
         {
             if (_net.Role != Role.Host || _net.State != LinkState.Connected || _dockRequests.Count == 0) return;
-            foreach (var pair in new List<KeyValuePair<ushort, DeferredDock>>(_dockRequests))
+            if (Time.unscaledTime < _nextDockRetry) return;
+            _nextDockRetry = Time.unscaledTime + DockRetrySeconds;
+            _dockRetryScratch.Clear();
+            foreach (var pair in _dockRequests) _dockRetryScratch.Add(pair);
+            for (int i = 0; i < _dockRetryScratch.Count; i++)
             {
+                var pair = _dockRetryScratch[i];
                 var msg = pair.Value.Request;
                 if (FindDock(msg.DockId, msg.DockReal) == null) continue;
                 if (!Apply(msg.Index, msg.Kind, msg.DockReal, msg.LengthSq, "in deferred request", applyMoorLength: false, dockId: msg.DockId)) continue;
                 _dockRequests.Remove(pair.Key);
                 SendRopeState(msg.Index, pair.Value.Actor, msg.RequestId);
             }
+            _dockRetryScratch.Clear();
         }
         internal void NotifyThrow(PickupableBoatMooringRope rope, GPButtonDockMooring dock)
         {
