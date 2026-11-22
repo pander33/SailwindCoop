@@ -261,7 +261,7 @@ namespace SailwindCoop.Runtime
                     ? new Entry(_coop.WorldPauseLabel, _togglePause)
                     : default(Entry));
 
-            if (!GameMenuPause.InSession || !WorldMenuOpen || !GameMenuPause.HasOpenWorldMenu(_menu))
+            if ((!GameMenuPause.InSession && !GameMenuPause.SavingOwnWorld) || !WorldMenuOpen || !GameMenuPause.HasOpenWorldMenu(_menu))
             {
                 _poseSyncedWhilePaused = false;
                 return;

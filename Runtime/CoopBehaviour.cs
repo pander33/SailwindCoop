@@ -1444,6 +1444,7 @@ namespace SailwindCoop.Runtime
             Net?.Stop();
             SteamLink.Shutdown();
             _notifications?.Clear();
+            FurstMateCompat.Unpatch();
             _harmony?.UnpatchSelf();
         }
 
