@@ -395,6 +395,12 @@ namespace SailwindCoop.Sync
             }
         }
 
+        public static void Unpatch()
+        {
+            try { _harmony?.UnpatchSelf(); } catch { }
+            _harmony = null;
+        }
+
         public static void Reset()
         {
             _dogPurchaseWorld = System.Guid.Empty;
@@ -774,7 +780,7 @@ namespace SailwindCoop.Sync
 
         private static bool DogUpdatePrefix(Component __instance, out float __state)
         {
-            __state = 0f;
+            __state = float.NaN;
             if (!SyncEnabled) return true;
             try
             {
@@ -798,7 +804,7 @@ namespace SailwindCoop.Sync
         {
             try
             {
-                if (!Host) return;
+                if (!Host || float.IsNaN(__state)) return;
                 if (!Mathf.Approximately(Get<float>(_dCallUntil, __instance), __state))
                 {
                     bool pup = PluginInst != null && (bool)_pPuppyVoice.GetValue(PluginInst, null);

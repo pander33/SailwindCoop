@@ -208,14 +208,20 @@ internal static class ModSharingTests
                 Assert(!download.TryOnChunk(mod, 2, 0, new byte[] { 1 }, ignoreStale: true), "wrong file chunk not ignored");
                 Assert(!download.TryOnChunk(mod, file, 2, new byte[] { 1 }, ignoreStale: true), "stale tail chunk not ignored");
                 Assert(!download.TryOnEnd(mod, file, true, ignoreStale: true), "stale end before any bytes not ignored");
+                Assert(!download.TryOnEnd(mod, file, false, ignoreStale: true), "first stale Ok=false before any bytes not ignored");
                 Assert(!download.TryOnEnd(99, 0, false, ignoreStale: true), "wrong mod end not ignored");
+                // A second Ok=false on the same file with zero bytes received fails immediately (genuine refusal).
+                ExpectFailure(() => download.TryOnEnd(mod, file, false, ignoreStale: true));
 
                 // Simulate stale chunk 0 followed by fresh retry chunk 0 on multi-chunk file 1.
                 byte[] f0Bytes = File.ReadAllBytes(Path.Combine(host, "SeaLife", "SeaLife.dll"));
                 Assert(download.TryOnChunk(mod, file, 0, f0Bytes, ignoreStale: true), "fresh file 0 chunk 0");
                 Assert(download.TryOnEnd(mod, file, true, ignoreStale: true), "fresh file 0 end");
 
+                // Once the first file finishes and ignoreStale is cleared, foreign or unexpected markers fail strictly.
                 Assert(download.TryNext(out mod, out file) && mod == 1 && file == 1, "sea file 1");
+                ExpectFailure(() => download.TryOnChunk(99, 0, 0, new byte[] { 1 }, ignoreStale: false));
+                ExpectFailure(() => download.TryOnEnd(mod, file, false, ignoreStale: false));
                 using (var upload = new ModUpload(Path.Combine(host, "SeaLife", "data", "assets"), sea.Files[1], mod, file))
                 {
                     var chunks = new List<byte[]>();

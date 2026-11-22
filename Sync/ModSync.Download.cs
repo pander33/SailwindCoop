@@ -144,7 +144,10 @@ namespace SailwindCoop.Sync
             try
             {
                 if (_download.TryOnEnd(msg.Mod, msg.File, msg.Ok, _drainingStale))
+                {
+                    _drainingStale = false;
                     RequestNext();
+                }
             }
             catch (Exception e) { Fail(e.Message); }
         }
@@ -174,7 +177,7 @@ namespace SailwindCoop.Sync
         {
             Plugin.Logger.LogError("[Mods] role=Client mod download failed, nothing was installed: " + reason);
             bool wasDownloading = _download != null;
-            DropDownload();
+            DropDownload(clearStale: false);
             _phase = Phase.Failed;
             _message = "Mod download failed, nothing was installed: " + reason;
             // Stop the host's stream so a retry does not meet chunks of the abandoned file.
@@ -186,9 +189,9 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private void DropDownload()
+        private void DropDownload(bool clearStale = true)
         {
-            _drainingStale = false;
+            if (clearStale) _drainingStale = false;
             if (_download == null) return;
             _download.Dispose();
             _download = null;

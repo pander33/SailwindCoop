@@ -189,7 +189,7 @@ namespace SailwindCoop.Sync
         private void Send(Surface surface, NetPeer peer, uint actor = 0, uint request = 0, DirtOutcome outcome = DirtOutcome.Applied)
         {
             int chunks = Math.Max(1, (surface.Png.Length + 4095) / 4096);
-            if (chunks > ushort.MaxValue) throw new System.IO.InvalidDataException("dirt texture exceeds chunk format");
+            if (chunks > DirtStateMsg.MaxChunks) throw new System.IO.InvalidDataException("dirt texture exceeds chunk format");
             for (int i = 0; i < chunks; i++)
             {
                 var msg = new DirtStateMsg { SceneIndex = surface.Id, Revision = surface.Revision, Requester = actor, RequestId = request,

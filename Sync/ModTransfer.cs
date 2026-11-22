@@ -67,6 +67,7 @@ namespace SailwindCoop.Sync
         private SHA256 _sha;
         private int _received;
         private int _nextChunk;
+        private bool _ignoredStaleEnd;
 
         public long TotalBytes { get; private set; }
         public long ReceivedBytes { get; private set; }
@@ -104,7 +105,7 @@ namespace SailwindCoop.Sync
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             _stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             _sha = SHA256.Create();
-            _received = 0; _nextChunk = 0;
+            _received = 0; _nextChunk = 0; _ignoredStaleEnd = false;
             mod = (ushort)_mods[_mod].Key; file = (ushort)_file;
             return true;
         }
@@ -165,8 +166,16 @@ namespace SailwindCoop.Sync
             if (_stream == null || _mod >= _mods.Count || _mods[_mod].Key != mod || _file != file)
                 return false;
             ModListFile expected = _mods[_mod].Value.Files[_file];
-            if (ok && _received == 0 && expected.Size > 0)
-                return false;
+            if (_received == 0)
+            {
+                if (ok && expected.Size > 0)
+                    return false;
+                if (!ok && !_ignoredStaleEnd)
+                {
+                    _ignoredStaleEnd = true;
+                    return false;
+                }
+            }
             OnEnd(mod, file, ok);
             return true;
         }
@@ -247,6 +256,7 @@ namespace SailwindCoop.Sync
             ReceivedBytes -= _received;
             _received = 0;
             _nextChunk = 0;
+            _ignoredStaleEnd = false;
             ModEntry entry = _mods[_mod].Value;
             string path = ModPathRules.Resolve(StageRoot(_mod), entry.Files[_file].Path);
             Directory.CreateDirectory(Path.GetDirectoryName(path));

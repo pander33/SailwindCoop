@@ -4,7 +4,7 @@ namespace SailwindCoop.Sync
 {
     internal sealed class SailRepairQueue
     {
-        internal const float RetryTimeoutSeconds = 5f;
+        internal const float RetryTimeoutSeconds = 30f;
         private readonly float[] _whole;
         private float[] _authority, _displayed, _sending;
         private bool _mend, _sendingMend;
@@ -61,14 +61,28 @@ namespace SailwindCoop.Sync
             mend = false;
             if (_sending != null)
             {
-                if (!float.IsNaN(now) && !float.IsNaN(_sentAt) && now - _sentAt >= RetryTimeoutSeconds)
+                if (float.IsNaN(now) || float.IsNaN(_sentAt) || now - _sentAt < RetryTimeoutSeconds)
+                    return false;
+                if (_mend)
                 {
-                    values = _sending;
-                    mend = _sendingMend;
+                    mend = _sendingMend = true;
+                    values = _sending = _whole;
+                    _mend = false;
                     _sentAt = now;
                     return true;
                 }
-                return false;
+                if (_sendingMend)
+                {
+                    values = _sending;
+                    mend = true;
+                    _sentAt = now;
+                    return true;
+                }
+                // Non-mend deltas are additive on the host: never re-send a timed-out delta.
+                // Clear the stalled in-flight slot so later repairs proceed and host authority reconciles.
+                _sending = null;
+                _sentAt = float.NaN;
+                if (!sendDelta) return false;
             }
             if (!_mend && !sendDelta) return false;
             mend = _sendingMend = _mend;

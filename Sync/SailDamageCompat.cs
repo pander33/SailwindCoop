@@ -171,9 +171,11 @@ namespace SailwindCoop.Sync
             return !SyncEnabled || !Active || Host;
         }
 
+        private static void Report(Exception error) => Plugin.Logger.LogWarning("[SailDmgCompat] " + error.Message);
+
         private static void MendPostfix(Sail sail)
         {
-            if (Active) PatchGuard.Run(() => OnMend(sail), error => Plugin.Logger.LogWarning("[SailDamage] " + error.Message));
+            if (Active) PatchGuard.Run(() => OnMend(sail), Report);
         }
 
         private static void OnMend(Sail sail)
@@ -276,7 +278,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[SailDmgCompat] Tick failed: " + e.Message);
+                PatchGuard.Fail(Report, e);
             }
         }
 
@@ -386,7 +388,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
-                Plugin.Logger.LogWarning("[SailDmgCompat] Remote packet handling failed: " + e.Message);
+                PatchGuard.Fail(Report, e);
             }
         }
 

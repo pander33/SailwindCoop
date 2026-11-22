@@ -143,7 +143,7 @@ namespace SailwindCoop.Sync
         {
             var marks = doc.Marks.Values.OrderBy(m => m.Order).ToArray();
             int chunks = Math.Max(1, (marks.Length + 127) / 128);
-            if (chunks > ushort.MaxValue) throw new System.IO.InvalidDataException("chart document exceeds chunk format");
+            if (chunks > ChartStateMsg.MaxChunks) throw new System.IO.InvalidDataException("chart document exceeds chunk format");
             for (int i = 0; i < chunks; i++)
             {
                 var msg = new ChartStateMsg { InstanceId = doc.Id, PrefabIndex = doc.Prefab, Revision = doc.Revision, Requester = actor,
