@@ -1081,6 +1081,7 @@ namespace SailwindCoop.Sync
                 var go = UnityEngine.Object.Instantiate(fish, at, Quaternion.Euler(0f, UnityEngine.Random.Range(0f, 360f), 0f));
                 var item = go.GetComponent<ShipItem>();
                 if (item == null) { UnityEngine.Object.Destroy(go); return false; }
+                ItemSync.DisableTemplateMeshCollider(item);
                 item.sold = true;
                 var sp = go.GetComponent<SaveablePrefab>();
                 if (sp != null) { sp.Start(); sp.RegisterToSave(); }

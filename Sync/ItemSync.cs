@@ -618,8 +618,34 @@ namespace SailwindCoop.Sync
         private static readonly HashSet<ShipItem> _puppetAwaitingStart = new HashSet<ShipItem>();
         private static readonly List<ShipItem> _puppetStartScratch = new List<ShipItem>();
 
-        /// <summary>Postfix of ItemRigidbody.Start: the body exists now, finish the switch before
-        /// the game's item physics makes its first step.</summary>
+        /// <summary>Postfix of ItemRigidbody.Start: fix ResetPos() back onto walkCol if the item is
+        /// already parented to a boat, complete deferred BoatMass registration, and finish puppet setup
+        /// before item physics makes its first step.</summary>
+        internal static void OnItemRigidbodyStart(ItemRigidbody proxy)
+        {
+            if (proxy == null) return;
+            try
+            {
+                var item = proxy.GetShipItem();
+                if (item != null && item.currentActualBoat != null && item.currentWalkCol != null &&
+                    !proxy.inStove && proxy.GetCurrentBox() == null && proxy.GetCurrentInventorySlot() == null)
+                {
+                    if (proxy.transform.parent != item.currentWalkCol)
+                        proxy.transform.parent = item.currentWalkCol;
+                    proxy.ForceRigidbodyToWalkCol();
+                    if (_fItemRigidbodyOnBoat == null)
+                        _fItemRigidbodyOnBoat = typeof(ItemRigidbody).GetField("onBoat", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (_fItemRigidbodyOnBoat != null)
+                        _fItemRigidbodyOnBoat.SetValue(proxy, true);
+                    var boatMass = item.currentActualBoat.parent != null
+                        ? item.currentActualBoat.parent.GetComponent<BoatMass>() : null;
+                    if (boatMass != null) boatMass.AddItem(proxy);
+                }
+            }
+            catch (Exception e) { Plugin.Logger.LogWarning("[ItemSync] OnItemRigidbodyStart: " + e.Message); }
+            PuppetStarted(proxy);
+        }
+
         internal static void PuppetStarted(ItemRigidbody proxy)
         {
             if (_puppetAwaitingStart.Count == 0 || proxy == null) return;
@@ -1374,7 +1400,8 @@ namespace SailwindCoop.Sync
                 ApplyWirePose(e.Item, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel,
                               acceptClientScalars ? msg.Amount : FoldableState.Capture(e.Item),
                               acceptClientScalars ? msg.Health : e.Item.health,
-                              acceptClientScalars ? msg.Sold : e.Item.sold, acceptClientScalars ? msg.Nailed : e.Item.nailed, e.HolderNetId != 0 || worldDrop);
+                              acceptClientScalars ? msg.Sold : e.Item.sold, acceptClientScalars ? msg.Nailed : e.Item.nailed,
+                              e.HolderNetId != 0 || worldDrop || delayedContainerDrop || attachedDrop);
             if (acceptClientScalars)
             {
                 ItemComponents.Apply(e.Item, msg.Details);
@@ -1750,12 +1777,11 @@ namespace SailwindCoop.Sync
                 var irb = item.GetItemRigidbody();
                 if (irb != null)
                 {
-                    irb.ToggleCollider(!hidden);
+                    if (irb.GetBody() != null) irb.ToggleCollider(!hidden);
                     irb.disableCol = hidden;
                     InvalidatePuppetState(item);
                 }
-                var col = item.GetComponent<Collider>();
-                if (col != null) col.enabled = !hidden;
+                SetRootCollider(item, !hidden);
             }
             catch { }
         }
@@ -1785,15 +1811,14 @@ namespace SailwindCoop.Sync
                     }
                     _hiddenVisuals.Remove(item);
                 }
-                var col = item.GetComponent<Collider>();
-                if (col != null) col.enabled = !inInventory;
+                SetRootCollider(item, !inInventory);
                 if (irb != null)
                 {
                     _puppetAwaitingStart.Remove(item);   // a belt slot needs vanilla ItemRigidbody
                     InvalidatePuppetState(item);
                     if (!irb.enabled) irb.enabled = true;
                     irb.disableCol = false;
-                    irb.ToggleCollider(!inInventory);
+                    if (irb.GetBody() != null) irb.ToggleCollider(!inInventory);
                     if (!inInventory)
                     {
                         item.transform.localScale = Vector3.one;
@@ -2016,14 +2041,72 @@ namespace SailwindCoop.Sync
             LogItemTransition("after pending-free " + reason, item);
         }
 
-        private static void SetRootCollider(ShipItem item, bool enabled)
+        private static readonly List<Collider> RootColliders = new List<Collider>(4);
+
+        private static bool IsTemplateMeshCollider(ShipItem item, Collider col)
         {
+            if (!(col is MeshCollider mc) || mc.convex || mc.isTrigger || item == null) return false;
+            return item.GetComponent<BoxCollider>() != null || item.GetComponent<CapsuleCollider>() != null;
+        }
+
+        // Prefabs such as oakum kegs and barrels carry both a Box/CapsuleCollider and a concave
+        // MeshCollider on the root ShipItem. ShipItem.Awake() tries to mark every root collider as
+        // a trigger, which Unity rejects for concave MeshColliders, leaving a solid collider on the
+        // item's kinematic root Rigidbody for 3 FixedUpdates until ItemRigidbody.AddCollider() copies
+        // its sharedMesh and destroys it. Disabling that template MeshCollider immediately prevents
+        // fresh spawns on a boat (e.g. client belt withdrawals) from colliding with the boat's
+        // dynamic hull while still letting AddCollider() read sharedMesh and destroy it normally.
+        internal static void DisableTemplateMeshCollider(ShipItem item)
+        {
+            if (item == null) return;
             try
             {
-                var col = item != null ? item.GetComponent<Collider>() : null;
-                if (col != null) col.enabled = enabled;
+                item.GetComponents(RootColliders);
+                for (int i = 0; i < RootColliders.Count; i++)
+                {
+                    var col = RootColliders[i];
+                    if (col != null && IsTemplateMeshCollider(item, col))
+                        col.enabled = false;
+                }
             }
             catch { }
+            finally { RootColliders.Clear(); }
+        }
+
+        internal static void SetRootCollider(ShipItem item, bool enabled)
+        {
+            if (item == null) return;
+            try
+            {
+                item.GetComponents(RootColliders);
+                for (int i = 0; i < RootColliders.Count; i++)
+                {
+                    var col = RootColliders[i];
+                    if (col == null) continue;
+                    if (enabled && IsTemplateMeshCollider(item, col))
+                    {
+                        col.enabled = false;
+                        continue;
+                    }
+                    col.enabled = enabled;
+                }
+            }
+            catch { }
+            finally { RootColliders.Clear(); }
+        }
+
+        private static bool HasEnabledRootCollider(ShipItem item)
+        {
+            if (item == null) return false;
+            try
+            {
+                item.GetComponents(RootColliders);
+                for (int i = 0; i < RootColliders.Count; i++)
+                    if (RootColliders[i] != null && RootColliders[i].enabled) return true;
+                return false;
+            }
+            catch { return false; }
+            finally { RootColliders.Clear(); }
         }
 
         private static void RestoreInteractableLayer(ShipItem item)
@@ -2949,6 +3032,7 @@ namespace SailwindCoop.Sync
                 }
                 if (embark == null || embark.walkCollider == null) return;
 
+                Transform prevBoat = item.currentActualBoat;
                 item.currentActualBoat = boat;
                 item.currentWalkCol = embark.walkCollider;
                 item.transform.parent = boat;
@@ -2972,8 +3056,29 @@ namespace SailwindCoop.Sync
                 if (_fItemRigidbodyOnBoat == null)
                     _fItemRigidbodyOnBoat = typeof(ItemRigidbody).GetField("onBoat", BindingFlags.NonPublic | BindingFlags.Instance);
                 bool onBoat = _fItemRigidbodyOnBoat != null && (bool)_fItemRigidbodyOnBoat.GetValue(irb);
+                bool wrongBoat = onBoat && ((prevBoat != null && prevBoat != boat) || irb.transform.parent != embark.walkCollider);
+                if (wrongBoat)
+                {
+                    var prevMass = prevBoat != null && prevBoat.parent != null ? prevBoat.parent.GetComponent<BoatMass>() : null;
+                    if (prevMass != null) prevMass.RemoveItem(irb);
+                    onBoat = false;
+                }
                 if (!onBoat)
-                    irb.EnterBoat();
+                {
+                    if (irb.GetBody() == null)
+                    {
+                        // ItemRigidbody.Start() has not run yet: move the proxy into walkCol now so it
+                        // never sits in world space inside the boat hull, and defer BoatMass.AddItem to
+                        // OnItemRigidbodyStart once the Rigidbody exists.
+                        irb.transform.parent = embark.walkCollider;
+                        irb.ForceRigidbodyToWalkCol();
+                        if (_fItemRigidbodyOnBoat != null) _fItemRigidbodyOnBoat.SetValue(irb, true);
+                    }
+                    else
+                    {
+                        irb.EnterBoat();
+                    }
+                }
             }
             catch (Exception e)
             {
@@ -3051,8 +3156,7 @@ namespace SailwindCoop.Sync
         {
             var parent = item.transform.parent;
             if (parent == null || !parent.CompareTag("House")) return null;
-            var col = item.GetComponent<Collider>();
-            if (col == null || !col.enabled) return null;
+            if (!HasEnabledRootCollider(item)) return null;
             var saveable = item.GetComponent<SaveablePrefab>();
             var house = parent.GetComponent<SaveableObject>();
             return saveable != null && house != null && saveable.GetParentObject() == house.sceneIndex ? parent : null;
@@ -4669,7 +4773,9 @@ namespace SailwindCoop.Sync
                     rot = wireRot;
                 }
 
-                var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
+                var go = boatParent != null
+                    ? UnityEngine.Object.Instantiate(prefab, pos, rot, boatParent)
+                    : UnityEngine.Object.Instantiate(prefab, pos, rot);
                 var saveable = go.GetComponent<SaveablePrefab>();
                 var item = go.GetComponent<ShipItem>();
                 if (saveable == null || item == null)
@@ -4677,13 +4783,14 @@ namespace SailwindCoop.Sync
                     UnityEngine.Object.Destroy(go);
                     return null;
                 }
+                DisableTemplateMeshCollider(item);
                 saveable.instanceId = instanceId;
                 saveable.prefabIndex = prefabIndex;
                 item.sold = sold;
                 item.nailed = nailed;
                 item.amount = amount;
                 item.health = health;
-                if (boatParent != null) item.transform.parent = boatParent;
+                if (boatParent != null && item.transform.parent != boatParent) item.transform.parent = boatParent;
                 RemoveCachedLocalItem(instanceId);
                 return item;
             }
@@ -4789,7 +4896,8 @@ namespace SailwindCoop.Sync
             bool tradeableGood = CanSendTradeSales && !_pendingBeltWithdrawals.Contains(item) && item.GetComponent<Good>() != null;
             Guid tradeAuthor = tradeableGood ? Guid.NewGuid() : Guid.Empty;
             _pendingClientItems.Add(requestId, item, PrefabIndexOf(item), tradeAuthor);
-            if (LocalHand(item)) LocalPlayerBoat(resolveNow: true);
+            bool held = LocalHand(item);
+            if (held) LocalPlayerBoat(resolveNow: true);
             BuildPose(item, _net.Clock.ServerTick, out CoordFrame frame, out ushort boatIndex,
                       out Vector3 pos, out Quaternion rot, out _);
             _net.Broadcast(new FishCatchMsg
@@ -4805,6 +4913,7 @@ namespace SailwindCoop.Sync
                 Health = item.health,
                 Sold = item.sold,
                 MissionIndex = MissionIndexOf(item),
+                Held = held,
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("out client-authored prefab=" + PrefabIndexOf(item) + " '" + item.name + "'");
         }
@@ -5003,9 +5112,10 @@ namespace SailwindCoop.Sync
 
                 Vector3 pos;
                 Quaternion rot;
+                Transform boat = null;
                 if (msg.Frame == CoordFrame.Boat)
                 {
-                    Transform boat = BoatLocator.FindByIndex(msg.BoatIndex);
+                    boat = BoatLocator.FindByIndex(msg.BoatIndex);
                     if (boat == null) { Remember("reject fish boat=" + msg.BoatIndex); return; }
                     pos = boat.TransformPoint(msg.Pos);
                     rot = boat.rotation * msg.Rot;
@@ -5032,10 +5142,13 @@ namespace SailwindCoop.Sync
                             BroadcastSpawn(entry, fromPeer, snapshot: true);
                     return;
                 }
-                var go = UnityEngine.Object.Instantiate(prefab, pos, rot);
+                var go = boat != null
+                    ? UnityEngine.Object.Instantiate(prefab, pos, rot, boat)
+                    : UnityEngine.Object.Instantiate(prefab, pos, rot);
                 var item = go.GetComponent<ShipItem>();
                 var saveable = go.GetComponent<SaveablePrefab>();
                 if (item == null || saveable == null) { UnityEngine.Object.Destroy(go); return; }
+                DisableTemplateMeshCollider(item);
                 _authoringItem = item;
                 _authoredIdentity[item] = new KeyValuePair<uint, uint>(actor, msg.RequestId);
                 item.sold = true;
@@ -5053,6 +5166,14 @@ namespace SailwindCoop.Sync
                 if (good != null && msg.MissionIndex >= 0 && missions != null && msg.MissionIndex < missions.Length &&
                     missions[msg.MissionIndex] != null && MissionNamesProduct(item, msg.MissionIndex))
                     good.RegisterToMission(msg.MissionIndex, missions[msg.MissionIndex].dueDay);
+                if (msg.Held)
+                {
+                    _localHeld[item] = actor;
+                    SetProxyAttached(item, false);
+                    EnterRemoteHeldVisual(item, "host author held");
+                }
+                if (boat != null)
+                    EnsureBoatParentState(item, msg.BoatIndex);
                 _pendingAuthored.Add(item, retained);
                 if (tradeAuthor != Guid.Empty)
                     TradeSaleJournal.RecordAuthor(GameState.modData, tradeWorld, tradeAuthor, saveable.instanceId);

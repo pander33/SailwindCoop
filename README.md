@@ -10,7 +10,7 @@ A co-op multiplayer mod for Sailwind: sail one world together with up to four fr
 local network, a VPN, or Steam.
 
 **Current Version:** 0.11.0
-**Wire Protocol:** 115. Every machine needs a build with protocol 115.
+**Wire Protocol:** 116. Every machine needs a build with protocol 116.
 **Requirements:** BepInEx 5.x, Sailwind 0.40 (0.40.1 supported)
 
 The mod is in early development (v0.11.0). Expect bugs, and please report them.

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using SailwindCoop.Runtime;
+using UnityEngine;
 
 namespace SailwindCoop.Sync
 {
@@ -26,6 +28,8 @@ namespace SailwindCoop.Sync
             Capture(harmony, hooks, typeof(ShipItemPipe), "ExtraLateUpdate");
             hooks.Install(typeof(ShipItem), "ExtraFixedUpdate", Type.EmptyTypes,
                 m => harmony.Patch(m, prefix: Callback(nameof(PreBoatMembership))));
+            hooks.Install(typeof(BoatMass), "UpdateMass", Type.EmptyTypes,
+                m => harmony.Patch(m, prefix: Callback(nameof(PreBoatMassUpdateMass)), finalizer: Callback(nameof(FinalBoatMassUpdateMass))));
             PatchHealth.Report("Item simulation", hooks);
             Plugin.Logger.LogInfo("[ItemSimulationPatches] " + hooks.Detail);
         }
@@ -72,6 +76,120 @@ namespace SailwindCoop.Sync
             }
             catch (Exception error) { Report(error); return true; }
         }
+        private static AccessTools.FieldRef<BoatMass, List<ItemRigidbody>> _boatMassItems;
+        private static bool _boatMassItemsMissing;
+        private static readonly List<ItemRigidbody> _boatMassDeferred = new List<ItemRigidbody>(4);
+        private const float MaxBoatLocalMassRadiusSq = 64f * 64f;
+
+        private static bool IsValidBoatLocal(Vector3 p)
+            => !float.IsNaN(p.x) && !float.IsNaN(p.y) && !float.IsNaN(p.z) &&
+               !float.IsInfinity(p.x) && !float.IsInfinity(p.y) && !float.IsInfinity(p.z) &&
+               p.sqrMagnitude <= MaxBoatLocalMassRadiusSq;
+
+        // Guard BoatMass.UpdateMass on the host against newly-spawned proxies whose Start() has not
+        // created their Rigidbody yet (would throw NullReferenceException and abort mass calculation)
+        // and against proxies whose transform is not in the boat's walkCol frame or has an extreme
+        // localPosition (e.g. after ResetPos() or clipping out of the hull), which would otherwise
+        // throw centerOfMass far outside the hull and violently jerk or launch the ship.
+        private static void PreBoatMassUpdateMass(BoatMass __instance)
+        {
+            var sync = ItemSync.Instance;
+            if (sync == null || !sync.IsHostSession || __instance == null) return;
+            try
+            {
+                if (_boatMassItems == null && !_boatMassItemsMissing)
+                {
+                    try { _boatMassItems = AccessTools.FieldRefAccess<BoatMass, List<ItemRigidbody>>("itemsOnBoat"); }
+                    catch (Exception e) { _boatMassItemsMissing = true; Report(e); }
+                }
+                if (_boatMassItems == null) return;
+                var list = _boatMassItems(__instance);
+                if (list == null || list.Count == 0) return;
+
+                _boatMassDeferred.Clear();
+                Transform boatRoot = __instance.transform;
+                for (int i = list.Count - 1; i >= 0; i--)
+                {
+                    var irb = list[i];
+                    if (irb == null) continue;
+                    if (!irb.gameObject.activeInHierarchy || irb.GetCurrentBox() != null)
+                    {
+                        _boatMassDeferred.Add(irb);
+                        list.RemoveAt(i);
+                        continue;
+                    }
+                    var body = irb.GetBody();
+                    if (body == null)
+                    {
+                        _boatMassDeferred.Add(irb);
+                        list.RemoveAt(i);
+                        continue;
+                    }
+                    float mass = body.mass;
+                    if (float.IsNaN(mass) || float.IsInfinity(mass) || mass < 0f)
+                    {
+                        _boatMassDeferred.Add(irb);
+                        list.RemoveAt(i);
+                        continue;
+                    }
+                    var item = irb.GetShipItem();
+                    if (item == null)
+                    {
+                        list.RemoveAt(i);
+                        continue;
+                    }
+                    if (item.currentActualBoat == null || item.currentActualBoat.parent != boatRoot)
+                    {
+                        list.RemoveAt(i);
+                        continue;
+                    }
+                    // Locally host-held items use Refs.observerMirror.transform.localPosition in vanilla
+                    // BoatMass.UpdateMass(), not irb.transform.localPosition.
+                    if (item.held != null) continue;
+                    bool badParent = item.currentWalkCol != null && irb.transform.parent != item.currentWalkCol;
+                    bool badPos = !IsValidBoatLocal(irb.transform.localPosition);
+                    if (badParent || badPos)
+                    {
+                        if (item.currentWalkCol != null && sync.HeldByRemotePlayer(item))
+                        {
+                            if (badParent) irb.transform.parent = item.currentWalkCol;
+                            irb.ForceRigidbodyToWalkCol();
+                            badParent = false;
+                            badPos = !IsValidBoatLocal(irb.transform.localPosition);
+                        }
+                        if (badParent || badPos)
+                        {
+                            _boatMassDeferred.Add(irb);
+                            list.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+            catch (Exception error) { Report(error); }
+        }
+
+        private static void FinalBoatMassUpdateMass(BoatMass __instance)
+        {
+            if (_boatMassDeferred.Count == 0) return;
+            try
+            {
+                if (__instance != null && _boatMassItems != null)
+                {
+                    var list = _boatMassItems(__instance);
+                    if (list != null)
+                    {
+                        for (int i = 0; i < _boatMassDeferred.Count; i++)
+                        {
+                            var irb = _boatMassDeferred[i];
+                            if (irb != null && !list.Contains(irb)) list.Add(irb);
+                        }
+                    }
+                }
+            }
+            catch (Exception error) { Report(error); }
+            finally { _boatMassDeferred.Clear(); }
+        }
+
         private struct Before
         {
             internal ShipItem Item; internal bool Captured, LightOn; internal float Heat, Health, Amount;

@@ -4,7 +4,7 @@ All notable user-facing changes are documented in this file.
 
 ## [0.11.0] - 2026-11-22
 
-Everyone must update to wire protocol 115. Requires Sailwind 0.40 or 0.40.1.
+Everyone must update to wire protocol 116. Requires Sailwind 0.40 or 0.40.1.
 
 ### Co-op and mod compatibility
 
@@ -31,6 +31,7 @@ Everyone must update to wire protocol 115. Requires Sailwind 0.40 or 0.40.1.
 
 ### Fixed
 
+- **Belt withdrawal on boats:** pulling heavy items (barrels, oakum kegs) from a client's personal belt while aboard a boat no longer violently jerks or launches the ship. Client-authored held items now spawn directly as held boat puppets with temporary concave `MeshCollider` templates disabled, `ItemRigidbody.Start()` restores walk-collider parenting before `BoatMass` registration, and `BoatMass.UpdateMass()` guards against uninitialized or out-of-frame item proxies.
 - **"Save and join" & pause lifecycle:** joining another session from `Escape -> Co-op` no longer freezes the clock before saving, and session teardown/reloads reliably restore `Physics.autoSyncTransforms`, `GameMenuPause`, belts and wallets.
 - **Dice table (3+ players):** leaving a lobby after a rematch keeps `Seat` and `FirstSeat` aligned across all players.
 - **UI & input:** releasing a sticky-clicked control during a world pause or knockdown no longer re-enables player movement prematurely; closing F8 preserves in-game UI cursors; IMGUI panels snapshot Layout/Repaint state cleanly.

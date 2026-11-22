@@ -365,10 +365,16 @@ namespace SailwindCoop.Sync
             var directory = PrefabsDirectory.instance?.directory;
             if (directory == null || state.PrefabIndex < 0 || state.PrefabIndex >= directory.Length || directory[state.PrefabIndex] == null) return null;
             if (!WireToWorld(state.Frame, state.BoatIndex, state.Pos, state.Rot, out var pos, out var rot)) return null;
-            var go = UnityEngine.Object.Instantiate(directory[state.PrefabIndex], pos, rot);
+            UnityEngine.Transform boat = state.Frame == CoordFrame.Boat ? BoatLocator.FindByIndex(state.BoatIndex) : null;
+            var go = boat != null
+                ? UnityEngine.Object.Instantiate(directory[state.PrefabIndex], pos, rot, boat)
+                : UnityEngine.Object.Instantiate(directory[state.PrefabIndex], pos, rot);
             var item = go.GetComponent<ShipItem>(); var saveable = go.GetComponent<SaveablePrefab>();
             if (item == null || saveable == null) { UnityEngine.Object.Destroy(go); return null; }
+            DisableTemplateMeshCollider(item);
             item.sold = state.Sold; saveable.prefabIndex = state.PrefabIndex; saveable.RegisterToSave();
+            if (boat != null && state.CrateId == 0 && state.CargoPort < 0)
+                EnsureBoatParentState(item, state.BoatIndex);
             return item;
         }
         private bool CreationMembershipTargetsReady(ItemStateMsg state)

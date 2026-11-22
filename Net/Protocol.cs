@@ -34,7 +34,8 @@ namespace SailwindCoop.Net
         // 114: widened ModFeatures (ushort) and mod compatibility sync (BetterStoves SoupMug,
         // BoatColors live paint, TentandPlank tarps, Sailor's Keepsakes racks/storm/incense).
         // 115: PlayerHome ownership, BetterNPCBoats fishing boats, RandomEncounters, and HMS Leopard.
-        public const int Version = 115;
+        // 116: FishCatchMsg carries Held so client belt withdrawals author directly as held boat puppets.
+        public const int Version = 116;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)

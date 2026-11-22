@@ -23,7 +23,7 @@ Unless noted as **client-side / local only**, every player in a session should i
 | **MusicMod** | Crew instrument notes and sustained sounds follow the player holding the instrument. | Plays across all nearby crewmates. |
 | **Viking Horn** | Horn blasts and sustained sound follow the player blowing the horn. | Plays across all nearby crewmates. |
 
-### Added in 0.11.0 (Protocol 115)
+### Added in 0.11.0 (Protocol 116)
 
 | Mod | What Sailwind Co-op syncs / handles | Notes |
 |---|---|---|

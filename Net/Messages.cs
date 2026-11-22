@@ -1760,6 +1760,7 @@ namespace SailwindCoop.Net
         public float Health;
         public bool Sold = true;
         public int MissionIndex = -1;
+        public bool Held;
 
         public MsgType Type => MsgType.FishCatch;
 
@@ -1776,6 +1777,7 @@ namespace SailwindCoop.Net
             w.Put(Health);
             w.Put(Sold);
             w.Put(MissionIndex);
+            w.Put(Held);
         }
 
         public void Deserialize(NetDataReader r)
@@ -1791,6 +1793,7 @@ namespace SailwindCoop.Net
             Health = r.GetFloat();
             Sold = r.GetBool();
             MissionIndex = r.GetInt();
+            Held = r.GetBool();
         }
     }
 

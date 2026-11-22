@@ -180,7 +180,7 @@ namespace SailwindCoop.Sync
 
         private static void PostItemRigidbodyStart(ItemRigidbody __instance)
         {
-            try { ItemSync.PuppetStarted(__instance); }
+            try { ItemSync.OnItemRigidbodyStart(__instance); }
             catch (Exception e) { WarnPatch("[ItemPatches] PostItemRigidbodyStart: " + e.Message); }
         }
 

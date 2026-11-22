@@ -256,12 +256,21 @@ namespace SailwindCoop.Sync
         private static void PlaceFuel(ShipItem item, StoveFuelTrigger target)
         {
             var proxy = item.GetItemRigidbody();
-            var collider = item.GetComponent<Collider>();
             if (target != null)
             {
                 Transform stove = target.transform.parent;
-                if (proxy != null && proxy.gameObject.activeSelf) proxy.gameObject.SetActive(false);
-                if (collider != null && collider.enabled) collider.enabled = false;
+                if (proxy != null)
+                {
+                    if (!proxy.inStove || proxy.gameObject.activeSelf)
+                    {
+                        proxy.inStove = true;
+                        var boatMass = item.currentActualBoat != null && item.currentActualBoat.parent != null
+                            ? item.currentActualBoat.parent.GetComponent<BoatMass>() : null;
+                        if (boatMass != null) boatMass.RemoveItem(proxy);
+                        if (proxy.gameObject.activeSelf) proxy.gameObject.SetActive(false);
+                    }
+                }
+                ItemSync.SetRootCollider(item, false);
                 item.forceDisableRedOutline = true;
                 if (item.transform.parent == stove) return;
                 item.transform.parent = stove;
@@ -269,8 +278,12 @@ namespace SailwindCoop.Sync
                 return;
             }
             if (!InStove(item)) return;
-            if (proxy != null) proxy.gameObject.SetActive(true);
-            if (collider != null) collider.enabled = true;
+            if (proxy != null)
+            {
+                proxy.inStove = false;
+                proxy.gameObject.SetActive(true);
+            }
+            ItemSync.SetRootCollider(item, true);
             item.forceDisableRedOutline = false;
             Transform home = item.currentActualBoat != null ? item.currentActualBoat
                 : FloatingOriginManager.instance != null ? FloatingOriginManager.instance.transform : null;

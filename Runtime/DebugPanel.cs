@@ -761,6 +761,7 @@ namespace SailwindCoop.Runtime
                 var item = go.GetComponent<ShipItem>();
                 if (item != null)
                 {
+                    SailwindCoop.Sync.ItemSync.DisableTemplateMeshCollider(item);
                     item.sold = true;                 // a fresh-spawned item is "owned", like crate contents
                     try { item.OnLoad(); }            // run the vanilla post-load init (crate inventory, value, …)
                     catch (Exception le) { Plugin.Logger.LogWarning("[DebugPanel] OnLoad '" + prefab.name + "': " + le.Message); }

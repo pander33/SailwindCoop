@@ -399,6 +399,26 @@ internal static class ItemReliabilityTests
             Assert(warehouseSell.Body.Instructions.Any(ins => ins.Operand is MethodReference m &&
                 m.Name == "NotifySold" && m.Parameters.Count == 4),
                 "PreWarehouseSellGood must pass ShipItem to NotifySold");
+
+            var simPatches = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemSimulationPatches");
+            var irbStart = Method(patches, "PostItemRigidbodyStart");
+            Assert(Calls(irbStart, "OnItemRigidbodyStart"), "PostItemRigidbodyStart must delegate to OnItemRigidbodyStart");
+            var onFishCatch = Method(items, "OnFishCatch");
+            Assert(Calls(onFishCatch, "DisableTemplateMeshCollider") &&
+                   Calls(onFishCatch, "EnterRemoteHeldVisual") &&
+                   Calls(onFishCatch, "EnsureBoatParentState"),
+                "OnFishCatch must disable template MeshCollider and author held/boat state immediately");
+            Assert(Calls(Method(items, "SpawnClientItem"), "DisableTemplateMeshCollider"),
+                "SpawnClientItem must disable template concave MeshCollider");
+            var createOp = Method(items, "CreateOperationItem");
+            Assert(Calls(createOp, "DisableTemplateMeshCollider") && Calls(createOp, "EnsureBoatParentState"),
+                "CreateOperationItem must disable template MeshCollider and parent boat-frame items");
+            var components = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemComponents");
+            Assert(Calls(Method(components, "PlaceFuel"), "SetRootCollider"),
+                "PlaceFuel must toggle all root colliders via ItemSync.SetRootCollider");
+            Assert(Methods(simPatches).Any(m => m.Name == "PreBoatMassUpdateMass") &&
+                   Methods(simPatches).Any(m => m.Name == "FinalBoatMassUpdateMass"),
+                "ItemSimulationPatches must guard BoatMass.UpdateMass");
         }
     }
 
