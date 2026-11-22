@@ -89,12 +89,14 @@ namespace SailwindCoop.Sync
             {
                 try
                 {
-                    if (!ReferenceEquals(sticky, clicked))
-                    {
-                        sticky.OnUnactivate();
-                        sticky.OnUnactivate(pointer);
-                    }
                     sticky.UnStickyClick();
+                    var coop = CoopBehaviour.Instance;
+                    bool frozen = coop?.HostPause?.Frozen == true;
+                    if (frozen || coop?.Knockdown?.Down == true)
+                    {
+                        if (frozen) coop.HostPause.RestoreControlWhenReady();
+                        Refs.SetPlayerControl(false);
+                    }
                 }
                 catch (Exception e) { Report(e); }
                 finally { StickyClickedButton.SetValue(pointer, null); }
@@ -152,7 +154,9 @@ namespace SailwindCoop.Sync
             try
             {
                 var coop = CoopBehaviour.Instance;
-                if (coop?.HostPause?.Frozen == true || coop?.Knockdown?.Down == true) return false;
+                if (coop?.HostPause?.Frozen == true ||
+                    (coop?.Knockdown?.Down == true && __instance != null && ControlsSync.WheelHeld(__instance)))
+                    return false;
                 if (__instance != null && !InteractionContext.Suppressed)
                 {
                     __state.Input = __instance.currentInput;

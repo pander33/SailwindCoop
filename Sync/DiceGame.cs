@@ -87,8 +87,10 @@ namespace SailwindCoop.Sync
 			}
 			else
 			{
-				if (Seat >= Seats.Count) Seat = 0;
-				if (FirstSeat >= Seats.Count) FirstSeat = 0;
+				if (index < FirstSeat) FirstSeat--;
+				else if (FirstSeat >= Seats.Count) FirstSeat = 0;
+				if (index < Seat) Seat--;
+				else if (Seat >= Seats.Count) Seat = 0;
 			}
 			return true;
 		}

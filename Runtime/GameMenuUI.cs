@@ -187,7 +187,10 @@ namespace SailwindCoop.Runtime
             catch (Exception error) { Report(error); }
         }
 
-        private static void Report(Exception error) => Plugin.Logger.LogWarning("[GameMenu] " + error);
+        private static void Report(Exception error)
+        {
+            try { Plugin.Logger?.LogWarning("[GameMenu] " + error); } catch { }
+        }
 
         private bool TakeMenuKey()
         {

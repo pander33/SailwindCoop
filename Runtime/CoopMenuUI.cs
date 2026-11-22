@@ -135,9 +135,11 @@ namespace SailwindCoop.Runtime
         private GUIStyle _lanName;
         private GUIStyle _lanCell;
         private GUIStyle _lanCellWarn;
+#if !THUNDERSTORE
         private GUIStyle _alertBox;
         private GUIStyle _alertTitle;
         private GUIStyle _alertText;
+#endif
         private Texture2D _backdropTex;
         private Texture2D _shadowTex;
         private Texture2D _windowTex;
@@ -253,16 +255,16 @@ namespace SailwindCoop.Runtime
         {
             EnsureStyles();
 
+#if !THUNDERSTORE
             // Snapshot once per layout pass: the banner adds controls to the window.
             if (Event.current.type == EventType.Layout)
             {
-#if !THUNDERSTORE
                 bool pending = _coop.Mods.RestartRequired;
                 if (pending && !_restartPending) _scroll = Vector2.zero; // the banner sits at the top
                 _restartPending = pending;
                 _restartMods = _coop.Mods.InstalledNames ?? "";
-#endif
             }
+#endif
 
             if (_visible)
             {
@@ -1530,6 +1532,7 @@ namespace SailwindCoop.Runtime
             _lanName = new GUIStyle(_lanCell) { fontSize = 15, normal = { textColor = Color.white } };
             _lanCellWarn = new GUIStyle(_lanCell) { normal = { textColor = new Color(1f, 0.84f, 0.42f) } };
 
+#if !THUNDERSTORE
             _alertBox = new GUIStyle(GUI.skin.box)
             {
                 normal = { background = MakeBg(new Color(0.46f, 0.30f, 0.04f, 0.97f)) },
@@ -1548,6 +1551,7 @@ namespace SailwindCoop.Runtime
                 wordWrap = true,
                 normal = { textColor = Color.white }
             };
+#endif
         }
 
         private GUIStyle Pill(Color background, Color text)
