@@ -267,18 +267,18 @@ namespace SailwindCoop.Net
             }
         }
 
-        public bool DisconnectPlayer(uint netId, string reason)
+        public bool DisconnectPlayer(uint netId, string reason, bool kicked = true)
         {
             if (Role != Role.Host || netId == NetRegistry.HostPlayerNetId) return false;
             foreach (PeerSession session in _sessions.Values)
             {
                 if (!session.HandshakeDone || session.PlayerNetId != netId || session.Peer == null) continue;
                 var msg = new DisconnectMsg { Reason = string.IsNullOrEmpty(reason) ? "Removed by host" : reason };
-                session.Kicked = true;
+                session.Kicked = kicked;
                 session.Peer.Send(msg, DeliveryMethod.ReliableOrdered);
                 session.Peer.Disconnect(Protocol.Write(msg));
                 // A removed Steam player stays out until the host starts a new session.
-                if (session.SteamId != 0UL) SteamLink.Block(session.SteamId);
+                if (kicked && session.SteamId != 0UL) SteamLink.Block(session.SteamId);
                 return true;
             }
             return false;
@@ -399,6 +399,7 @@ namespace SailwindCoop.Net
             if (OverSteam) _net.DisconnectTimeout = Math.Max(_net.DisconnectTimeout, SteamDisconnectTimeoutMs);
             if (!_net.Start())
             {
+                Stop();
                 State = LinkState.Failed;
                 LastError = "Failed to start network manager";
                 _log("[CoopNet] " + LastError);
