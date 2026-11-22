@@ -17,10 +17,18 @@ namespace SailwindCoop
     [BepInDependency(Sync.SailDamageCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(Sync.FurstMateCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(Sync.PostalExpansionCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.FreeCamCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.KemyFurnitureCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.BetterTablesCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.RadRefinementsCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.BetterStovesCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.BoatColorsCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.TentandPlankCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.SailorsKeepsakesCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
-        public const string Version = "0.10.0";
+        public const string Version = "0.11.0";
         /// <summary>Which of the two builds this is; see the Edition property in SailwindCoop.csproj.</summary>
 #if THUNDERSTORE
         public const string Edition = "Thunderstore";

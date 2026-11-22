@@ -350,6 +350,18 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Sail Damage", () => { SailDamageCompat.Init(); SailDamageCompat.ApplyPatches(_harmony); }, patchFault);
             PatchHealth.Install("FurstMate", () => { FurstMateCompat.Init(); FurstMateCompat.ApplyPatches(_harmony); }, patchFault);
             PatchHealth.Install("Postal Expansion", () => { PostalExpansionCompat.Init(); PostalExpansionCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("FreeCam", () => { FreeCamCompat.Init(); }, patchFault);
+            PatchHealth.Install("KemyFurniture", () => { KemyFurnitureCompat.Init(); KemyFurnitureCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("BetterTables", () => { BetterTablesCompat.Init(); BetterTablesCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("RadRefinements", () => { RadRefinementsCompat.Init(); RadRefinementsCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("BetterStoves", () => { BetterStovesCompat.Init(); BetterStovesCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("BoatColors", () => { BoatColorsCompat.Init(); BoatColorsCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("TentandPlank", () => { TentandPlankCompat.Init(); TentandPlankCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("SailorsKeepsakes", () => { SailorsKeepsakesCompat.Init(); SailorsKeepsakesCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("PlayerHome", () => { PlayerHomeCompat.Init(); PlayerHomeCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("BetterNpcBoats", () => { BetterNpcBoatsCompat.Init(); BetterNpcBoatsCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("RandomEncounters", () => { RandomEncountersCompat.Init(); RandomEncountersCompat.ApplyPatches(_harmony); }, patchFault);
+            PatchHealth.Install("HMS Leopard", () => { LeopardCompat.Init(); LeopardCompat.ApplyPatches(_harmony); }, patchFault);
             PatchHealth.Install("Recovery", () => RecoveryPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Missions", () => MissionPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Shipyard", () => ShipyardPatches.Apply(_harmony), patchFault);
@@ -411,6 +423,7 @@ namespace SailwindCoop.Runtime
                 Sleep.ClearRemoteActor(netId);
                 Wallet.ClearRemoteActor(netId);
                 BoatAuthority.Instance?.ClearActor(netId);
+                LeopardCompat.ClearRemoteActor(netId);
                 Mods.ClearRemoteActor(netId);
                 Pause.Release(netId);
             };
@@ -546,6 +559,11 @@ namespace SailwindCoop.Runtime
                 new SyncStep("HooksHangMore.Tick", HooksHangMoreCompat.Tick),
                 new SyncStep("SailDamage.Tick", SailDamageCompat.Tick),
                 new SyncStep("FurstMate.Tick", FurstMateCompat.Tick),
+                new SyncStep("BetterStoves.Tick", BetterStovesCompat.Tick),
+                new SyncStep("TentandPlank.Tick", TentandPlankCompat.Tick),
+                new SyncStep("PlayerHome.Tick", PlayerHomeCompat.Tick),
+                new SyncStep("BetterNpcBoats.Tick", () => BetterNpcBoatsCompat.Tick(_dt)),
+                new SyncStep("RandomEncounters.Tick", RandomEncountersCompat.Tick),
                 new SyncStep("Charts.Tick", () => Charts.Tick(_dt)),
                 new SyncStep("Dirt.Tick", () => Dirt.Tick(_dt)),
                 new SyncStep("WindTotem.Tick", () => WindTotem.Tick(_dt)),
@@ -838,6 +856,22 @@ namespace SailwindCoop.Runtime
                     PostalExpansionCompat.OnBoardRequest((PostalBoardRequestMsg)msg, fromPeer); break;
                 case MsgType.PostalBoard:
                     PostalExpansionCompat.OnBoard((PostalBoardMsg)msg); break;
+                case MsgType.SoupMugState:
+                    BetterStovesCompat.OnRemote((SoupMugStateMsg)msg, fromPeer); break;
+                case MsgType.BoatColorState:
+                    BoatColorsCompat.OnRemote((BoatColorStateMsg)msg, fromPeer); break;
+                case MsgType.TarpState:
+                    TentandPlankCompat.OnRemote((TarpStateMsg)msg, fromPeer); break;
+                case MsgType.KeepsakeState:
+                    SailorsKeepsakesCompat.OnRemote((KeepsakeStateMsg)msg, fromPeer); break;
+                case MsgType.PlayerHomeState:
+                    PlayerHomeCompat.OnRemote((PlayerHomeStateMsg)msg, fromPeer); break;
+                case MsgType.FishingBoatState:
+                    BetterNpcBoatsCompat.OnRemote((FishingBoatStateMsg)msg); break;
+                case MsgType.EncounterState:
+                    RandomEncountersCompat.OnRemote((EncounterStateMsg)msg); break;
+                case MsgType.LeopardState:
+                    LeopardCompat.OnRemote((LeopardStateMsg)msg, fromPeer); break;
                 case MsgType.DiceRequest:
                 case MsgType.DiceState:
                 case MsgType.DiceResult:
@@ -1095,6 +1129,13 @@ namespace SailwindCoop.Runtime
                             HooksHangMoreCompat.ResyncTo(fromPeer);
                             SailDamageCompat.ResyncTo(fromPeer);
                             FurstMateCompat.ResyncTo(fromPeer);
+                            BetterStovesCompat.ResyncTo(fromPeer);
+                            BoatColorsCompat.ResyncTo(fromPeer);
+                            TentandPlankCompat.ResyncTo(fromPeer);
+                            SailorsKeepsakesCompat.ResyncTo(fromPeer);
+                            PlayerHomeCompat.ResyncTo(fromPeer);
+                            RandomEncountersCompat.ResyncTo(fromPeer);
+                            LeopardCompat.ResyncTo(fromPeer);
                             Interactions.SendInitialHatches(fromPeer);
                             Sleep.SendBaseline(fromPeer);
                             Missions.SendBaseline(fromPeer);
@@ -2052,6 +2093,15 @@ namespace SailwindCoop.Runtime
             SailDamageCompat.Reset();
             FurstMateCompat.Reset();
             PostalExpansionCompat.Reset();
+            BetterTablesCompat.Reset();
+            BetterStovesCompat.Reset();
+            BoatColorsCompat.Reset();
+            TentandPlankCompat.Reset();
+            SailorsKeepsakesCompat.Reset();
+            PlayerHomeCompat.Reset();
+            BetterNpcBoatsCompat.Reset();
+            RandomEncountersCompat.Reset();
+            LeopardCompat.Reset();
             Sleep.Clear();
             OriginCatchUp.ForgetHostOffset();
             Shop.Clear();

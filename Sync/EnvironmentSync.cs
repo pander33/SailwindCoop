@@ -113,8 +113,29 @@ namespace SailwindCoop.Sync
             var sun = Sun.sun;
             if (sun != null)
             {
-                msg.GlobalTime = sun.globalTime;
-                msg.LocalTime = sun.localTime;
+                if (FreeCamCompat.IsPhotoModeOpen && _hasNormalSunTime)
+                {
+                    // Photo Mode may scrub the host's sun; keep the crew's clock (and day) running at the last
+                    // observed rate instead of freezing it until the host closes Photo Mode.
+                    PhotoModeClock.Extrapolate(_lastNormalDay, _lastNormalGlobalTime, _lastNormalLocalTime, _sunRate,
+                        Time.time - _lastNormalStamp, out int day, out float global, out float local);
+                    msg.Day = day;
+                    msg.GlobalTime = global;
+                    msg.LocalTime = local;
+                }
+                else
+                {
+                    msg.GlobalTime = sun.globalTime;
+                    msg.LocalTime = sun.localTime;
+                    float now = Time.time;
+                    if (_hasNormalSunTime && PhotoModeClock.SampleRate(_lastNormalGlobalTime, sun.globalTime, now - _lastNormalStamp, out float rate))
+                        _sunRate = _sunRate <= 0f ? rate : Mathf.Lerp(_sunRate, rate, 0.3f);
+                    _lastNormalDay = GameState.day;
+                    _lastNormalGlobalTime = sun.globalTime;
+                    _lastNormalLocalTime = sun.localTime;
+                    _lastNormalStamp = now;
+                    _hasNormalSunTime = true;
+                }
                 msg.Timescale = sun.timescale;
             }
 
@@ -142,6 +163,10 @@ namespace SailwindCoop.Sync
 
             _net.Broadcast(msg, LiteNetLib.DeliveryMethod.Unreliable);
         }
+
+        private float _lastNormalGlobalTime, _lastNormalLocalTime, _lastNormalStamp, _sunRate;
+        private int _lastNormalDay;
+        private bool _hasNormalSunTime;
 
         private WavesInertia FindWaves()
         {
@@ -183,8 +208,11 @@ namespace SailwindCoop.Sync
             var sun = Sun.sun;
             if (sun != null)
             {
-                sun.globalTime = msg.GlobalTime;
-                sun.localTime = msg.LocalTime;
+                if (!FreeCamCompat.IsPhotoModeOpen)
+                {
+                    sun.globalTime = msg.GlobalTime;
+                    sun.localTime = msg.LocalTime;
+                }
                 sun.timescale = msg.Timescale;
             }
             GameState.day = msg.Day;
@@ -251,6 +279,8 @@ namespace SailwindCoop.Sync
             _scaledSinceSend = _realSinceSend = 0f;
             _haveWindTarget = false;
             _windT = 1f;
+            _hasNormalSunTime = false;
+            _sunRate = 0f;
 
             // Снимок хоста больше не действителен. Без сброса сессия, оборвавшаяся на паузе хоста,
             // оставила бы HostTimeScale = 0 навсегда: следующий клиент был бы заморожен

@@ -1,6 +1,6 @@
 # Runtime reference
 
-Current implementation: plugin 0.10.0, Protocol 113, Sailwind 0.40 / 0.40.1.
+Current implementation: plugin 0.11.0, Protocol 115, Sailwind 0.40 / 0.40.1.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
 Protocol numbers within subsystem descriptions identify when a feature was introduced.

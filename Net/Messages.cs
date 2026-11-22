@@ -135,6 +135,14 @@ namespace SailwindCoop.Net
         TradeSaleReceipt = 139,
         PauseRequest = 140,
         PauseState = 141,
+        SoupMugState = 142,     // BetterStoves SoupMug nutrition/heat/spoil on a mug (ShipItemBottle)
+        BoatColorState = 143,   // BoatColors live hull/roof/trim color update
+        TarpState = 144,        // TentandPlank live tarp/tent snapshot
+        KeepsakeState = 145,    // Sailor's Keepsakes racks/stands, Mjolnir storm relay, incense smoke
+        PlayerHomeState = 146,  // PlayerHome owned home/tavern ids (baseline & live claims)
+        FishingBoatState = 147, // BetterNPCBoats pooled fishing boat poses & visual flags
+        EncounterState = 148,   // RandomEncounters host-driven fog, fishing bonanza, storm params, wreckage & whales
+        LeopardState = 149,     // HMS Leopard bell, gunports, cannons/carriages, cutter launch/hoist & rowing
     }
 
     /// <summary>Which shop transaction a <see cref="ShopRequestMsg"/> asks the host to perform.</summary>

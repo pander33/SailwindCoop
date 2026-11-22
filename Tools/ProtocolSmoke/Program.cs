@@ -233,6 +233,7 @@ namespace ProtocolSmoke
         private static object Sample(Type type)
         {
             if (type == typeof(byte)) return (byte)193;
+            if (type == typeof(sbyte)) return (sbyte)2;
             if (type == typeof(int)) return 123456;
             if (type == typeof(ushort)) return (ushort)65534;
             if (type == typeof(uint)) return 0xFEDCBA98u;
@@ -250,7 +251,7 @@ namespace ProtocolSmoke
                 for (int i = 0; i < 2; i++) array.SetValue(Sample(type.GetElementType()), i);
                 return array;
             }
-            if (type == typeof(ItemDetails) || type == typeof(CreatedItemState) || type == typeof(ControlEpoch) || type == typeof(ChartMark) || type == typeof(NetSailConfiguration) || typeof(INetMessage).IsAssignableFrom(type))
+            if (type == typeof(ItemDetails) || type == typeof(CreatedItemState) || type == typeof(ControlEpoch) || type == typeof(ChartMark) || type == typeof(NetSailConfiguration) || type == typeof(FishingBoatEntry) || typeof(INetMessage).IsAssignableFrom(type))
             {
                 var value = Activator.CreateInstance(type);
                 foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(value, Sample(field.FieldType));

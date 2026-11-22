@@ -484,7 +484,8 @@ namespace SailwindCoop.Sync
                 Rigidbody body = parent != null ? parent.GetComponent<Rigidbody>() : null;
                 if (body == null || body.isKinematic) return;
                 var boats = Runtime.CoopBehaviour.Instance?.Boats;
-                if (boats != null && boats.DrivesBody(body)) body.isKinematic = true;
+                if ((boats != null && boats.DrivesBody(body)) || BetterNpcBoatsCompat.IsSlaved(parent))
+                    body.isKinematic = true;
             }
             catch (Exception e)
             {
@@ -501,7 +502,7 @@ namespace SailwindCoop.Sync
                 // BoatHorizon висит на дочернем объекте: корпус с Rigidbody — его родитель.
                 Transform body = __instance.transform.parent;
                 var sync = NpcBoatSync.Instance;
-                if (sync != null && sync.IsSlaved(body)) return false;
+                if ((sync != null && sync.IsSlaved(body)) || BetterNpcBoatsCompat.IsSlaved(body)) return false;
                 // Лодка игроков у клиента: её тело ведёт BoatSync, кинематика — его.
                 var boats = Runtime.CoopBehaviour.Instance?.Boats;
                 return boats == null || body == null || !boats.DrivesBody(body.GetComponent<Rigidbody>());

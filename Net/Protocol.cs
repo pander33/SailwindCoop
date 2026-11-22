@@ -31,7 +31,10 @@ namespace SailwindCoop.Net
         // 111: recoverable Economy Overhaul sales and empty office snapshots.
         // 112: AnchorState carries the host's RopeControllerAnchor.canPull.
         // 113: explicit world pause and environment snapshots ordered against pause transitions.
-        public const int Version = 113;
+        // 114: widened ModFeatures (ushort) and mod compatibility sync (BetterStoves SoupMug,
+        // BoatColors live paint, TentandPlank tarps, Sailor's Keepsakes racks/storm/incense).
+        // 115: PlayerHome ownership, BetterNPCBoats fishing boats, RandomEncounters, and HMS Leopard.
+        public const int Version = 115;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
@@ -163,6 +166,14 @@ namespace SailwindCoop.Net
                 case MsgType.PostalBoard: return new PostalBoardMsg();
                 case MsgType.TradeSale: return new TradeSaleMsg();
                 case MsgType.TradeSaleReceipt: return new TradeSaleReceiptMsg();
+                case MsgType.SoupMugState: return new SoupMugStateMsg();
+                case MsgType.BoatColorState: return new BoatColorStateMsg();
+                case MsgType.TarpState: return new TarpStateMsg();
+                case MsgType.KeepsakeState: return new KeepsakeStateMsg();
+                case MsgType.PlayerHomeState: return new PlayerHomeStateMsg();
+                case MsgType.FishingBoatState: return new FishingBoatStateMsg();
+                case MsgType.EncounterState: return new EncounterStateMsg();
+                case MsgType.LeopardState: return new LeopardStateMsg();
                 case MsgType.ShopTaken: return new ShopTakenMsg();
                 case MsgType.ForageTaken: return new ForageTakenMsg();
                 case MsgType.BeltState: return new BeltStateMsg();

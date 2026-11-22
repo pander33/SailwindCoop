@@ -851,6 +851,7 @@ internal static class Program
             });
             PlayerPlaybackTests.Run(Test, Assert);
             SupportHistoryTests.Run(Test, Assert);
+            ModCompatTests.Run(Test, Assert);
             HandoffProductionTests.Run(Test, Assert, GameAssemblyPath());
             Test("pump visual smooths packet bursts and plays exactly the received rotation", () => {
                 var motion = new PumpVisualMotion();

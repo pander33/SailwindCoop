@@ -62,7 +62,8 @@ namespace SailwindCoop.Sync
                 else if (GameState.playing && !GameState.currentlyLoading && !GameState.inCursorMenu &&
                          GameState.inBed == null && !GameState.recovering && !GameState.sleeping &&
                          SleepSync.Instance?.ClientAsleep != true &&
-                         CoopBehaviour.Instance?.Knockdown?.Down != true)
+                         CoopBehaviour.Instance?.Knockdown?.Down != true &&
+                         !FreeCamCompat.IsFreeCameraOn)
                 {
                     Refs.SetPlayerControl(true);
                     _restoreControl = false;

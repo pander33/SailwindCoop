@@ -298,6 +298,7 @@ namespace SailwindCoop.Sync
             }
         }
 
+        [HarmonyPriority(Priority.Last)]
         private static void PostOarAltHeld(ShipItemOar __instance)
         {
             try

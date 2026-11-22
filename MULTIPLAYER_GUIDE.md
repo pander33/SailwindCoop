@@ -4,7 +4,7 @@ This guide explains how co-op gameplay works for actions that behave differently
 
 The short rule is: the host owns the world, while each player keeps their own character progress where possible.
 
-Every machine needs a build with the same protocol number. The current build (0.10.0) uses **protocol 113** and supports Sailwind 0.40 and 0.40.1.
+Every machine needs a build with the same protocol number. The current build (0.11.0) uses **protocol 115** and supports Sailwind 0.40 and 0.40.1.
 Earlier releases use different protocols. Some features still await end-to-end in-game verification.
 
 <!--full-->
@@ -14,7 +14,7 @@ The mod comes in two editions that use the same protocol and can play together. 
 edition** (<https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>) plays over LAN, VPN or Steam and
 compares mods when joining. The **full edition** adds
 downloading missing mods from the host. The title of the status overlay shows the edition,
-for example `Sailwind Co-op 0.10.0 (Thunderstore)`. Sections below that apply to one edition say so.
+for example `Sailwind Co-op 0.11.0 (Thunderstore)`. Sections below that apply to one edition say so.
 
 <!--/full-->
 
@@ -379,6 +379,8 @@ guest types the host's IP address. Steam mode needs no IP address, port forwardi
   need Steam at all.
 
 ## Other Mods
+
+See [MOD_COMPATIBILITY.md](MOD_COMPATIBILITY.md) for the full list of mods with dedicated co-op integration and mods reviewed as compatible out of the box.
 
 Right after connecting, and before the world is sent, the host tells the joining player which other
 BepInEx mods it runs. Nothing happens when both sides have the same ones.

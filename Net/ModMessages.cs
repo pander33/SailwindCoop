@@ -137,7 +137,7 @@ namespace SailwindCoop.Net
     }
 
     [Flags]
-    public enum ModFeatures : byte
+    public enum ModFeatures : ushort
     {
         None = 0,
         EconomyOverhaul = 1,
@@ -148,6 +148,14 @@ namespace SailwindCoop.Net
         FurstMate = 32,
         PostalExpansion = 64,
         EconomyTradeSales = 128,
+        BetterStoves = 256,
+        BoatColors = 512,
+        TentandPlank = 1024,
+        SailorsKeepsakes = 2048,
+        PlayerHome = 4096,
+        BetterNpcBoats = 8192,
+        RandomEncounters = 16384,
+        Leopard = 32768,
     }
 
     public sealed class TradeSaleMsg : INetMessage
@@ -243,7 +251,7 @@ namespace SailwindCoop.Net
                 w.Put(Clip(setting.Key));
                 w.Put(Clip(setting.Value));
             }
-            w.Put((byte)Features);
+            w.Put((ushort)Features);
         }
 
         public void Deserialize(NetDataReader r)
@@ -294,7 +302,7 @@ namespace SailwindCoop.Net
                     Key = r.GetString(ModLimits.MaxTextChars),
                     Value = r.GetString(ModLimits.MaxTextChars),
                 };
-            Features = (ModFeatures)r.GetByte();
+            Features = (ModFeatures)r.GetUShort();
         }
 
         private static string Clip(string text)
@@ -323,8 +331,8 @@ namespace SailwindCoop.Net
 
         public MsgType Type => MsgType.ModSyncResult;
 
-        public void Serialize(NetDataWriter w) { w.Put((byte)Decision); w.Put(Missing); w.Put(Different); w.Put((byte)Features); }
-        public void Deserialize(NetDataReader r) { Decision = (ModSyncDecision)r.GetByte(); Missing = r.GetByte(); Different = r.GetByte(); Features = (ModFeatures)r.GetByte(); }
+        public void Serialize(NetDataWriter w) { w.Put((byte)Decision); w.Put(Missing); w.Put(Different); w.Put((ushort)Features); }
+        public void Deserialize(NetDataReader r) { Decision = (ModSyncDecision)r.GetByte(); Missing = r.GetByte(); Different = r.GetByte(); Features = (ModFeatures)r.GetUShort(); }
     }
 
 #if !THUNDERSTORE
@@ -381,4 +389,325 @@ namespace SailwindCoop.Net
         public void Deserialize(NetDataReader r) { Mod = r.GetUShort(); File = r.GetUShort(); Ok = r.GetBool(); }
     }
 #endif
+
+    /// <summary>BetterStoves SoupMug payload for a mug (<see cref="ShipItemBottle"/>, amount == 16).</summary>
+    public sealed class SoupMugStateMsg : INetMessage
+    {
+        public int InstanceId;
+        public float FoodPerUnit;
+        public float VitPerUnit;
+        public float ProtPerUnit;
+        public float Heat;
+        public float Spoil;
+
+        public MsgType Type => MsgType.SoupMugState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(InstanceId);
+            w.Put(FoodPerUnit);
+            w.Put(VitPerUnit);
+            w.Put(ProtPerUnit);
+            w.Put(Heat);
+            w.Put(Spoil);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            InstanceId = r.GetInt();
+            FoodPerUnit = r.GetFloat();
+            VitPerUnit = r.GetFloat();
+            ProtPerUnit = r.GetFloat();
+            Heat = r.GetFloat();
+            Spoil = r.GetFloat();
+        }
+    }
+
+    /// <summary>BoatColors live hull/roof/trim color change.</summary>
+    public sealed class BoatColorStateMsg : INetMessage
+    {
+        public string Key = "";
+        public float R, G, B, A = 1f;
+
+        public MsgType Type => MsgType.BoatColorState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Key ?? "");
+            w.Put(R); w.Put(G); w.Put(B); w.Put(A);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Key = r.GetString(128);
+            R = r.GetFloat(); G = r.GetFloat(); B = r.GetFloat(); A = r.GetFloat();
+        }
+    }
+
+    /// <summary>TentandPlank live tarp snapshot: tarp records only (no cargo/save stamp), encoded by TentandPlank's own StateCodec.</summary>
+    public sealed class TarpStateMsg : INetMessage
+    {
+        /// <summary>UTF-8 byte cap; LiteNetLib strings must stay below 65535 bytes. Senders skip larger
+        /// snapshots (a cut JSON document would be unreadable), and Serialize never truncates.</summary>
+        public const int MaxPayloadBytes = 60000;
+        public string Payload = "";
+
+        public MsgType Type => MsgType.TarpState;
+
+        public static bool Fits(string payload) =>
+            payload == null || System.Text.Encoding.UTF8.GetByteCount(payload) <= MaxPayloadBytes;
+
+        public void Serialize(NetDataWriter w)
+        {
+            string s = Payload ?? "";
+            w.Put(Fits(s) ? s : "");
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Payload = r.GetString(MaxPayloadBytes);
+        }
+    }
+
+    public enum KeepsakeKind : byte
+    {
+        RackAttach = 0,
+        RackDetach = 1,
+        IncenseToggle = 2,
+        MjolnirStorm = 3,
+        TreasureTaken = 4,
+    }
+
+    /// <summary>Sailor's Keepsakes (AdornosMod) racks/stands, incense smoke toggle, and Mjolnir storm relay.</summary>
+    public sealed class KeepsakeStateMsg : INetMessage
+    {
+        public KeepsakeKind Kind;
+        public int HolderInstanceId;
+        public int ItemInstanceId;
+        public sbyte Slot;
+        public bool Flag;
+        /// <summary>MjolnirStorm: the summoner's real-space camera position. TreasureTaken: the treasure's
+        /// real-space position (ItemInstanceId carries its prefab index).</summary>
+        public float X, Y, Z;
+
+        public MsgType Type => MsgType.KeepsakeState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(HolderInstanceId);
+            w.Put(ItemInstanceId);
+            w.Put(Slot);
+            w.Put(Flag);
+            w.Put(X);
+            w.Put(Y);
+            w.Put(Z);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (KeepsakeKind)r.GetByte();
+            HolderInstanceId = r.GetInt();
+            ItemInstanceId = r.GetInt();
+            Slot = r.GetSByte();
+            Flag = r.GetBool();
+            X = r.GetFloat();
+            Y = r.GetFloat();
+            Z = r.GetFloat();
+        }
+    }
+
+    /// <summary>PlayerHome owned home/tavern ids (baseline or live claim delta).</summary>
+    public sealed class PlayerHomeStateMsg : INetMessage
+    {
+        public const int MaxIds = 256;
+        public bool ReplaceAll;
+        public string[] OwnedIds = Array.Empty<string>();
+
+        public MsgType Type => MsgType.PlayerHomeState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(ReplaceAll);
+            int count = OwnedIds != null ? Math.Min(OwnedIds.Length, MaxIds) : 0;
+            w.Put((ushort)count);
+            for (int i = 0; i < count; i++) w.Put(OwnedIds[i] ?? "");
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            ReplaceAll = r.GetBool();
+            if (r.AvailableBytes < sizeof(ushort))
+                throw new InvalidDataException("Truncated player home id count");
+            int count = r.GetUShort();
+            if (count > MaxIds || count * sizeof(ushort) > r.AvailableBytes)
+                throw new InvalidDataException("Invalid player home id count");
+            OwnedIds = count == 0 ? Array.Empty<string>() : new string[count];
+            for (int i = 0; i < count; i++) OwnedIds[i] = r.GetString(128);
+        }
+    }
+
+    public sealed class FishingBoatEntry
+    {
+        public ushort SceneIndex;
+        public byte SlotIndex;
+        public UnityEngine.Vector3 RealPos;
+        public UnityEngine.Quaternion Rot = UnityEngine.Quaternion.identity;
+        public UnityEngine.Vector3 RealVel;
+        public byte Flags;
+    }
+
+    /// <summary>BetterNPCBoats host -> client batched fishing boat poses and visual state flags.</summary>
+    public sealed class FishingBoatStateMsg : INetMessage
+    {
+        public const int MaxBoats = 64;
+        private const int EntryBytes = sizeof(ushort) + sizeof(byte) + 10 * sizeof(float) + sizeof(byte);
+        public long Tick;
+        public FishingBoatEntry[] Boats = Array.Empty<FishingBoatEntry>();
+
+        public MsgType Type => MsgType.FishingBoatState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Tick);
+            int count = Boats != null ? Math.Min(Boats.Length, MaxBoats) : 0;
+            w.Put((byte)count);
+            for (int i = 0; i < count; i++)
+            {
+                var b = Boats[i] ?? new FishingBoatEntry();
+                w.Put(b.SceneIndex);
+                w.Put(b.SlotIndex);
+                w.Put(b.RealPos.x); w.Put(b.RealPos.y); w.Put(b.RealPos.z);
+                w.Put(b.Rot.x); w.Put(b.Rot.y); w.Put(b.Rot.z); w.Put(b.Rot.w);
+                w.Put(b.RealVel.x); w.Put(b.RealVel.y); w.Put(b.RealVel.z);
+                w.Put(b.Flags);
+            }
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Tick = r.GetLong();
+            if (r.AvailableBytes < sizeof(byte))
+                throw new InvalidDataException("Truncated fishing boat count");
+            int count = r.GetByte();
+            if (count > MaxBoats || count * EntryBytes > r.AvailableBytes)
+                throw new InvalidDataException("Invalid fishing boat count");
+            Boats = count == 0 ? Array.Empty<FishingBoatEntry>() : new FishingBoatEntry[count];
+            for (int i = 0; i < count; i++)
+            {
+                Boats[i] = new FishingBoatEntry
+                {
+                    SceneIndex = r.GetUShort(),
+                    SlotIndex = r.GetByte(),
+                    RealPos = new UnityEngine.Vector3(r.GetFloat(), r.GetFloat(), r.GetFloat()),
+                    Rot = new UnityEngine.Quaternion(r.GetFloat(), r.GetFloat(), r.GetFloat(), r.GetFloat()),
+                    RealVel = new UnityEngine.Vector3(r.GetFloat(), r.GetFloat(), r.GetFloat()),
+                    Flags = r.GetByte(),
+                };
+            }
+        }
+    }
+
+    public enum EncounterSyncKind : byte
+    {
+        ClearAll = 0,
+        DenseFog = 1,
+        FishingBonanza = 2,
+        IntenseStorm = 3,
+        WreckageSpawn = 4,
+        WhaleSpawn = 5,
+    }
+
+    /// <summary>RandomEncounters host -> client synchronized encounter effects, wreckage and whales.</summary>
+    public sealed class EncounterStateMsg : INetMessage
+    {
+        public EncounterSyncKind Kind;
+        public bool Flag;
+        public bool Flag2;
+        public byte Index;
+        public int IntArg;
+        public float FloatArg;
+        public float X, Y, Z;
+        public float Rx, Ry, Rz, Rw = 1f;
+
+        public MsgType Type => MsgType.EncounterState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(Flag);
+            w.Put(Flag2);
+            w.Put(Index);
+            w.Put(IntArg);
+            w.Put(FloatArg);
+            w.Put(X); w.Put(Y); w.Put(Z);
+            w.Put(Rx); w.Put(Ry); w.Put(Rz); w.Put(Rw);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (EncounterSyncKind)r.GetByte();
+            Flag = r.GetBool();
+            Flag2 = r.GetBool();
+            Index = r.GetByte();
+            IntArg = r.GetInt();
+            FloatArg = r.GetFloat();
+            X = r.GetFloat(); Y = r.GetFloat(); Z = r.GetFloat();
+            Rx = r.GetFloat(); Ry = r.GetFloat(); Rz = r.GetFloat(); Rw = r.GetFloat();
+        }
+    }
+
+    public enum LeopardEventKind : byte
+    {
+        Bell = 0,
+        GunportToggle = 1,
+        GunportState = 2,
+        CarriageReq = 3,
+        CarriageMove = 4,
+        CannonFireReq = 5,
+        CannonFireAllReq = 6,
+        CannonFired = 7,
+        CutterLaunchReq = 8,
+        CutterHoistReq = 9,
+        CutterState = 10,
+        OarInput = 11,
+        OarState = 12,
+        Snapshot = 13,
+    }
+
+    /// <summary>HMS Leopard interactive controls, cutter launch/hoist/rowing, and late-join snapshot.</summary>
+    public sealed class LeopardStateMsg : INetMessage
+    {
+        public LeopardEventKind Kind;
+        public byte Index;
+        public bool Flag;
+        public byte Extra;
+        public ulong ReadyMask;
+        public float X, Y, Z;
+        public float Rx, Ry, Rz, Rw = 1f;
+
+        public MsgType Type => MsgType.LeopardState;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put((byte)Kind);
+            w.Put(Index);
+            w.Put(Flag);
+            w.Put(Extra);
+            w.Put(ReadyMask);
+            w.Put(X); w.Put(Y); w.Put(Z);
+            w.Put(Rx); w.Put(Ry); w.Put(Rz); w.Put(Rw);
+        }
+
+        public void Deserialize(NetDataReader r)
+        {
+            Kind = (LeopardEventKind)r.GetByte();
+            Index = r.GetByte();
+            Flag = r.GetBool();
+            Extra = r.GetByte();
+            ReadyMask = r.GetULong();
+            X = r.GetFloat(); Y = r.GetFloat(); Z = r.GetFloat();
+            Rx = r.GetFloat(); Ry = r.GetFloat(); Rz = r.GetFloat(); Rw = r.GetFloat();
+        }
+    }
 }

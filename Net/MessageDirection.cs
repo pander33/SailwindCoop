@@ -107,6 +107,8 @@ namespace SailwindCoop.Net
                 case MsgType.DiceJournal:
                 case MsgType.PetState:
                 case MsgType.PostalBoard:
+                case MsgType.FishingBoatState:
+                case MsgType.EncounterState:
                     return MsgFlow.ToClient;
 
                 // Relayed by the host to the other clients, or genuinely sent by either side.
@@ -128,6 +130,12 @@ namespace SailwindCoop.Net
                 case MsgType.CrewNote:
                 case MsgType.HookAttachment:
                 case MsgType.SailDamage:
+                case MsgType.SoupMugState:
+                case MsgType.BoatColorState:
+                case MsgType.TarpState:
+                case MsgType.KeepsakeState:
+                case MsgType.PlayerHomeState:
+                case MsgType.LeopardState:
                     return MsgFlow.Both;
 
                 default:

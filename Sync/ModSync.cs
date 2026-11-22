@@ -458,7 +458,15 @@ namespace SailwindCoop.Sync
             (HooksHangMoreCompat.SyncEnabled ? ModFeatures.HooksHangMore : ModFeatures.None) |
             (SailDamageCompat.SyncEnabled ? ModFeatures.SailDamage : ModFeatures.None) |
             (FurstMateCompat.SyncEnabled ? ModFeatures.FurstMate : ModFeatures.None) |
-            (PostalExpansionCompat.SyncEnabled ? ModFeatures.PostalExpansion : ModFeatures.None);
+            (PostalExpansionCompat.SyncEnabled ? ModFeatures.PostalExpansion : ModFeatures.None) |
+            (BetterStovesCompat.SyncEnabled ? ModFeatures.BetterStoves : ModFeatures.None) |
+            (BoatColorsCompat.SyncEnabled ? ModFeatures.BoatColors : ModFeatures.None) |
+            (TentandPlankCompat.SyncEnabled ? ModFeatures.TentandPlank : ModFeatures.None) |
+            (SailorsKeepsakesCompat.SyncEnabled ? ModFeatures.SailorsKeepsakes : ModFeatures.None) |
+            (PlayerHomeCompat.SyncEnabled ? ModFeatures.PlayerHome : ModFeatures.None) |
+            (BetterNpcBoatsCompat.SyncEnabled ? ModFeatures.BetterNpcBoats : ModFeatures.None) |
+            (RandomEncountersCompat.SyncEnabled ? ModFeatures.RandomEncounters : ModFeatures.None) |
+            (LeopardCompat.SyncEnabled ? ModFeatures.Leopard : ModFeatures.None);
 
         private static bool HasPlugin(List<LoadedPlugin> plugins, string guid)
         {

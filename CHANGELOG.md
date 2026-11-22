@@ -2,6 +2,43 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.11.0] - 2026-11-22
+
+Everyone must update to wire protocol 115. Requires Sailwind 0.40 or 0.40.1.
+
+### Co-op and mod compatibility
+
+- **Player Home:** home/tavern ownership syncs on join and live claims; host owns sidecar saves and item restore (items replicate via `ItemSync`), and 8 claiming/radii settings are checked at join.
+- **BetterNPCBoats:** host simulates the 30 pooled regional fishing boats and streams poses, lanterns, crew visibility and sail animation to guests.
+- **RandomEncounters:** host drives encounter generation; guests receive synchronized Dense Fog, Fishing Bonanza (seagulls + catch boost), Intense Storm wave/lightning/rain overrides, asset-bundle wreckage and SeaLifeMod whales (including on late join).
+- **HMS Leopard:** bell, lower/upper/quarter gunport groups, cannons and carriages (single and broadside), cutter launch/hoist, cutter rowing and late-join snapshots now sync across the crew.
+- **Save Cleaner, Deep Ports, ModSaveBackups & Shattered Seas Expansion:** audited and documented in `MOD_COMPATIBILITY.md`.
+
+- **BetterStoves:** soup ladled into a mug now syncs nutrition, temperature, steam and spoilage across the crew, and stove/firewood settings are checked at join.
+- **Boat Colors:** live hull, roof and trim repaints sync across all players and late joiners, and custom sail color settings are checked at join.
+- **Tent and Plank:** client wood-plank hull repairs, bundle unbundling, pallet cutting and canvas tarps (tie, repair, untie) now sync with the host. Tarp updates carry only tarp records and never reset other players' cargo condition or half-placed tie spots; the host's tarp set wins if two players edit at once. Tarp knots no longer shift deck button indices, and shared repair/tarp-wear settings are checked at join.
+- **Sailor's Keepsakes:** sword/helmet/lamp racks, incense burner smoke and Mjolnir storm summoning now sync across the crew. Mjolnir calls the storm around the player who raised it, nearby crewmates see the lightning and hear the thunder, and the cooldown starts only when the host confirms the call. Hidden treasures appear for everyone; the first player to pick one up takes it for the whole crew, and it becomes a normal shared item.
+- **RadRefinements:** continual rowing, knife container-to-firewood cutting and belt slot swapping now sync cleanly on clients.
+- **Kemy's Furniture & BetterTables:** `AutoLeveler` pose changes broadcast to the crew, and `BetterTables` tabletops re-level when carried by a crewmate.
+- **MoreSailwindSails & SimpleTides:** dynamic winch mounts refresh `ControlsSync` automatically, and `ForceSheetFallbacks` plus `SimpleTides` sea-level settings are checked at join.
+- **FreeCameraAndWaterCollision:** Photo Mode time-of-day previews stay local without fighting `EnvironmentSync` (the crew's clock keeps running while the host is in Photo Mode), and host pause defers controller restoration until free camera exits.
+
+These integrations are checked by code review and automated smoke tests only; they are not yet verified in game.
+
+### Performance and smoothness
+
+- Sub-millisecond playback clocks (`double`) and frame-jitter damping in `PlayerPlaybackClock`, `HingePlayback`, `NetTransform` and `ItemSync` reduce avatar and boom stutter on 60–165 FPS displays.
+- `NetClock` filters asymmetric RTT spikes and limits clock offset steps per sample; `BoatSync` streams active/occupied boats at 30 Hz with physical linear velocity and idle unoccupied boats at 2 Hz.
+- `CrestWaterSync` compensates snapshot age for wave crossfade and prevents premature local wave-cycle rollover on clients.
+
+### Fixed
+
+- **"Save and join" & pause lifecycle:** joining another session from `Escape -> Co-op` no longer freezes the clock before saving, and session teardown/reloads reliably restore `Physics.autoSyncTransforms`, `GameMenuPause`, belts and wallets.
+- **Dice table (3+ players):** leaving a lobby after a rematch keeps `Seat` and `FirstSeat` aligned across all players.
+- **UI & input:** releasing a sticky-clicked control during a world pause or knockdown no longer re-enables player movement prematurely; closing F8 preserves in-game UI cursors; IMGUI panels snapshot Layout/Repaint state cleanly.
+- **Items & world sync:** disconnecting with held/belt/hooked items restores `detectCollisions`, colliders and visuals; hanging a lantern on a hook as a client preserves joint flags; late join during shared sleep no longer aborts tavern or exhaustion sleep; timed-out sail repair deltas no longer double-apply.
+- **Transport bounds:** packet deserializers validate counts and lengths before allocating memory.
+
 ## [0.10.0] - 2026-11-19
 
 Everyone must update to wire protocol 113. Requires Sailwind 0.40 or 0.40.1.

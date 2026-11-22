@@ -171,6 +171,18 @@ namespace SailwindCoop.Sync
         private readonly List<ItemEntry> _items = new List<ItemEntry>();
         private readonly Dictionary<ShipItem, ItemEntry> _byItem = new Dictionary<ShipItem, ItemEntry>();
         private readonly Dictionary<int, ItemEntry> _byInstanceId = new Dictionary<int, ItemEntry>();
+        internal ShipItem FindByInstanceId(int instanceId)
+        {
+            if (instanceId == 0) return null;
+            return _byInstanceId.TryGetValue(instanceId, out var entry) ? entry.Item : null;
+        }
+
+        internal bool IsRemoteHeld(ShipItem item)
+        {
+            if (item == null || !_byItem.TryGetValue(item, out var entry)) return false;
+            return entry.HolderNetId != 0 && entry.HolderNetId != _net.MyNetId;
+        }
+
         private readonly Dictionary<ShipItem, uint> _localHeld = new Dictionary<ShipItem, uint>();
         private readonly List<ShipItem> _poseScratch = new List<ShipItem>();
         private readonly List<PendingDynamicRelease> _pendingDynamic = new List<PendingDynamicRelease>();

@@ -67,6 +67,12 @@ namespace SailwindCoop.Sync
                 // island house door: the click stays local; the resulting open/closed target is
                 // carried by HouseDoorSync, not by generic button replay.
                 "GPButtonHouseDoor",
+                // TentandPlank deck tarp knot: handled by TentandPlankCompat; keeping it out of
+                // Shared avoids shifting deck-button indices and breaking BoatLayout.Hash.
+                "TarpKnot",
+                // HMS Leopard custom ship/cutter buttons: handled by LeopardCompat.
+                "LeopardBellInteract", "CannonController", "CarriageController",
+                "CutterController", "CutterRopeController", "OarController",
             };
 
         // PickupableItems that are actually shared ship mechanisms handled by a dedicated sync
@@ -89,6 +95,11 @@ namespace SailwindCoop.Sync
             // nothing. Matters for the ones other mods put on boats (Towable Boats' TowingCleat):
             // as deck controls they would take button indices, which differ with that mod's settings.
             if (btn is GPButtonDockMooring) return InteractPolicy.Local;
+            // HMS Leopard gunports are vanilla GPButtonTrapdoors with recursive group/cannon logic
+            // handled by LeopardCompat; keep them out of generic hatch sync.
+            if (btn is GPButtonTrapdoor && btn.name != null &&
+                btn.name.IndexOf("gunport", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                return InteractPolicy.Local;
             if (IsHostOnlyType(n)) return InteractPolicy.HostOnly;
             if (Local.Contains(n)) return InteractPolicy.Local;
             if (SharedPickupable.Contains(n)) return InteractPolicy.Shared;

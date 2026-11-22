@@ -316,6 +316,54 @@ namespace SailwindCoop.Sync
             new ModSettingRule("Anchor Improvements", "com.nandbrew.anchorimprovements", "Options", "Resize brig anchor", "needs a reload"),
             // On: hides every game NPC boat (the ones the host streams) and sails its own traders.
             new ModSettingRule("Economy Overhaul", "DogEggz.EconomyOverhaul", "Traders", "Visible traders", "takes effect at once"),
+            // Appends custom sail colors (indices 24-25) to Shipyard.availableSailColors.
+            new ModSettingRule("Boat Colors", "com.nandbrew.boatcolors", "Sails", "Use Custom Sail Colors", "needs a restart"),
+            new ModSettingRule("Boat Colors", "com.nandbrew.boatcolors", "Sails", "Custom Sail Color 1", "takes effect at once"),
+            new ModSettingRule("Boat Colors", "com.nandbrew.boatcolors", "Sails", "Custom Sail Color 2", "takes effect at once"),
+            // Changes whether sails use cloned fallback winches, altering RopeController order on the boat.
+            new ModSettingRule("MoreSailwindSails", "com.august.moresailwindsails", "Diagnostics", "ForceSheetFallbacks", "needs a restart"),
+            // Deterministic ocean sea-level offset; mismatched tide settings float or sink boats on clients.
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Options", "Solar tides", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Options", "Antipodal tides", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional tides", "Al Ankh", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional tides", "Aestrin", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional tides", "Emerald", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional tides", "Fire Fish", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional tides", "Chronos", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional offsets", "Al Ankh", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional offsets", "Aestrin", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional offsets", "Emerald", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional offsets", "Fire Fish", "takes effect at once"),
+            new ModSettingRule("SimpleTides", "com.nandbrew.simpletides", "Regional offsets", "Chronos", "takes effect at once"),
+            // Stove sizing and fuel burn parameters affect shared stove physics and fuel consumption.
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Cabin Stove", "Stove size", "needs a restart"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Cabin Stove", "Firewood it holds", "needs a restart"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Cabin Stove", "Hours a full load burns", "takes effect at once"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Cabin Stove", "Logs burning at once", "takes effect at once"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Galley Range", "Boiler capacity (units of water)", "needs a restart"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Galley Range", "Firewood it holds", "needs a restart"),
+            new ModSettingRule("BetterStoves", "com.dixiecapt.sailwind.betterstoves", "Galley Range", "Logs burning at once", "takes effect at once"),
+            // Hull repair amounts, cargo condition, and tarp wear affect shared boat, cargo, and tarp state.
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Wood plank", "Hammering time", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Wood plank", "Planks needed", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Wood plank", "Hull repaired per plank", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Canvas", "Tarp wearing", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Cargo", "Enable water damage", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Cargo", "Water damage speed", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Cargo", "Drying speed", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Cargo", "Lantern drying as % covered", "takes effect at once"),
+            new ModSettingRule("Tent and Plank", "DogEggz.TentandPlank", "Cargo", "Enable fragile cargo", "takes effect at once"),
+            // PlayerHome claiming, clearing radii and excluded/priced taverns change shared world state.
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Setup", "EnableTavernClaim", "needs a reload"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Setup", "DumpPrefabs", "needs a reload"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Persistence", "PersistTavernItems", "takes effect at once"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Radii", "ClearRadius", "needs a restart"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Radii", "ClearRadiusOverrides", "needs a restart"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Radii", "FurnishRadius", "needs a reload"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Claiming", "ExcludedTaverns", "needs a restart"),
+            new ModSettingRule("Player Home", "com.yourname.playerhome", "Claiming", "PriceOverrides", "needs a restart"),
+            // Controls whether SeaLifeMod's autonomous whale spawner is disabled in favor of RandomEncounters.
+            new ModSettingRule("RandomEncounters", "com.raddude.randomencounters", "Encounter Types", "Control SeaLifeMod spawns", "needs a restart"),
         };
 
         /// <summary>Settings whose host and local values both exist and differ. A setting present on

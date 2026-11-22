@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds a release archive of one or both editions into dist\.
 
@@ -185,7 +185,7 @@ function Pack([string]$name) {
         Get-ChildItem $stage -Filter *.pdb | Remove-Item -Force
 
         Copy-Item (Join-Path $repo 'Avatars\avatar.bundle') $stage
-        foreach ($file in 'README.md', 'CHANGELOG.md', 'MULTIPLAYER_GUIDE.md') {
+        foreach ($file in 'README.md', 'CHANGELOG.md', 'MULTIPLAYER_GUIDE.md', 'MOD_COMPATIBILITY.md') {
             EditionDocument (Join-Path $repo $file) (Join-Path $stage $file) $name
         }
         foreach ($file in 'LICENSE', 'icon.png') {
