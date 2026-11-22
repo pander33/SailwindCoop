@@ -26,6 +26,8 @@ namespace SailwindCoop.Runtime
             }
         }
 
+        internal static bool SavingOwnWorld => _savingOwnWorld;
+
         internal static bool HoldsMovement =>
             _savingOwnWorld || (_openMenu != null && GameState.inCursorMenu && InSession);
 

@@ -301,9 +301,11 @@ namespace SailwindCoop.Net
             bool started = bindAll ? _net.Start(port) : _net.Start(ListenIp, "::", port);
             if (!started)
             {
+                string error = "Failed to open UDP port " + port +
+                               (bindAll ? "" : " on interface " + ListenIp);
+                Stop();
                 State = LinkState.Failed;
-                LastError = "Failed to open UDP port " + port +
-                            (bindAll ? "" : " on interface " + ListenIp);
+                LastError = error;
                 _log("[CoopNet] " + LastError);
                 return;
             }
