@@ -23,8 +23,6 @@ Everyone must update to wire protocol 115. Requires Sailwind 0.40 or 0.40.1.
 - **MoreSailwindSails & SimpleTides:** dynamic winch mounts refresh `ControlsSync` automatically, and `ForceSheetFallbacks` plus `SimpleTides` sea-level settings are checked at join.
 - **FreeCameraAndWaterCollision:** Photo Mode time-of-day previews stay local without fighting `EnvironmentSync` (the crew's clock keeps running while the host is in Photo Mode), and host pause defers controller restoration until free camera exits.
 
-These integrations are checked by code review and automated smoke tests only; they are not yet verified in game.
-
 ### Performance and smoothness
 
 - Sub-millisecond playback clocks (`double`) and frame-jitter damping in `PlayerPlaybackClock`, `HingePlayback`, `NetTransform` and `ItemSync` reduce avatar and boom stutter on 60–165 FPS displays.

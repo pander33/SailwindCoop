@@ -25,6 +25,10 @@ namespace SailwindCoop
     [BepInDependency(Sync.BoatColorsCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(Sync.TentandPlankCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(Sync.SailorsKeepsakesCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.PlayerHomeCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.BetterNpcBoatsCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.RandomEncountersCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(Sync.LeopardCompat.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.sailwind.coop";
