@@ -77,6 +77,19 @@ internal static class DiceTests
 			game.Seats[1].Connected = false;
 			Check(game.Rematch() && game.Seats.Count == 2 && game.Seats.All(p => p.Connected) && game.FirstSeat < 2, "rematch seats");
 		});
+		test("dice leave after rematch clamps Seat and FirstSeat within Seats.Count", () =>
+		{
+			var game = Game(2);
+			Check(game.Cancel() && game.Rematch(), "rematch");
+			Check(game.Seats.Count == 2 && game.FirstSeat == 1 && game.Seat == 1, "rematch rotated seat");
+			Check(game.Leave(1) && game.Seats.Count == 1 && game.Seat == 0 && game.FirstSeat == 0 && game.Seat < game.Seats.Count, "leave clamped seat");
+			Check(game.Leave(0) && game.Seats.Count == 0 && game.Seat == 0 && game.FirstSeat == 0, "leave last seat");
+
+			game = Game(2);
+			Check(game.Cancel() && game.Rematch() && game.Seat == 1 && game.FirstSeat == 1, "second rematch");
+			Check(game.Leave(0) && game.Seats.Count == 1 && game.Seat == 0 && game.FirstSeat == 0 && game.Seat < game.Seats.Count, "leave first seat after rematch");
+			Check(game.Join(Guid.NewGuid(), 9, "C") && game.Start() && game.Seat < game.Seats.Count, "restart after leave");
+		});
 		test("dice stake asks for a new confirmation, a cancelled party can be played again, a paused table can be folded", () =>
 		{
 			var lobby = new DiceGame { Phase = DicePhase.Lobby }; lobby.Join(Guid.NewGuid(), 1, "A"); lobby.Join(Guid.NewGuid(), 2, "B");

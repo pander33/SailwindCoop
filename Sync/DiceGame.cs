@@ -80,6 +80,16 @@ namespace SailwindCoop.Sync
 		{
 			if (Phase != DicePhase.Lobby || index < 0 || index >= Seats.Count) return false;
 			Seats.RemoveAt(index);
+			if (Seats.Count == 0)
+			{
+				Seat = 0;
+				FirstSeat = 0;
+			}
+			else
+			{
+				if (Seat >= Seats.Count) Seat = 0;
+				if (FirstSeat >= Seats.Count) FirstSeat = 0;
+			}
 			return true;
 		}
 

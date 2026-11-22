@@ -23,6 +23,7 @@ namespace SailwindCoop.Runtime
 
         private bool _visible;
         private bool _cursorCaptured;
+        private bool _openedInWorld;
         private bool _previousCursorVisible;
         private bool _previousMouseLookEnabled;
         private bool _previousInCursorMenu;
@@ -46,8 +47,6 @@ namespace SailwindCoop.Runtime
 #if !THUNDERSTORE
         private bool _restartPending;
         private string _restartMods = "";
-#else
-        private static readonly bool _restartPending = false;
 #endif
 
         // Steam section. Everything the layout depends on is snapshotted once per Layout pass.
@@ -97,6 +96,8 @@ namespace SailwindCoop.Runtime
         private float _hostAddressAt;
         private bool _viewSettings;
         private bool _viewModsPrompt;
+        private bool _viewCanUseWorldPause;
+        private string _viewWorldPauseLabel = "";
         private string _viewError = "";
         private string _viewStatus = "";
         private string _viewNotice = "";
@@ -268,15 +269,17 @@ namespace SailwindCoop.Runtime
                 ApplyCursorState();
                 DrawWindow();
             }
+#if !THUNDERSTORE
             else if (_restartPending)
                 DrawRestartReminder();
+#endif
         }
 
+#if !THUNDERSTORE
         /// <summary>Mods were downloaded: the join stopped on purpose and nothing else on screen says
         /// why. Large, coloured, and with the one action that moves the player forward.</summary>
         private void DrawRestartBanner()
         {
-#if !THUNDERSTORE
             GUILayout.BeginVertical(_alertBox);
             GUILayout.Label("RESTART THE GAME TO JOIN", _alertTitle);
             GUILayout.Label("The host's mods were downloaded: " + _restartMods + ".\n" +
@@ -290,13 +293,11 @@ namespace SailwindCoop.Runtime
                 Application.Quit();
             }
             GUILayout.EndVertical();
-#endif
         }
 
         /// <summary>The same notice while the menu is closed, so it cannot be dismissed by accident.</summary>
         private void DrawRestartReminder()
         {
-#if !THUNDERSTORE
             float w = Mathf.Min(560f, Screen.width - 20f);
             var rect = new Rect((Screen.width - w) * 0.5f, 18f, w, 58f);
             GUI.Box(rect, GUIContent.none, _alertBox);
@@ -304,8 +305,8 @@ namespace SailwindCoop.Runtime
             GUI.Label(new Rect(rect.x + 10f, rect.y + 30f, rect.width - 20f, 22f),
                       "Mods from the host are installed. Quit and start the game again (" + Plugin.Cfg.MenuKey.Value +
                       " for details).", _alertText);
-#endif
         }
+#endif
 
         private void Snapshot()
         {
@@ -344,6 +345,8 @@ namespace SailwindCoop.Runtime
             RefreshHostAddresses();
             _viewInWorld = GameState.playing && !GameState.currentlyLoading;
             _viewAdvanced = _technicalSettingsOpen;
+            _viewCanUseWorldPause = _coop.CanUseWorldPause;
+            _viewWorldPauseLabel = _viewCanUseWorldPause ? _coop.WorldPauseLabel : "";
         }
 
         private void DrawWindow()
@@ -372,11 +375,13 @@ namespace SailwindCoop.Runtime
             GUILayout.BeginVertical(GUILayout.Width(_contentWidth));
 
             DrawHeader();
+#if !THUNDERSTORE
             if (_restartPending)
             {
                 DrawRestartBanner();
                 GUILayout.Space(8f);
             }
+#endif
             DrawSession();
             if (_viewModsPrompt) DrawModsPrompt();
             DrawCrew();
@@ -429,7 +434,7 @@ namespace SailwindCoop.Runtime
                 case Mode.Hosting: DrawSessionHosting(); break;
                 default: DrawSessionJoined(); break;
             }
-            if (_coop.CanUseWorldPause && GUILayout.Button(_coop.WorldPauseLabel, _button, GUILayout.Height(ButtonHeight)))
+            if (_viewCanUseWorldPause && GUILayout.Button(_viewWorldPauseLabel, _button, GUILayout.Height(ButtonHeight)))
                 _coop.ToggleWorldPause();
             GUILayout.EndVertical();
         }
@@ -440,7 +445,11 @@ namespace SailwindCoop.Runtime
             // with the remembered settings; what is rarely changed sits under Advanced.
             bool leaving = _coop.LeavingWorld;
             bool available = PatchHealth.Blocker == null && !leaving;
+#if !THUNDERSTORE
             bool canJoin = available && !_restartPending;
+#else
+            bool canJoin = available;
+#endif
             bool steamUsable = !_steamMode || _steamReady;
 
             GUILayout.BeginHorizontal();
@@ -1008,7 +1017,9 @@ namespace SailwindCoop.Runtime
         internal bool ViewLeavesHostCopy => _viewLeavesHostCopy;
         internal bool ViewModsPrompt => _viewModsPrompt;
         internal Sync.ModSyncView ViewMods => _modView;
+#if !THUNDERSTORE
         internal bool ViewRestartPending => _restartPending;
+#endif
         internal string ViewJoinFailure => _viewJoinFailure;
         internal string ViewSavedTarget => _viewSavedTarget;
         internal string ViewHostAddress => _viewHostAddress;
@@ -1142,7 +1153,11 @@ namespace SailwindCoop.Runtime
                 GUILayout.Label(friend.Name, _cell, GUILayout.MinWidth(40f), GUILayout.ExpandWidth(true));
                 GUILayout.Label(!friend.Hosting ? "in game" : friend.SameVersion ? "hosting" : "hosting, other version",
                                 friend.Hosting && friend.SameVersion ? _cellGood : _cell, GUILayout.Width(136f));
+#if !THUNDERSTORE
                 GUI.enabled = friend.Hosting && PatchHealth.Blocker == null && !_restartPending && !_coop.HasPendingWorldJoin;
+#else
+                GUI.enabled = friend.Hosting && PatchHealth.Blocker == null && !_coop.HasPendingWorldJoin;
+#endif
                 if (GUILayout.Button("Join", _smallButton, GUILayout.Width(KickColumn - 4f), GUILayout.Height(20f)))
                 {
                     _steamJoinId = friend.Id.ToString();
@@ -1285,6 +1300,13 @@ namespace SailwindCoop.Runtime
         private void SetVisible(bool visible)
         {
             if (_visible == visible) return;
+            if (visible)
+            {
+                // Transient mod cursor overlays yield back to the underlying game state before
+                // we snapshot it, so closing F8 restores gameplay instead of their cursor state.
+                _coop.Dice?.Input?.CloseUp?.Exit();
+                EmoteWheelUI.CancelActive();
+            }
             if (!visible && ConfirmWorldJoin) _coop.CancelWorldJoin();
             if (!visible)
                 _coop.CloseCompanionMenus();
@@ -1297,6 +1319,7 @@ namespace SailwindCoop.Runtime
         public void WorldLeft()
         {
             if (!_cursorCaptured) return;
+            _openedInWorld = false;
             _previousCursorVisible = true;
             _previousLockState = CursorLockMode.None;
             _previousMouseLookEnabled = false;
@@ -1309,6 +1332,7 @@ namespace SailwindCoop.Runtime
             {
                 if (!_cursorCaptured)
                 {
+                    _openedInWorld = GameState.playing && !GameState.currentlyLoading;
                     _previousCursorVisible = Cursor.visible;
                     _previousLockState = Cursor.lockState;
                     _previousMouseLookEnabled = MouseLook.MouseLookIsEnabled();
@@ -1327,11 +1351,17 @@ namespace SailwindCoop.Runtime
                 if (_coop.GameMenu?.WorldMenuOpen == true)
                 {
                     _cursorCaptured = false;
+                    _openedInWorld = false;
                     return;
                 }
 
                 // Opened from the co-op page of the game's menu: that menu still holds the cursor.
-                bool restoreGameplayInput = GameState.playing && !GameState.currentlyLoading && !(PageOpen != null && PageOpen());
+                // Opened over an in-world vanilla cursor UI (Mission Board, Market, Shipyard, Crate UI):
+                // restore its cursor state instead of stealing the cursor back to MouseLook.
+                bool hadInWorldCursor = _openedInWorld &&
+                    (_previousInCursorMenu || (!_previousMouseLookEnabled && (_previousCursorVisible || _previousLockState == CursorLockMode.None)));
+                bool restoreGameplayInput = GameState.playing && !GameState.currentlyLoading &&
+                    !(PageOpen != null && PageOpen()) && !hadInWorldCursor;
                 if (restoreGameplayInput)
                 {
                     MouseLook.ToggleMouseLookAndCursor(newState: true);
@@ -1352,12 +1382,14 @@ namespace SailwindCoop.Runtime
                     GameState.inCursorMenu = _previousInCursorMenu;
                 }
                 _cursorCaptured = false;
+                _openedInWorld = false;
             }
         }
 
         private Texture2D MakeBg(Color c)
         {
             var t = new Texture2D(1, 1);
+            t.hideFlags = HideFlags.HideAndDontSave;
             t.SetPixel(0, 0, c);
             t.Apply();
             return t;
@@ -1365,7 +1397,7 @@ namespace SailwindCoop.Runtime
 
         private void EnsureStyles()
         {
-            if (_stylesReady) return;
+            if (_stylesReady && _backdropTex != null && _windowTex != null) return;
             _stylesReady = true;
 
             var cream = new Color(0.96f, 0.90f, 0.78f);

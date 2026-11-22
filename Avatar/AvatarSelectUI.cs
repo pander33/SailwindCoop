@@ -20,6 +20,7 @@ namespace SailwindCoop.Avatar
 		private GUIStyle _entryStyle;
 		private GUIStyle _entrySelectedStyle;
 		private GUIStyle _hintStyle;
+		private Texture2D _windowTex;
 		private Vector2 _scroll;
 		private string _lastDrawnSelection = "";
 
@@ -80,8 +81,9 @@ namespace SailwindCoop.Avatar
 
 		private void EnsureStyles()
 		{
-			if (_windowStyle != null) return;
-			_windowStyle = new GUIStyle(GUI.skin.box) { normal = { background = MakeBg(new Color(0f, 0f, 0f, 0.85f)) } };
+			if (_windowStyle != null && _windowTex != null) return;
+			_windowTex = MakeBg(new Color(0f, 0f, 0f, 0.85f));
+			_windowStyle = new GUIStyle(GUI.skin.box) { normal = { background = _windowTex } };
 			_headerStyle = new GUIStyle(GUI.skin.label) { fontSize = FontSize + 2, fontStyle = FontStyle.Bold, normal = { textColor = Color.white } };
 			_entryStyle = new GUIStyle(GUI.skin.button) { fontSize = FontSize, alignment = TextAnchor.MiddleLeft };
 			_entrySelectedStyle = new GUIStyle(_entryStyle) { normal = { textColor = new Color(0.6f, 1f, 0.6f) } };
@@ -91,6 +93,7 @@ namespace SailwindCoop.Avatar
 		private Texture2D MakeBg(Color c)
 		{
 			var t = new Texture2D(1, 1);
+			t.hideFlags = HideFlags.HideAndDontSave;
 			t.SetPixel(0, 0, c);
 			t.Apply();
 			return t;

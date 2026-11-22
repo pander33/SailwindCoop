@@ -175,8 +175,11 @@ namespace SailwindCoop.Runtime
 
         // The game reads Escape here and, with none of its own pages open, would open its menu again
         // over the page. Escape closes the page and the menu together, as on the game's other pages.
-        private static bool MenuKeyPrefix() => PatchGuard.Prefix(
-            () => CoopBehaviour.Instance?.GameMenu?.TakeMenuKey() != true, Report);
+        private static bool MenuKeyPrefix()
+        {
+            try { return CoopBehaviour.Instance?.GameMenu?.TakeMenuKey() != true; }
+            catch (Exception e) { Report(e); return true; }
+        }
 
         private static void KeepWorldMenuInView()
         {
@@ -236,6 +239,13 @@ namespace SailwindCoop.Runtime
 
         private void Forget()
         {
+            ResetPageState();
+            _pauseEntry = null;
+            _settingsUI = null;
+        }
+
+        private void ResetPageState()
+        {
             _place = Place.Closed;
             _typing = false;
             _window.PageWantsLanSearch = false;
@@ -243,7 +253,7 @@ namespace SailwindCoop.Runtime
 
         private void RefreshWorldMenu()
         {
-            if (_pauseEntry != null && _settingsUI.activeInHierarchy)
+            if (_pauseEntry != null && _pauseEntry.Root != null && _settingsUI != null && _settingsUI.activeInHierarchy)
                 Fill(_pauseEntry, _coop.CanUseWorldPause
                     ? new Entry(_coop.WorldPauseLabel, _togglePause)
                     : default(Entry));
@@ -285,12 +295,11 @@ namespace SailwindCoop.Runtime
                 if (_menu != null && was == Place.World && _settingsUI != null) _settingsUI.SetActive(true);
             }
             catch (Exception e) { Plugin.Logger.LogWarning("[GameMenu] The game's menu page was not given back: " + e.Message); }
-            Forget();
             foreach (GameObject made in new[] { _titleEntry, _worldEntry, _pauseEntry?.Root, _page, _kit })
                 if (made != null) UnityEngine.Object.Destroy(made);
             _titleEntry = _worldEntry = _page = _kit = null;
-            _pauseEntry = null;
             _menu = null;
+            Forget();
         }
 
         // -----------------------------------------------------------------
@@ -511,7 +520,7 @@ namespace SailwindCoop.Runtime
 
         private void ClosePage()
         {
-            Forget();
+            ResetPageState();
             if (_page != null) _page.SetActive(false);
         }
 
@@ -596,12 +605,15 @@ namespace SailwindCoop.Runtime
             CoopNet net = _coop.Net;
             CoopMenuUI.Mode mode = _window.ViewMode;
 
+#if !THUNDERSTORE
             if (_window.ViewRestartPending)
             {
                 body = "The host's mods are installed but load only when the game starts. Quit, start the game again and join.";
                 primary = new Entry("Quit game", Application.Quit);
             }
-            else if (_window.ViewConfirmWorldJoin)
+            else
+#endif
+            if (_window.ViewConfirmWorldJoin)
             {
                 body = (_window.ViewLeavesHostCopy ? "Leave this host's world and join " : "Save this world and join ") +
                        _coop.JoinDestination + "?" +
@@ -652,7 +664,11 @@ namespace SailwindCoop.Runtime
         private string JoinList(List<Entry> rows, out Entry primary, bool world)
         {
             bool steam = _window.SteamMode;
+#if !THUNDERSTORE
             bool canJoin = PatchHealth.Blocker == null && !_coop.LeavingWorld && !_window.ViewRestartPending;
+#else
+            bool canJoin = PatchHealth.Blocker == null && !_coop.LeavingWorld;
+#endif
             primary = _typing ? new Entry("Join", JoinTyped, canJoin) : world ? HostThisWorld() : MoreOptions();
             if (PatchHealth.Blocker != null)
             {

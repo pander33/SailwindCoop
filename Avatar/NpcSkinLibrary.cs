@@ -236,7 +236,7 @@ namespace SailwindCoop.Avatar
 		{
 			if (mat == null) return;
 			string name = CleanMatName(mat.name);
-			if (string.IsNullOrEmpty(name) || _materials.ContainsKey(name)) return;
+			if (string.IsNullOrEmpty(name) || (_materials.TryGetValue(name, out var existing) && existing != null)) return;
 			_materials[name] = mat;
 		}
 

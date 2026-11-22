@@ -16,6 +16,7 @@ namespace SailwindCoop.Runtime
 		private const int MaxVisible = 3;
 		private const float LifetimeSec = 5f;
 		private readonly List<Entry> _entries = new List<Entry>();
+		private readonly List<string> _drawTexts = new List<string>();
 		private GUIStyle _style;
 
 		public void Add(string text, float lifetimeSec = LifetimeSec)
@@ -58,10 +59,16 @@ namespace SailwindCoop.Runtime
 
 		public void Draw()
 		{
-			float now = Time.realtimeSinceStartup;
-			for (int i = _entries.Count - 1; i >= 0; i--)
-				if (_entries[i].ExpiresAt <= now) _entries.RemoveAt(i);
-			if (_entries.Count == 0) return;
+			if (Event.current.type == EventType.Layout)
+			{
+				float now = Time.realtimeSinceStartup;
+				for (int i = _entries.Count - 1; i >= 0; i--)
+					if (_entries[i].ExpiresAt <= now) _entries.RemoveAt(i);
+				_drawTexts.Clear();
+				for (int i = 0; i < _entries.Count; i++)
+					_drawTexts.Add(_entries[i].Text);
+			}
+			if (_drawTexts.Count == 0) return;
 
 			if (_style == null)
 			{
@@ -76,8 +83,8 @@ namespace SailwindCoop.Runtime
 
 			float width = Mathf.Min(380f, Screen.width - 24f);
 			GUILayout.BeginArea(new Rect(Screen.width - width - 12f, 12f, width, 120f));
-			for (int i = 0; i < _entries.Count; i++)
-				GUILayout.Label(_entries[i].Text, _style, GUILayout.MinHeight(30f));
+			for (int i = 0; i < _drawTexts.Count; i++)
+				GUILayout.Label(_drawTexts[i], _style, GUILayout.MinHeight(30f));
 			GUILayout.EndArea();
 		}
 
