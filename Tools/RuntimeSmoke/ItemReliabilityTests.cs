@@ -250,6 +250,8 @@ internal static class ItemReliabilityTests
         });
         test("production T11 snapshot binding membership commit preflight and disconnect paths are wired", VerifyProductionPaths);
         test("production consumed cleanup retries past tombstone instead of falsely completing", VerifyConsumedCleanup);
+        test("trade sale journal bounds stored authors and receipts while reading legacy entries", VerifyTradeSaleJournalBounds);
+        test("production item sync reliability and cleanup paths are wired", VerifyItemSyncFixes);
     }
     private static string PluginPath()
     {
@@ -321,6 +323,78 @@ internal static class ItemReliabilityTests
         complete = progress.TryApply(ItemResultSection.Consumed, 0, consumed, Fail); progress.End(complete);
         Assert(progress.Completed && attempts == 2, "tombstoned consumed cleanup not retried");
     }
+    private static void VerifyTradeSaleJournalBounds()
+    {
+        var data = new Dictionary<string, string>();
+        var world = Guid.NewGuid();
+        var legacyAuthor = Guid.NewGuid();
+        var legacyReceipt = Guid.NewGuid();
+        data["SailwindCoop.TradeSale." + world.ToString("N") + ".author." + legacyAuthor.ToString("N")] = "42";
+        data["SailwindCoop.TradeSale." + world.ToString("N") + ".receipt." + legacyReceipt.ToString("N")] = "1";
+        Assert(TradeSaleJournal.FindAuthor(data, world, legacyAuthor) == 42, "legacy author format unreadable");
+        Assert(TradeSaleJournal.IsComplete(data, world, legacyReceipt), "legacy receipt format unreadable");
+
+        var authors = new List<Guid>();
+        for (int i = 1; i <= TradeSaleJournal.MaxAuthorsPerWorld + 20; i++)
+        {
+            var id = Guid.NewGuid();
+            authors.Add(id);
+            TradeSaleJournal.RecordAuthor(data, world, id, i);
+        }
+        int authorCount = data.Keys.Count(k => k.Contains(".author."));
+        Assert(authorCount == TradeSaleJournal.MaxAuthorsPerWorld, "author count unbounded: " + authorCount);
+        Assert(TradeSaleJournal.FindAuthor(data, world, legacyAuthor) == 0, "legacy oldest author was not pruned");
+        Assert(TradeSaleJournal.FindAuthor(data, world, authors[0]) == 0, "oldest recorded author was not pruned");
+        Assert(TradeSaleJournal.FindAuthor(data, world, authors[authors.Count - 1]) == authors.Count, "newest author lost");
+
+        var receipts = new List<Guid>();
+        for (int i = 1; i <= TradeSaleJournal.MaxReceiptsPerWorld + 20; i++)
+        {
+            var id = Guid.NewGuid();
+            receipts.Add(id);
+            TradeSaleJournal.Complete(data, world, id);
+        }
+        int receiptCount = data.Keys.Count(k => k.Contains(".receipt."));
+        Assert(receiptCount == TradeSaleJournal.MaxReceiptsPerWorld, "receipt count unbounded: " + receiptCount);
+        Assert(!TradeSaleJournal.IsComplete(data, world, legacyReceipt), "legacy oldest receipt was not pruned");
+        Assert(!TradeSaleJournal.IsComplete(data, world, receipts[0]), "oldest recorded receipt was not pruned");
+        Assert(TradeSaleJournal.IsComplete(data, world, receipts[receipts.Count - 1]), "newest receipt lost");
+    }
+
+    private static void VerifyItemSyncFixes()
+    {
+        using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
+        {
+            var items = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemSync");
+            var patches = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemPatches");
+
+            var localBoat = Method(items, "LocalPlayerBoat");
+            Assert(!Calls(localBoat, "FindObjectOfType"), "LocalPlayerBoat still calls FindObjectOfType");
+            Assert(Calls(localBoat, "get_LocalBoat") && Calls(localBoat, "ResolveLocalBoatNow"),
+                "LocalPlayerBoat does not use PlayerSync LocalBoat/ResolveLocalBoatNow");
+
+            var clear = Method(items, "Clear");
+            Assert(Calls(clear, "RestoreTeardownItem") && !Calls(clear, "ReleaseRemoteActorItem"),
+                "Clear must use RestoreTeardownItem instead of remote-actor release");
+            var clearRemote = Method(items, "ClearRemoteActor");
+            Assert(Calls(clearRemote, "CancelPendingDynamic") && Calls(clearRemote, "ReleaseRemoteActorItem"),
+                "ClearRemoteActor must cancel pending dynamic and use ReleaseRemoteActorItem");
+
+            var pendingDynamic = Method(items, "ProcessPendingDynamic");
+            Assert(Calls(pendingDynamic, "CanEnterPendingDynamic"),
+                "ProcessPendingDynamic missing re-entry guard");
+
+            var tickOps = Method(items, "TickOperations");
+            Assert(Calls(tickOps, "ExpireWaitingOperation"),
+                "TickOperations missing stalled waiting-operation expiration");
+
+            var warehouseSell = Method(patches, "PreWarehouseSellGood");
+            Assert(warehouseSell.Body.Instructions.Any(ins => ins.Operand is MethodReference m &&
+                m.Name == "NotifySold" && m.Parameters.Count == 4),
+                "PreWarehouseSellGood must pass ShipItem to NotifySold");
+        }
+    }
+
     private static void Assert(bool condition, string reason) { if (!condition) throw new Exception(reason); }
     private static void Fail(Exception error) { throw new Exception("unexpected apply fault", error); }
 }
