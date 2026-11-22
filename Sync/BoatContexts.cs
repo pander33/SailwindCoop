@@ -24,6 +24,7 @@ namespace SailwindCoop.Sync
         public BoatContexts(Func<Transform, ushort, T> create, Action<T> clear, Func<Transform, long> stamp)
         { _create = create; _clear = clear; _stamp = stamp; }
 
+        /// <summary>Shared cache — do not modify.</summary>
         public List<T> Values
         {
             get
@@ -36,6 +37,7 @@ namespace SailwindCoop.Sync
             }
         }
 
+        /// <summary>Shared cache — do not modify.</summary>
         public List<T> Existing => _existing;
 
         public string Describe(Func<T, string> describe)
@@ -65,34 +67,41 @@ namespace SailwindCoop.Sync
             if (Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + BoatLocator.CacheSeconds;
             _alive.Clear();
-            bool changed = false;
-            foreach (Transform boat in BoatLocator.FindBoats())
-            {
-                ushort id = BoatLocator.IndexOf(boat);
-                if (boat == null || id == BoatLocator.NoBoat) continue;
-                _alive.Add(id);
-                if (ShipyardSync.Suspended(id)) continue;
-                long stamp = _stamp(boat);
-                if (_entries.TryGetValue(id, out var old))
-                {
-                    if (old.Boat == boat && old.Stamp == stamp) continue;
-                    _clear(old.Context);
-                    _entries.Remove(id);
-                }
-                _entries.Add(id, new Entry { Boat = boat, Stamp = stamp, Context = _create(boat, id) });
-                changed = true;
-            }
             _gone.Clear();
-            foreach (var kv in _entries)
-                if (!_alive.Contains(kv.Key)) { _clear(kv.Value.Context); _gone.Add(kv.Key); }
-            if (_gone.Count > 0)
+            bool changed = false;
+            try
             {
-                for (int i = 0; i < _gone.Count; i++) _entries.Remove(_gone[i]);
-                _gone.Clear();
-                changed = true;
+                foreach (Transform boat in BoatLocator.FindBoats())
+                {
+                    ushort id = BoatLocator.IndexOf(boat);
+                    if (boat == null || id == BoatLocator.NoBoat) continue;
+                    _alive.Add(id);
+                    if (ShipyardSync.Suspended(id)) continue;
+                    long stamp = _stamp(boat);
+                    if (_entries.TryGetValue(id, out var old))
+                    {
+                        if (old.Boat == boat && old.Stamp == stamp) continue;
+                        _entries.Remove(id);
+                        changed = true;
+                        _clear(old.Context);
+                    }
+                    _entries.Add(id, new Entry { Boat = boat, Stamp = stamp, Context = _create(boat, id) });
+                    changed = true;
+                }
+                foreach (var kv in _entries)
+                    if (!_alive.Contains(kv.Key)) { _clear(kv.Value.Context); _gone.Add(kv.Key); }
+                if (_gone.Count > 0)
+                {
+                    for (int i = 0; i < _gone.Count; i++) _entries.Remove(_gone[i]);
+                    changed = true;
+                }
             }
-            _alive.Clear();
-            if (changed) RebuildCache();
+            finally
+            {
+                _alive.Clear();
+                _gone.Clear();
+                if (changed) RebuildCache();
+            }
         }
 
         private void RebuildCache()
@@ -149,6 +158,8 @@ namespace SailwindCoop.Sync
         {
             foreach (var e in _entries.Values) _clear(e.Context);
             _entries.Clear();
+            _alive.Clear();
+            _gone.Clear();
             _existing = Empty;
             _values = Empty;
             _hadSuspended = false;

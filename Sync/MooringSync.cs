@@ -251,6 +251,7 @@ namespace SailwindCoop.Sync
             var state = ClientState(msg.Index);
             if (!state.Receive(msg.RequesterNetId, msg.RequestId, _net.MyNetId, msg.StateAvailable ? msg : null,
                 waitingTarget: msg.Outcome == MooringOutcome.WaitingForDock)) return;
+            if (msg.StateAvailable && msg.Kind != MooringKind.Moor) _missingApplyDock.Remove(msg.Index);
             ApplyClientState(msg.Index, state);
         }
 
@@ -344,6 +345,7 @@ namespace SailwindCoop.Sync
             {
                 if (kind == MooringKind.Unmoor)
                 {
+                    _missingApplyDock.Remove(index);
                     if (rope.IsMoored())
                     {
                         rope.Unmoor();
@@ -358,7 +360,8 @@ namespace SailwindCoop.Sync
                     {
                         if (_missingApplyDock.Add(index))
                         {
-                            if (_net.Role == Role.Client) _nextClientDockRetry = Time.unscaledTime + DockRetrySeconds;
+                            if (_net.Role == Role.Client && _missingApplyDock.Count == 1)
+                                _nextClientDockRetry = Time.unscaledTime + DockRetrySeconds;
                             Plugin.Logger.LogWarning("[MooringSync] " + _net.Role + " cannot apply Moor boat=" + _boatId +
                                 " rope #" + index + " dockReal=" + dockReal + ": no loaded dock within 3 m" +
                                 "; target deferred, dockId=" + dockId);
@@ -381,6 +384,7 @@ namespace SailwindCoop.Sync
                 }
                 else // Length — set the authoritative rope length + spring distance (only while moored)
                 {
+                    _missingApplyDock.Remove(index);
                     if (rope.IsMoored())
                     {
                         changed = !rope.currentRopeLengthSquared.Equals(lengthSq);
@@ -390,6 +394,7 @@ namespace SailwindCoop.Sync
             }
             catch (Exception e)
             {
+                _missingApplyDock.Remove(index);
                 Plugin.Logger.LogWarning("[MooringSync] " + _net.Role + " Apply " + kind + " boat=" + _boatId + " #" + index + ": " + e.Message);
                 return true; // Exceptions are reported, not retried every frame.
             }

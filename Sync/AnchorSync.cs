@@ -269,16 +269,13 @@ namespace SailwindCoop.Sync
             }
             if (handChanged || !msg.Held) { _slave.Clear(); _haveFrame = false; _haveLast = false; }
             Buffer(msg.Tick, msg.Frame, msg.Pos, msg.Rot, msg.Vel);
-            if (!LocalHeld)
+            EnsureSlaved(msg.Held);
+            if (msg.Held && handChanged) _slave.ApplyAt(_anchor.transform, msg.Tick);
+            if (!msg.Held)
             {
-                EnsureSlaved(msg.Held);
-                if (msg.Held && handChanged) _slave.ApplyAt(_anchor.transform, msg.Tick);
-                if (!msg.Held)
-                {
-                    _slave.ApplyAt(_anchor.transform, msg.Tick);
-                    RestoreSlaved();
-                    if (_body != null) { _body.isKinematic = false; _body.velocity = msg.Frame == CoordFrame.Boat ? _boat.TransformDirection(msg.Vel) : msg.Vel; }
-                }
+                _slave.ApplyAt(_anchor.transform, msg.Tick);
+                RestoreSlaved();
+                if (_body != null) { _body.isKinematic = false; _body.velocity = msg.Frame == CoordFrame.Boat ? _boat.TransformDirection(msg.Vel) : msg.Vel; }
             }
             if (msg.RequestId != 0)
             {
@@ -442,7 +439,7 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actor); return; }
             if (_net.Role != Role.Host || actor == 0 || _holder != actor) return;
             _holder = LocalHeld ? _net.MyNetId : 0; _remoteHeldPose = null; RestoreSlaved(); _haveLast = false;
-            if (!LocalHeld)
+            if (!LocalHeld && _anchor != null)
             {
                 ForgetGround();
                 MeltCarriedDrag();

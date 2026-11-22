@@ -306,7 +306,12 @@ namespace SailwindCoop.Sync
                         _hostLen[i] = msg.Lengths[i];
                         if (IsLocalRopeHeld(rc, held))
                         {
-                            _ropeHostPending[i] = true;
+                            // PreserveRope protects an anchor carry/drop owned by AnchorSync; do not
+                            // queue a stale pre-drop host length to overwrite its reply on release.
+                            if (rc is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false))
+                                _ropeHostPending[i] = false;
+                            else
+                                _ropeHostPending[i] = true;
                         }
                         else
                         {
@@ -539,6 +544,8 @@ namespace SailwindCoop.Sync
                 if (rc == null) continue;
                 if (IsLocalRopeHeld(rc, held))
                 {
+                    if (rc is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false))
+                        _ropeHostPending[i] = false;
                     if (!rc.currentLength.Equals(_lastSentLen[i]))
                     {
                         _ropeDirty[i] = true;

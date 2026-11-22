@@ -276,9 +276,13 @@ namespace SailwindCoop.Sync
 			if (_net.Role != Role.Host || actor == 0) return;
 			// A player who just loaded in is awake: end an active shared sleep cleanly instead of
 			// handing him Sleeping only to cancel it on the next presence tick.
+			bool cancelled = false;
 			if (_order.Phase == SleepPhase.Sleeping && (!_presence.TryGetValue(actor, out byte flags) || !Ready(flags)))
+			{
 				HostEnd(SleepPhase.Cancel, "player joined awake");
-			peer.Send(State(), DeliveryMethod.ReliableOrdered);
+				cancelled = true;
+			}
+			if (!cancelled) peer.Send(State(), DeliveryMethod.ReliableOrdered);
 			foreach (var entrance in _entrances.Values)
 				peer.Send(State(entrance: entrance), DeliveryMethod.ReliableOrdered);
 		}
@@ -365,7 +369,9 @@ namespace SailwindCoop.Sync
 				if (_blackout)
 				{
 					Log("shared sleep over here: " + _order.Phase);
-					if (_order.Phase == SleepPhase.Cancel && !_leftShared && GameState.inBed != null) SleepOnAlone();
+					if (_order.Phase == SleepPhase.Cancel && !_leftShared &&
+					    (GameState.inBed != null || GameState.sleepingInTavern || PlayerNeeds.sleep < RestedSleep))
+						SleepOnAlone();
 					else EndEffects(true);
 				}
 
@@ -379,6 +385,7 @@ namespace SailwindCoop.Sync
 			{
 				_leftShared = true;
 				global::Sleep.timeskipSleep = false;
+				try { SendPresence(0); } catch { }
 				return;
 			}
 			bool startingPresentation = !_blackout, wasPersonal = _personal;

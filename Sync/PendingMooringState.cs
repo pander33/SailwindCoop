@@ -6,7 +6,7 @@ namespace SailwindCoop.Sync
     internal sealed class PendingMooringState<T> where T : class
     {
         internal const long PendingTimeoutMs = 5000;
-        internal static Func<long> Clock = () => System.Diagnostics.Stopwatch.GetTimestamp() * 1000L / System.Diagnostics.Stopwatch.Frequency;
+        internal static Func<long> Clock = () => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1000.0 / System.Diagnostics.Stopwatch.Frequency));
         private uint _pendingRequest;
         private long _pendingSince;
         private T _state;

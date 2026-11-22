@@ -6,7 +6,7 @@ namespace SailwindCoop.Sync
     internal sealed class AnchorStateGate
     {
         internal const long PendingTimeoutMs = 5000;
-        internal static Func<long> Clock = () => System.Diagnostics.Stopwatch.GetTimestamp() * 1000L / System.Diagnostics.Stopwatch.Frequency;
+        internal static Func<long> Clock = () => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1000.0 / System.Diagnostics.Stopwatch.Frequency));
         private uint _pending;
         private long _pendingSince;
         private uint _lastRevision;

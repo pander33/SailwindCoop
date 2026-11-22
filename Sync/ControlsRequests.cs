@@ -84,7 +84,7 @@ namespace SailwindCoop.Sync
             if (_fleet != null)
             { foreach (var c in _fleet.Values) if (Array.IndexOf(c._wheels, wheel) >= 0) { c.NotifyWheelInput(wheel); return; } return; }
             int i = Array.IndexOf(_wheels, wheel); if (i < 0) return;
-            _wheelDirty[i] = true; _wheelInput[i] = wheel.currentInput;
+            _wheelDirty[i] = true; _wheelInput[i] = wheel.currentInput; _wheelHostPending[i] = false;
         }
         internal void NotifyWheelLock(GPButtonSteeringWheel wheel)
         {
@@ -95,7 +95,7 @@ namespace SailwindCoop.Sync
             if (_net.Role == Role.Host) SendState(null, false, true);
             else if (_net.Role == Role.Client)
             {
-                _wheelDirty[i] = false; _wheelInput[i] = wheel.currentInput;
+                _wheelDirty[i] = false; _wheelInput[i] = wheel.currentInput; _wheelHostPending[i] = false;
                 _net.Broadcast(new WheelLockRequestMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = (ushort)i,
                     Locked = Locked(wheel), Input = wheel.currentInput, RequestId = Request(_wheelTracks[i]) }, DeliveryMethod.ReliableOrdered);
             }
