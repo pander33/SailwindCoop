@@ -133,8 +133,8 @@ namespace SailwindCoop.Sync
         {
             if (_net.State != LinkState.Connected || !GameState.playing || GameState.currentlyLoading || !CoordSpace.Ready || _bm?.ropes == null) return;
             _carryTimer += dt; bool send = _carryTimer >= 1f / 12f; if (send) _carryTimer = 0;
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             for (ushort i = 0; i < _bm.ropes.Length; i++) for (byte part = 0; part < 2; part++)
             {
                 var carry = CarryFor(i, part); if (carry == null || carry.Item == null) continue;

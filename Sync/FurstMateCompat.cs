@@ -137,7 +137,7 @@ namespace SailwindCoop.Sync
                 if (target.parent == null || generation != _generation) return;
                 _parent = target.parent;
                 _motion.InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value;
-                _motion.Apply(target, Net.Clock.ServerTick);
+                _motion.Apply(target, Net.Clock.ServerTimeMs);
             }
         }
 

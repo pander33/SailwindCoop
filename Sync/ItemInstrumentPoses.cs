@@ -269,8 +269,8 @@ namespace SailwindCoop.Sync
         internal void ApplyRemoteInstruments()
         {
             if (_net.State != LinkState.Connected || !CoordSpace.Ready || !GameState.playing || GameState.currentlyLoading || Time.timeScale <= 0f) return;
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             var players = CoopBehaviour.Instance?.Players;
             foreach (var pair in _instruments)
             {
@@ -279,10 +279,10 @@ namespace SailwindCoop.Sync
                     !_byInstanceId.TryGetValue(pair.Key, out var entry)) continue;
                 ApplyPendingInstrumentSamples(entry, child);
                 if (child.Visuals.Count == 0) continue;
-                long tick = child.SampleHolder != 0 && players != null &&
-                    players.TryGetRenderTick(child.SampleHolder, localNow, serverNow, out long holderTick)
-                    ? child.Playback.AdvanceTowards(holderTick, localNow)
-                    : child.Playback.Advance(serverNow, localNow, Mathf.Max(90f, InterpDelayMs));
+                double tick = child.SampleHolder != 0 && players != null &&
+                    players.TryGetRenderTick(child.SampleHolder, localNow, serverNow, out double holderTick)
+                    ? child.Playback.AdvanceTowardsExact(holderTick, localNow)
+                    : child.Playback.AdvanceExact(serverNow, localNow, Mathf.Max(90f, InterpDelayMs));
                 child.Pose.ApplyAt(child.Joint.transform, tick);
                 var from = child.Visuals[0];
                 var to = from;
@@ -292,7 +292,7 @@ namespace SailwindCoop.Sync
                     if (tick < to.Tick) break;
                     from = to;
                 }
-                float blend = from == to ? 0f : Mathf.Clamp01((float)(tick - from.Tick) / (to.Tick - from.Tick));
+                float blend = from == to ? 0f : Mathf.Clamp01((float)((tick - from.Tick) / (to.Tick - from.Tick)));
                 ApplyInstrumentFields(child, from, to, blend);
                 if (child.Item is ShipItemFishingRod rod)
                 {
@@ -375,8 +375,8 @@ namespace SailwindCoop.Sync
                 ClearInstrumentSamples(child, preservePlayback: true);
             child.SampleHolder = holder;
             child.Latest = msg;
-            long localNow = _net.Clock.LocalTick;
-            child.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
+            double localNow = _net.Clock.LocalTimeMs;
+            child.Playback.Observe(msg.Tick, localNow + _net.Clock.OffsetMs, localNow);
             child.Pose.Push(msg.Tick, msg.RealPos, msg.Rot, msg.Velocity);
             child.Rotator.Push(msg.Tick, msg.RotatorPos, msg.RotatorRot);
             child.Visuals.Push(msg);

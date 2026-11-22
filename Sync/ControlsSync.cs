@@ -339,11 +339,11 @@ namespace SailwindCoop.Sync
 
             // Every moving hinge (booms + rudder) follows the host's value — including the rudder
             // of a wheel the local player is holding, so they see the real steering result.
-            long localNow = _net.Clock.LocalTick;
-            long renderTick = localNow + (long)_net.Clock.OffsetMs - (long)InterpDelayMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double renderTick = localNow + _net.Clock.OffsetMs - InterpDelayMs;
             var boats = Runtime.CoopBehaviour.Instance?.Boats;
-            if (boats != null && boats.TryGetRenderTick(_boatId, out long hullTick)) renderTick = hullTick;
-            renderTick = _hingePlayback.Advance(renderTick, _rotBuf[_rotBuf.Count - 1].Tick, localNow);
+            if (boats != null && boats.TryGetRenderTick(_boatId, out double hullTick)) renderTick = hullTick;
+            renderTick = _hingePlayback.AdvanceExact(renderTick, _rotBuf[_rotBuf.Count - 1].Tick, localNow);
             if (!PickRotations(renderTick, out Quaternion[] from, out Quaternion[] to, out float alpha))
                 return;
             for (int i = 0; i < _nodes.Length; i++)
@@ -389,7 +389,7 @@ namespace SailwindCoop.Sync
 
         /// <summary>The two snapshots around <paramref name="renderTick"/>; before the first or after
         /// the last it holds that one (no extrapolation: a hinge does not overshoot the host).</summary>
-        private bool PickRotations(long renderTick, out Quaternion[] from, out Quaternion[] to, out float alpha)
+        private bool PickRotations(double renderTick, out Quaternion[] from, out Quaternion[] to, out float alpha)
         {
             from = to = null; alpha = 0f;
             int n = _rotBuf.Count;
@@ -403,7 +403,7 @@ namespace SailwindCoop.Sync
                 // Older snapshots are no longer needed; keep the pair being played.
                 if (i > 0) _rotBuf.RemoveRange(0, i);
                 long span = b.Tick - a.Tick;
-                alpha = span > 0 ? Mathf.Clamp01((renderTick - a.Tick) / (float)span) : 1f;
+                alpha = span > 0 ? Mathf.Clamp01((float)((renderTick - a.Tick) / span)) : 1f;
                 from = a.Rots; to = b.Rots;
                 return true;
             }

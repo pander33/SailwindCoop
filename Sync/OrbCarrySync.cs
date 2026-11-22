@@ -153,8 +153,8 @@ namespace SailwindCoop.Sync
                 { var carry = FindBound(pair.Key, pair.Value.ParentId); if (carry != null) { ReceiveOrb(carry, pair.Value); _waitingOrbs.Remove(pair.Key); } }
             }
             bool send = _orbTimer >= 1f / 15f; if (send) _orbTimer = 0;
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             foreach (var carry in _orbs.Values)
             {
                 if (carry.Orb == null || carry.Orb.totem == null) continue;

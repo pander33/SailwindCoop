@@ -418,8 +418,8 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
             ItemComponents.RetryBindings();
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
 
             foreach (var e in _items)
             {
@@ -451,8 +451,8 @@ namespace SailwindCoop.Sync
         private void ApplyClientHeldOnHost()
         {
             if (!CoordSpace.Ready || Time.timeScale <= 0.0001f) return;
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             foreach (var e in _items)
             {
                 if (e.Item == null || e.HeldSample == null || !e.Net.HasData) continue;
@@ -463,7 +463,7 @@ namespace SailwindCoop.Sync
             }
         }
 
-        private void ApplyItemPose(ItemEntry e, long localNow, long serverNow)
+        private void ApplyItemPose(ItemEntry e, double localNow, double serverNow)
         {
             var target = e.Item.transform;
             var coop = Runtime.CoopBehaviour.Instance;
@@ -475,9 +475,9 @@ namespace SailwindCoop.Sync
             }
             var boats = coop?.Boats;
             if (e.HolderNetId == 0 && e.RemotePose?.Frame == CoordFrame.Boat && boats != null &&
-                boats.TryGetRenderTick(e.RemotePose.BoatIndex, out long hullTick)) e.Net.ApplyAt(target, hullTick);
+                boats.TryGetRenderTick(e.RemotePose.BoatIndex, out double hullTick)) e.Net.ApplyAt(target, hullTick);
             else if (e.HolderNetId == 0 && e.FreePlayback != null)
-                e.Net.ApplyAt(target, e.FreePlayback.Advance(serverNow, localNow, InterpDelayMs));
+                e.Net.ApplyAt(target, e.FreePlayback.AdvanceExact(serverNow, localNow, InterpDelayMs));
             else e.Net.Apply(target, serverNow);
         }
 
@@ -1310,8 +1310,8 @@ namespace SailwindCoop.Sync
                 (e.FreePlayback != null || msg.Vel.sqrMagnitude > 0.0001f || (!frameChanged && Quaternion.Angle(previous.Rot, msg.Rot) > 0.1f)))
             {
                 e.FreePlayback ??= new PlayerPlaybackClock();
-                long localNow = _net.Clock.LocalTick;
-                e.FreePlayback.Observe(msg.SampleTick, localNow + (long)_net.Clock.OffsetMs, localNow);
+                double localNow = _net.Clock.LocalTimeMs;
+                e.FreePlayback.Observe(msg.SampleTick, localNow + _net.Clock.OffsetMs, localNow);
             }
             e.RemotePose = msg;
             if (msg.HolderNetId != 0) e.HeldPose.Push(msg.SampleTick, msg.Frame, msg.BoatIndex, msg.Pos, msg.Rot, msg.Vel);

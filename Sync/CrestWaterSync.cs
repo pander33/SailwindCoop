@@ -70,6 +70,8 @@ namespace SailwindCoop.Sync
             typeof(OceanUpdaterCrest).GetField("windWaves", BindingFlags.NonPublic | BindingFlags.Instance);
         private static readonly FieldInfo InertiaWavesField =
             typeof(OceanUpdaterCrest).GetField("inertiaWaves", BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly FieldInfo TimerField =
+            typeof(OceanUpdaterCrest).GetField("timer", BindingFlags.NonPublic | BindingFlags.Instance);
 
         // --- часы ---------------------------------------------------------------------
         private TimeProviderCustom _provider;
@@ -269,15 +271,16 @@ namespace SailwindCoop.Sync
             // снапшота по сетевым часам (msg.Tick снят хостом в том же кадре), и цель становится
             // «время хоста СЕЙЧАС». Это поправка только к цели — ни на монотонность, ни на скорость
             // подтягивания она не влияет.
+            float age = (_net != null ? (float)((_net.Clock.ServerTimeMs - msg.Tick) * 0.001) : 0f);
+            if (age < 0f) age = 0f;
+            if (age > 1f) age = 1f;   // разрыв связи не должен разгонять воду
             if (_installed && _provider != null)
             {
-                float age = (_net != null ? (_net.Clock.ServerTick - msg.Tick) : 0L) * 0.001f;
-                if (age < 0f) age = 0f;
-                if (age > 1f) age = 1f;   // разрыв связи не должен разгонять воду
-                float err = (msg.CrestOceanTime + age * _hostTimeScale) - _provider._time;
+                float targetTime = msg.CrestOceanTime + age * _hostTimeScale;
+                float err = targetTime - _provider._time;
                 if (Mathf.Abs(err) > SnapSec)
                 {
-                    _provider._time = msg.CrestOceanTime;
+                    _provider._time = targetTime;
                     _slewError = 0f;
                 }
                 else _slewError = err;
@@ -293,6 +296,7 @@ namespace SailwindCoop.Sync
 
                 int localUp = (int)WavesUpField.GetValue(updater);
                 bool flipped = localUp != hostUp;
+                bool needImmediateUpdate = flipped || !_directionSeeded;
                 if (flipped)
                 {
                     WavesUpField.SetValue(updater, hostUp);
@@ -301,7 +305,7 @@ namespace SailwindCoop.Sync
                 // Направление пишем на переключении набора (ваниль делает это в DCTInertiaNewCycle,
                 // когда вес набора равен нулю, — там смена не видна) и один раз при первом снапшоте,
                 // иначе до первого переключения клиент гнал бы волну в свою сторону.
-                if (flipped || !_directionSeeded)
+                if (needImmediateUpdate)
                 {
                     var inertiaWaves = (ShapeGerstnerBatched[])InertiaWavesField.GetValue(updater);
                     if (inertiaWaves != null && inertiaWaves.Length > hostUp && inertiaWaves[hostUp] != null)
@@ -309,7 +313,23 @@ namespace SailwindCoop.Sync
                     _directionSeeded = true;
                 }
 
-                CurrentMultField.SetValue(updater, msg.CrestCurrentMult);
+                // Скомпенсировать возраст снапшота для фазы кроссфейда, не давая клиенту самому
+                // перешагнуть 1.0 раньше хоста и не откатывая фазу назад внутри текущего цикла.
+                float stepRatio = updater.timeBetweenUpdates > 0.0001f
+                    ? Mathf.Min(1f, Time.deltaTime / updater.timeBetweenUpdates)
+                    : 1f;
+                float agedMult = Mathf.Clamp(
+                    msg.CrestCurrentMult + age * _hostTimeScale * updater.lerpRateInertial * stepRatio,
+                    0f, 0.999f);
+                if (!needImmediateUpdate)
+                {
+                    float localMult = (float)CurrentMultField.GetValue(updater);
+                    if (agedMult < localMult && localMult - agedMult < 0.05f)
+                        agedMult = Mathf.Min(localMult, 0.999f);
+                }
+                CurrentMultField.SetValue(updater, agedMult);
+                if (needImmediateUpdate && TimerField != null)
+                    TimerField.SetValue(updater, 0f);
 
                 // Вес ветровых волн — не присваиванием: снапшоты идут 4 Гц, а жёсткая запись видна
                 // как ступенька на поверхности. MoveTowards ограничивает скорость изменения.
@@ -516,7 +536,7 @@ namespace SailwindCoop.Sync
                 finalizer: new HarmonyLib.HarmonyMethod(self.GetMethod(nameof(EndUpdaterUpdate), BindingFlags.Static | BindingFlags.NonPublic)));
         }
 
-        private static void PreUpdaterUpdate(out LocalInputs __state)
+        private static void PreUpdaterUpdate(OceanUpdaterCrest __instance, out LocalInputs __state)
         {
             __state = default(LocalInputs);
             try
@@ -525,6 +545,14 @@ namespace SailwindCoop.Sync
                 __state = new LocalInputs { Swapped = true, Distance = GameState.distanceToLand, Eyes = GameState.eyesFullyClosed };
                 GameState.distanceToLand = _hostDistanceToLand;
                 GameState.eyesFullyClosed = _hostEyesClosed;
+                // Не позволяем клиенту самостоятельно завершить цикл (currentMult >= 1f -> DCTInertiaNewCycle)
+                // раньше, чем переключение wavesUp придёт от хоста, иначе клиент запишет свой угол волны.
+                if (__instance != null && CurrentMultField != null)
+                {
+                    float cur = (float)CurrentMultField.GetValue(__instance);
+                    float maxBeforeWrap = Mathf.Max(0f, 0.9995f - __instance.lerpRateInertial * Time.deltaTime);
+                    if (cur > maxBeforeWrap) CurrentMultField.SetValue(__instance, maxBeforeWrap);
+                }
             }
             catch { }
         }

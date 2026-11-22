@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SailwindCoop.Net;
 using SailwindCoop.Sync;
 
 internal static class PlayerPlaybackTests
@@ -165,6 +166,93 @@ internal static class PlayerPlaybackTests
             assert(playback.Advance(100, 100, 150) == 100, "clear retained the previous hull time");
             playback.MarkRest(100, 5000);
             assert(playback.Advance(5000, 5050, 5100) == 5000, "idle stream tried to replay a stationary interval");
+        });
+        test("sub-millisecond playback and VSync frame-cadence smoothing avoid step quantization", () =>
+        {
+            var clock = new PlayerPlaybackClock();
+            // Simulate 60 FPS (16.6667 ms per frame) with 20 Hz snapshots sent on every 3rd or 4th frame (50 / 66.67 ms).
+            double prevTick = double.NaN;
+            int frameIndex = 0;
+            long lastSentTick = 0;
+            clock.Observe(0, 35.0, 35.0);
+            for (int f = 1; f <= 300; f++)
+            {
+                double now = 35.0 + f * (1000.0 / 60.0);
+                frameIndex++;
+                // 3 frames (50 ms), 3 frames (50 ms), 4 frames (66.7 ms) cadence at 60 FPS:
+                int cadence = (f % 10 == 0) ? 4 : 3;
+                if (frameIndex >= cadence)
+                {
+                    frameIndex = 0;
+                    lastSentTick = (long)Math.Round(now - 35.0);
+                    clock.Observe(lastSentTick, now, now);
+                }
+                double renderTick = clock.AdvanceExact(now, now, 100f);
+                if (!double.IsNaN(prevTick) && f > 30)
+                {
+                    double step = renderTick - prevTick;
+                    // Nominal frame step is 16.67 ms; smoothed cadence should stay very close to 1.0x speed.
+                    assert(step >= 15.5 && step <= 17.8, $"frame-cadence sawtooth modulated step to {step:F2} ms");
+                }
+                prevTick = renderTick;
+            }
+        });
+        test("NetClock filters asymmetric RTT spikes and bounds offset slew per reply", () =>
+        {
+            var netClock = new NetClock();
+            // True offset is +500 ms, base RTT is 40 ms (one-way = 20 ms).
+            for (int i = 0; i < 6; i++)
+            {
+                long send = 1000 + i * 333;
+                long arrival = send + 40;
+                long serverAtReply = send + 500 + 20;
+                netClock.OnReply(send, serverAtReply, arrival);
+            }
+            assert(Math.Abs(netClock.OffsetMs - 500.0) < 1.0, "steady offset did not converge to true offset");
+
+            // Inject a 240 ms asymmetric one-way spike (packet delayed 200 ms on the return path).
+            // Naive (serverTick + rtt/2) - now would shift the sample offset by -100 ms.
+            long spikeSend = 4000;
+            long spikeArrival = spikeSend + 240;
+            long spikeServer = spikeSend + 500 + 20;
+            netClock.OnReply(spikeSend, spikeServer, spikeArrival);
+            assert(Math.Abs(netClock.OffsetMs - 500.0) <= 3.0, $"asymmetric RTT spike pulled OffsetMs to {netClock.OffsetMs:F2}");
+
+            // Inject a 1200 ms frame-hitch spike (err = -580 ms > SnapThresholdMs): must be rejected as a spike, not snapped.
+            long hitchSend = 5000;
+            long hitchArrival = hitchSend + 1200;
+            long hitchServer = hitchSend + 500 + 20;
+            netClock.OnReply(hitchSend, hitchServer, hitchArrival);
+            assert(Math.Abs(netClock.OffsetMs - 500.0) <= 6.0, $"1200 ms RTT hitch snapped OffsetMs to {netClock.OffsetMs:F2}");
+
+            // Localhost (0 ms RTT) samples must also enter the window and smooth subsequent jitter.
+            netClock.Reset();
+            netClock.OnReply(1000, 1500, 1000);
+            netClock.OnReply(1333, 1853, 1333); // +20 ms sample on top of 0 ms RTT
+            assert(Math.Abs(netClock.OffsetMs - 502.0) < 0.01, $"localhost second sample bypassed EMA smoothing ({netClock.OffsetMs:F2})");
+        });
+        test("idle boat 2 Hz keepalives do not inflate playback delay when motion resumes", () =>
+        {
+            var clock = new PlayerPlaybackClock();
+            clock.Observe(0, 20.0, 20.0);
+            // 10 seconds of stationary 2 Hz keepalives (500 ms interval).
+            for (long tick = 500; tick <= 10000; tick += 500)
+                clock.ObserveIdle(tick, tick + 20.0, tick + 20.0);
+            // Boat resumes 30 Hz motion 400 ms after the last keepalive: delay must stay ~100 ms, not ~445 ms.
+            clock.Observe(10400, 10420.0, 10420.0);
+            clock.Observe(10433, 10453.0, 10453.0);
+            double renderTick = clock.AdvanceExact(10453.0, 10453.0, 100f);
+            double delay = 10453.0 - renderTick;
+            assert(delay <= 105.0, $"idle keepalive inflated playback delay to {delay:F1} ms");
+
+            // A single calm frame on a rough link must not erase an already adapted jitter buffer.
+            var rough = new PlayerPlaybackClock();
+            rough.Observe(0, 150.0, 150.0);
+            rough.Observe(50, 380.0, 380.0); // network stall -> adapts delay up (~405 ms)
+            rough.ObserveIdle(100, 413.0, 413.0);
+            rough.Observe(133, 446.0, 446.0);
+            double roughRender = rough.AdvanceExact(446.0, 446.0, 100f);
+            assert(446.0 - roughRender >= 350.0, $"brief idle sample discarded adapted rough-link delay ({446.0 - roughRender:F1} ms)");
         });
     }
 

@@ -30,7 +30,7 @@ namespace SailwindCoop.Sync
             public int PoseAppliedFrame = -1;
             public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
             public int PlaybackFrame = -1;
-            public long PlaybackTick;
+            public double PlaybackTick;
             public Quaternion HeadWorldRot = Quaternion.identity;
             public bool HeadDrivenByAnimator;
             public float AnimSpeed;
@@ -435,7 +435,7 @@ namespace SailwindCoop.Sync
         private bool _dumped;
         private float _sendTimer;
         private Vector3 _lastRealPos;
-        private long _lastCaptureTick;
+        private double _lastCaptureTimeMs;
         private bool _haveLast;
         private CoordFrame _lastFrame;
         private Transform _lastFrameBoat;
@@ -699,8 +699,8 @@ namespace SailwindCoop.Sync
             if (_sendTimer < interval) return;
             _sendTimer %= interval;
 
-            long captureTick = _net.Clock.LocalTick;
-            long tick = captureTick + (long)_net.Clock.OffsetMs;
+            double captureTimeMs = _net.Clock.LocalTimeMs;
+            long tick = (long)System.Math.Round(captureTimeMs + _net.Clock.OffsetMs);
             Transform pl = _localPlayer;
             Transform boat = CurrentBoat();
             ushort boatIndex = BoatLocator.NoBoat;
@@ -739,11 +739,11 @@ namespace SailwindCoop.Sync
             Vector3 vel = Vector3.zero;
             if (_haveLast && _lastFrame == frame && _lastFrameBoat == boat)
             {
-                float secs = (captureTick - _lastCaptureTick) / 1000f;
+                float secs = (float)((captureTimeMs - _lastCaptureTimeMs) * 0.001);
                 if (secs > 0.0001f) vel = (pos - _lastRealPos) / secs;
             }
             _lastRealPos = pos;
-            _lastCaptureTick = captureTick;
+            _lastCaptureTimeMs = captureTimeMs;
             _lastFrame = frame;
             _lastFrameBoat = boat;
             _haveLast = true;
@@ -751,7 +751,7 @@ namespace SailwindCoop.Sync
             // Походка/поворот меряются отдельно от позы — см. комментарий у PlayerStateMsg.
             bool hasLocalAnim;
             float moveSpeed = LocalDeckSpeed(out hasLocalAnim);
-            float turnRate = LocalTurnRate(tick, hasLocalAnim);
+            float turnRate = LocalTurnRate(captureTimeMs, hasLocalAnim);
 
             _handProbe.Sample(pl);
             byte hands = 0;
@@ -828,7 +828,7 @@ namespace SailwindCoop.Sync
         /// задаётся мышью и меряется в кадре той же неподвижной опоры, поэтому поворот лодки в него не
         /// протекает. Начало координат только переносится, но не вращается, так что углу оно не вредит.
         /// </summary>
-        private float LocalTurnRate(long tick, bool available)
+        private float LocalTurnRate(double captureTimeMs, bool available)
         {
             if (!available) { _haveYaw = false; return 0f; }
             Transform ctrl;
@@ -840,17 +840,17 @@ namespace SailwindCoop.Sync
             float rate = 0f;
             if (_haveYaw)
             {
-                float secs = (tick - _lastYawTick) / 1000f;
+                float secs = (float)((captureTimeMs - _lastYawTimeMs) * 0.001);
                 if (secs > 0.0001f) rate = Mathf.DeltaAngle(_lastYaw, yaw) / secs;
             }
             _lastYaw = yaw;
-            _lastYawTick = tick;
+            _lastYawTimeMs = captureTimeMs;
             _haveYaw = true;
             return rate;
         }
 
         private float _lastYaw;
-        private long _lastYawTick;
+        private double _lastYawTimeMs;
         private bool _haveYaw;
 
         private readonly LocalHandProbe _handProbe = new LocalHandProbe();
@@ -1067,8 +1067,8 @@ namespace SailwindCoop.Sync
                 BoatAuthority.Instance?.Record(msg, fromPeer);
                 _net.SetMemberBoat(msg.NetId, msg.Frame == CoordFrame.Boat ? msg.BoatIndex : BoatLocator.NoBoat);
             }
-            long localNow = _net.Clock.LocalTick;
-            a.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
+            double localNow = _net.Clock.LocalTimeMs;
+            a.Playback.Observe(msg.Tick, localNow + _net.Clock.OffsetMs, localNow);
             if (!a.History.Push(msg)) return;
             if (a.History.Restarted) a.Poses.Clear();
             if (a.Poses.Count == 0 || !a.Poses[a.Poses.Count - 1].Matches(msg))
@@ -1128,12 +1128,12 @@ namespace SailwindCoop.Sync
         public void ApplyRemotes()
         {
             if (!CoordSpace.Ready) return;
-            long localNow = _net.Clock.LocalTick;
-            long now = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double now = localNow + _net.Clock.OffsetMs;
             foreach (var a in _remotes.Values)
             {
                 if (a.Go == null || a.Poses.Count == 0) continue;
-                long renderTick = RenderTick(a, localNow, now);
+                double renderTick = RenderTick(a, localNow, now);
                 int index = 0;
                 while (index + 1 < a.Poses.Count && a.Poses[index + 1].Start <= renderTick) index++;
                 var pose = a.Poses[index];
@@ -1145,7 +1145,7 @@ namespace SailwindCoop.Sync
                 if (previous != null && previous != pose && previous.Resolve())
                     pose.Net.ContinueStalledRecovery(previous.Net, pose.Boat, renderTick);
                 a.RenderedPose = pose;
-                a.History.Prune(renderTick);
+                a.History.Prune((long)System.Math.Floor(renderTick));
                 ApplyPoseDetails(a, pose, renderTick);
                 // The two positions are in different supports. Bridge only nearby samples,
                 // after projecting both through the decks already placed this frame.
@@ -1173,21 +1173,21 @@ namespace SailwindCoop.Sync
             RetryPendingNpcSkins();
         }
 
-        internal bool TryGetRenderTick(uint netId, long localNow, long serverNow, out long tick)
+        internal bool TryGetRenderTick(uint netId, double localNow, double serverNow, out double tick)
             => TryGetCarriedPlayback(netId, localNow, serverNow, out tick, out _);
 
-        private long RenderTick(RemoteAvatar avatar, long localNow, long serverNow)
+        private double RenderTick(RemoteAvatar avatar, double localNow, double serverNow)
         {
             int frame = Time.frameCount;
             if (avatar.PlaybackFrame != frame)
             {
-                avatar.PlaybackTick = avatar.Playback.Advance(serverNow, localNow, InterpDelayMs);
+                avatar.PlaybackTick = avatar.Playback.AdvanceExact(serverNow, localNow, InterpDelayMs);
                 avatar.PlaybackFrame = frame;
             }
             return avatar.PlaybackTick;
         }
 
-        private bool TryGetCarriedPlayback(uint holder, long localNow, long serverNow, out long tick, out NetTransform carrier)
+        private bool TryGetCarriedPlayback(uint holder, double localNow, double serverNow, out double tick, out NetTransform carrier)
         {
             tick = 0;
             carrier = null;
@@ -1198,27 +1198,27 @@ namespace SailwindCoop.Sync
             return true;
         }
 
-        internal static void ApplyCarriedPose(NetTransform pose, Transform target, uint holder, long localNow, long serverNow,
+        internal static void ApplyCarriedPose(NetTransform pose, Transform target, uint holder, double localNow, double serverNow,
                                               bool followCarrierPosition = true)
         {
             var players = CoopBehaviour.Instance?.Players;
             if (holder != 0 && players != null &&
-                players.TryGetCarriedPlayback(holder, localNow, serverNow, out long tick, out var carrier))
+                players.TryGetCarriedPlayback(holder, localNow, serverNow, out double tick, out var carrier))
                 pose.ApplyAt(target, tick, followCarrierPosition ? carrier : null);
             else
                 pose.Apply(target, serverNow);
         }
 
-        internal static void ApplyCarriedPose(SupportPoseBuffer pose, Transform target, uint holder, long localNow, long serverNow)
+        internal static void ApplyCarriedPose(SupportPoseBuffer pose, Transform target, uint holder, double localNow, double serverNow)
         {
             var players = CoopBehaviour.Instance?.Players;
             if (holder != 0 && players != null &&
-                players.TryGetCarriedPlayback(holder, localNow, serverNow, out long tick, out var carrier))
+                players.TryGetCarriedPlayback(holder, localNow, serverNow, out double tick, out var carrier))
                 pose.ApplyAt(target, tick, carrier);
             else pose.Apply(target, serverNow);
         }
 
-        private void ApplyPoseDetails(RemoteAvatar avatar, PoseSegment pose, long tick)
+        private void ApplyPoseDetails(RemoteAvatar avatar, PoseSegment pose, double tick)
         {
             var snapshots = pose.Details;
             if (snapshots.Count == 0) return;
@@ -1230,9 +1230,25 @@ namespace SailwindCoop.Sync
                 if (tick < to.Tick) break;
                 from = to;
             }
-            float fraction = from == to ? 0f : Mathf.Clamp01((float)(tick - from.Tick) / (to.Tick - from.Tick));
+            float fraction = from == to ? 0f : Mathf.Clamp01((float)((tick - from.Tick) / (to.Tick - from.Tick)));
             if (!avatar.HasAnimSnapshot || from.Tick > avatar.LastAnimTick)
                 UpdateAnimatorTargets(avatar, from);
+            if (from != to && from.HasLocalAnim && to.HasLocalAnim)
+            {
+                float blendedSpeed = Mathf.Lerp(from.MoveSpeed, to.MoveSpeed, fraction);
+                float blendedTurn = Mathf.Lerp(from.TurnRate, to.TurnRate, fraction);
+                if (avatar.AnimMoving)
+                {
+                    if (blendedSpeed < 0.08f) avatar.AnimMoving = false;
+                }
+                else if (blendedSpeed > 0.18f)
+                {
+                    avatar.AnimMoving = true;
+                }
+                avatar.AnimTargetSpeed = avatar.AnimMoving ? 3f : 0f;
+                avatar.NpcTargetSpeedMps = avatar.AnimMoving ? Mathf.Clamp(blendedSpeed, 0f, 6f) : 0f;
+                avatar.AnimTargetTurn = Mathf.Abs(blendedTurn) < 15f ? 0f : Mathf.Clamp(blendedTurn / 180f, -1f, 1f);
+            }
             var head = Quaternion.Slerp(from.HeadRot, to.HeadRot, fraction);
             avatar.HeadWorldRot = pose.Boat != null ? pose.Boat.rotation * head : head;
             avatar.Hands = from.Hands;
@@ -1332,6 +1348,7 @@ namespace SailwindCoop.Sync
             _localCrouching = null;
             _sendTimer = 0f;
             _haveLast = false;
+            _haveYaw = false;
             _handProbe.Clear();
             _emote = EmoteId.None;
             foreach (var b in _bundleCache.Values)

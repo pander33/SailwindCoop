@@ -399,8 +399,8 @@ namespace SailwindCoop.Sync
                 (_holder == 0 && HooksHangMoreCompat.IsAttached(_anchor))) return;
             if (_net.Role == Role.Host && _holder == 0) return;
             EnsureSlaved(_holder != 0);
-            long localNow = _net.Clock.LocalTick;
-            PlayerSync.ApplyCarriedPose(_slave, _anchor.transform, _holder, localNow, localNow + (long)_net.Clock.OffsetMs);
+            double localNow = _net.Clock.LocalTimeMs;
+            PlayerSync.ApplyCarriedPose(_slave, _anchor.transform, _holder, localNow, localNow + _net.Clock.OffsetMs);
         }
 
         private void EnsureSlaved(bool held)

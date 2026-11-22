@@ -199,8 +199,8 @@ namespace SailwindCoop.Sync
 
             try
             {
-                long localNow = _net.Clock.LocalTick;
-                long serverNow = localNow + (long)_net.Clock.OffsetMs;
+                double localNow = _net.Clock.LocalTimeMs;
+                double serverNow = localNow + _net.Clock.OffsetMs;
                 for (int i = 0; i < msg.Boats.Length; i++)
                 {
                     var e = msg.Boats[i];
@@ -303,12 +303,12 @@ namespace SailwindCoop.Sync
             if (_net.Role != Role.Client || _client.Count == 0) return;
             if (!CoordSpace.Ready) return;
 
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             foreach (var cb in _client.Values)
             {
                 if (cb.Controller == null || !cb.Net.HasData) continue;
-                cb.Net.ApplyAt(cb.Controller.transform, cb.Playback.Advance(serverNow, localNow, MinimumPlaybackDelay));
+                cb.Net.ApplyAt(cb.Controller.transform, cb.Playback.AdvanceExact(serverNow, localNow, MinimumPlaybackDelay));
             }
         }
 

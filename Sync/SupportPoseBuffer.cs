@@ -25,7 +25,7 @@ namespace SailwindCoop.Sync
                 var boat = BoatLocator.FindByIndex(First.Boat);
                 if (boat == null) return false;
                 if (Boat != boat)
-                { Boat = boat; Net.ToWorldPos = boat.TransformPoint; Net.ToWorldRot = r => boat.rotation * r; }
+                { Boat = boat; Net.ToWorldPos = boat.TransformPoint; Net.ToWorldRot = r => boat.rotation * r; Net.ToWorldOffset = boat.TransformVector; }
                 return true;
             }
         }
@@ -34,7 +34,7 @@ namespace SailwindCoop.Sync
         private readonly List<Segment> _segments = new List<Segment>();
         internal bool HasData => _segments.Count > 0;
         internal float InterpDelayMs = 100f;
-        internal void Apply(Transform target, long serverNow) => ApplyAt(target, serverNow - (long)InterpDelayMs);
+        internal void Apply(Transform target, double serverNow) => ApplyAt(target, serverNow - InterpDelayMs);
         internal long PlayedTick => _history.PlayedTick;
         internal bool Push(long tick, CoordFrame frame, ushort boat, Vector3 pos, Quaternion rot, Vector3 vel)
         {
@@ -82,7 +82,7 @@ namespace SailwindCoop.Sync
             }
             return true;
         }
-        internal void ApplyAt(Transform target, long tick, NetTransform carrier = null)
+        internal void ApplyAt(Transform target, double tick, NetTransform carrier = null)
         {
             if (_segments.Count == 0) return;
             int index = 0;
@@ -94,7 +94,7 @@ namespace SailwindCoop.Sync
                 !current.Net.TryApplyTransition(target, next.Net, current.Last.Tick, next.First.Tick, tick, carrier))
                 current.Net.ApplyAt(target, tick, carrier);
             if (index > 0) _segments.RemoveRange(0, index);
-            _history.Prune(tick);
+            _history.Prune((long)System.Math.Floor(tick));
         }
         internal void Clear() { _segments.Clear(); _history.Clear(); }
     }

@@ -6,8 +6,8 @@ namespace SailwindCoop.Sync
     internal sealed class HingePlayback
     {
         private const double CatchUpRate = 1.35;
-        private double _tick;
-        private long _lastLocal, _restStart, _restEnd;
+        private double _tick, _lastLocal;
+        private long _restStart, _restEnd;
         private bool _started;
 
         internal void MarkRest(long from, long to)
@@ -17,8 +17,11 @@ namespace SailwindCoop.Sync
         }
 
         internal long Advance(long hullTick, long newestTick, long localNow)
+            => (long)Math.Floor(AdvanceExact(hullTick, newestTick, localNow));
+
+        internal double AdvanceExact(double hullTick, long newestTick, double localNow)
         {
-            long target = Math.Min(hullTick, newestTick);
+            double target = Math.Min(hullTick, (double)newestTick);
             if (!_started)
             {
                 _started = true;
@@ -31,7 +34,7 @@ namespace SailwindCoop.Sync
                 _tick = Math.Min(target, _tick + Math.Max(0, localNow - _lastLocal) * CatchUpRate);
             }
             _lastLocal = localNow;
-            return (long)Math.Floor(_tick);
+            return _tick;
         }
 
         internal void Clear()

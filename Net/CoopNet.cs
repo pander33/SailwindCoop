@@ -443,6 +443,7 @@ namespace SailwindCoop.Net
             OnRosterChanged?.Invoke();
             MyNetId = NetRegistry.HostPlayerNetId;
             _lastTimeSyncTick = 0;
+            _helloSentTick = 0;
             Registry.Clear();
             Clock.Reset();
             Role = Role.None;
@@ -563,12 +564,15 @@ namespace SailwindCoop.Net
                    int.TryParse(key.Substring(prefix.Length), out protocol);
         }
 
+        private long _helloSentTick;
+
         private void OnPeerConnected(NetPeer peer)
         {
             if (Role == Role.Client)
             {
                 _hostPeer = peer;
                 State = LinkState.Handshaking;
+                _helloSentTick = Clock.LocalTick;
                 string mySelection = "";
                 try { mySelection = SailwindCoop.Avatar.AvatarCatalog.CurrentSelection; }
                 catch { mySelection = ""; }
@@ -905,8 +909,8 @@ namespace SailwindCoop.Net
             LastDisconnectReason = "";
             MyNetId = ack.AssignedNetId;
             HasConnectedSuccessfully = true;
-            // Seed the clock immediately with the host tick from the ack.
-            Clock.OnReply(Clock.LocalTick, ack.ServerTick);
+            // Seed the clock immediately with the host tick and handshake round trip.
+            Clock.OnReply(_helloSentTick > 0 ? _helloSentTick : Clock.LocalTick, ack.ServerTick);
             Registry.Register(ack.AssignedNetId, NetObjKind.Player, ack.AssignedNetId);
             Registry.Register(NetRegistry.HostPlayerNetId, NetObjKind.Player, NetRegistry.HostPlayerNetId);
             _playerNames[ack.AssignedNetId] = PlayerName;

@@ -18,9 +18,15 @@ namespace SailwindCoop.Sync
             public ushort Index;
             public uint NetId;
             public Transform Boat;
+            public Rigidbody Rb;
             public Vector3 LastRealPos;
-            public long LastRealTick;
+            public double LastRealTimeMs;
+            public Vector3 LastSentPos;
+            public Quaternion LastSentRot;
+            public float LastSentTime;
+            public float ActiveUntilTime;
             public bool HaveLast;
+            public bool HaveSent;
         }
 
         private sealed class ClientBoat
@@ -29,7 +35,7 @@ namespace SailwindCoop.Sync
             public Transform Boat;
             public readonly NetTransform Net = new NetTransform { SmoothUnderruns = true };
             public readonly PlayerPlaybackClock Playback = new PlayerPlaybackClock();
-            public long RenderTick;
+            public double RenderTick;
             /// <summary>The boat's body: on the hull itself or, as in game 0.39, on the hull's parent
             /// (the object with <c>BoatProbes</c> and <c>BoatDamage</c>). This is what is placed — the
             /// hull rides on it — so the body, its colliders and the hull never part.</summary>
@@ -48,6 +54,10 @@ namespace SailwindCoop.Sync
             public Vector3 AngularVelocity;
             public Quaternion LastBodyRot;
             public bool HaveLastRot;
+            public Vector3 LastRecvPos;
+            public Quaternion LastRecvRot;
+            public long LastRecvTick = long.MinValue;
+            public bool HaveRecvPose;
             /// <summary>False while we are only buffering: physics is still vanilla and we apply nothing.</summary>
             public bool Engaged;
         }
@@ -105,6 +115,12 @@ namespace SailwindCoop.Sync
 
         /// <summary>No boat moves this fast (m/s); a sample-to-sample speed above it is a teleport.</summary>
         private const float TeleportSpeed = 200f;
+        private const int ActiveSnapshotHz = 30;
+        private const float IdleKeepaliveSec = 0.5f;
+        private const float ActiveTailSec = 1.5f;
+        private const float IdlePosEpsilon = 0.02f;
+        private const float IdleRotEpsilonDeg = 0.15f;
+        private const float ActiveCrewRadius = 250f;
 
         public void Tick(float dt)
         {
@@ -115,29 +131,72 @@ namespace SailwindCoop.Sync
             RefreshHostBoats(dt);
             if (_hostBoats.Count == 0) return;
 
-            float interval = 1f / Mathf.Max(1, SnapshotHz);
+            // Default 20 Hz config upgrades active boats to 30 Hz; an explicit custom config value is respected.
+            int activeHz = SnapshotHz == 20 ? ActiveSnapshotHz : Mathf.Max(1, SnapshotHz);
+            float interval = 1f / activeHz;
             _sendTimer += dt;
             if (_sendTimer < interval) return;
             _sendTimer %= interval;
 
             long tick = _net.Clock.ServerTick;
+            double nowMs = _net.Clock.LocalTimeMs;
+            float unscaledNow = Time.unscaledTime;
+            Transform hostBoat = LocalBoatProvider != null ? LocalBoatProvider() : null;
+            Transform hostPlayer = LocalPlayerProvider != null ? LocalPlayerProvider() : null;
+
             foreach (var hb in _hostBoats.Values)
             {
-                if (hb.Boat == null || ShipyardSync.Suspended(hb.Index)) { hb.HaveLast = false; continue; }
+                if (hb.Boat == null || ShipyardSync.Suspended(hb.Index)) { hb.HaveLast = hb.HaveSent = false; continue; }
 
                 Vector3 real = CoordSpace.LocalToReal(hb.Boat.position);
-                Vector3 vel = Vector3.zero;
+                Quaternion rot = hb.Boat.rotation;
+                Vector3 diffVel = Vector3.zero;
+                bool teleport = false;
                 if (hb.HaveLast)
                 {
-                    float secs = (tick - hb.LastRealTick) / 1000f;
-                    if (secs > 0.0001f) vel = (real - hb.LastRealPos) / secs;
+                    float secs = (float)((nowMs - hb.LastRealTimeMs) * 0.001);
+                    if (secs > 0.0001f) diffVel = (real - hb.LastRealPos) / secs;
                     // A teleport, not motion: a client that runs past this sample would
                     // extrapolate the boat by the whole jump.
-                    if (vel.sqrMagnitude > TeleportSpeed * TeleportSpeed) vel = Vector3.zero;
+                    if (diffVel.sqrMagnitude > TeleportSpeed * TeleportSpeed)
+                    {
+                        diffVel = Vector3.zero;
+                        teleport = true;
+                    }
                 }
                 hb.LastRealPos = real;
-                hb.LastRealTick = tick;
+                hb.LastRealTimeMs = nowMs;
                 hb.HaveLast = true;
+
+                if (hb.Rb == null) hb.Rb = FindBody(hb.Boat);
+                Vector3 vel = diffVel;
+                if (!teleport && hb.Rb != null && !hb.Rb.isKinematic)
+                {
+                    // RealVel is per second of real host time; Rigidbody.velocity is the body's linear
+                    // motion per second of scaled game time (without rotational ω × r offset).
+                    Vector3 physVel = hb.Rb.velocity * Mathf.Max(0f, Time.timeScale);
+                    if (BoatAuthority.Finite(physVel) && physVel.sqrMagnitude <= TeleportSpeed * TeleportSpeed &&
+                        (physVel.sqrMagnitude > 0.0001f || diffVel.sqrMagnitude <= 0.01f))
+                        vel = physVel;
+                }
+
+                bool moving = !hb.HaveSent || teleport ||
+                    vel.sqrMagnitude > 0.0025f ||
+                    (real - hb.LastSentPos).sqrMagnitude > IdlePosEpsilon * IdlePosEpsilon ||
+                    Quaternion.Angle(rot, hb.LastSentRot) > IdleRotEpsilonDeg;
+                bool crewed = (hostBoat != null && (hostBoat == hb.Boat || hostBoat.IsChildOf(hb.Boat))) ||
+                    (hostPlayer != null && (hostPlayer.position - hb.Boat.position).sqrMagnitude <= ActiveCrewRadius * ActiveCrewRadius) ||
+                    (BoatAuthority.Instance != null && BoatAuthority.Instance.AnyActorNear(hb.Boat, ActiveCrewRadius));
+                if (crewed || moving)
+                    hb.ActiveUntilTime = unscaledNow + ActiveTailSec;
+
+                if (unscaledNow > hb.ActiveUntilTime && unscaledNow - hb.LastSentTime < IdleKeepaliveSec)
+                    continue;
+
+                hb.LastSentPos = real;
+                hb.LastSentRot = rot;
+                hb.LastSentTime = unscaledNow;
+                hb.HaveSent = true;
 
                 _net.Broadcast(new BoatStateMsg
                 {
@@ -145,7 +204,7 @@ namespace SailwindCoop.Sync
                     BoatIndex = hb.Index,
                     Tick = tick,
                     RealPos = real,
-                    Rot = hb.Boat.rotation,
+                    Rot = rot,
                     RealVel = vel,
                 }, LiteNetLib.DeliveryMethod.Unreliable);
             }
@@ -178,8 +237,24 @@ namespace SailwindCoop.Sync
             }
 
             var cb = EnsureClientBoat(msg.BoatIndex, msg.NetId, boat);
-            long localNow = _net.Clock.LocalTick;
-            cb.Playback.Observe(msg.Tick, localNow + (long)_net.Clock.OffsetMs, localNow);
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
+            if (msg.Tick > cb.LastRecvTick)
+            {
+                bool stationaryKeepalive = cb.HaveRecvPose &&
+                    msg.RealVel.sqrMagnitude <= 0.0025f &&
+                    (msg.RealPos - cb.LastRecvPos).sqrMagnitude <= IdlePosEpsilon * IdlePosEpsilon &&
+                    Quaternion.Angle(msg.Rot, cb.LastRecvRot) <= IdleRotEpsilonDeg;
+                cb.LastRecvPos = msg.RealPos;
+                cb.LastRecvRot = msg.Rot;
+                cb.LastRecvTick = msg.Tick;
+                cb.HaveRecvPose = true;
+
+                if (stationaryKeepalive)
+                    cb.Playback.ObserveIdle(msg.Tick, serverNow, localNow);
+                else
+                    cb.Playback.Observe(msg.Tick, serverNow, localNow);
+            }
             cb.Net.Push(msg.Tick, msg.RealPos, msg.Rot, msg.RealVel);
         }
 
@@ -189,12 +264,12 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready) return;
             if (Time.timeScale <= 0.0001f) return;
 
-            long localNow = _net.Clock.LocalTick;
-            long serverNow = localNow + (long)_net.Clock.OffsetMs;
+            double localNow = _net.Clock.LocalTimeMs;
+            double serverNow = localNow + _net.Clock.OffsetMs;
             foreach (var cb in _clientBoats.Values)
             {
                 if (cb.Boat == null || !cb.Net.HasData || ShipyardSync.Suspended(cb.Index)) continue;
-                cb.RenderTick = cb.Playback.Advance(serverNow, localNow, InterpDelayMs);
+                cb.RenderTick = cb.Playback.AdvanceExact(serverNow, localNow, InterpDelayMs);
 
                 // Not slaved yet: keep buffering under vanilla physics until the stream is trustworthy,
                 // then take over in one controlled step (see EngageSlave).
@@ -209,10 +284,18 @@ namespace SailwindCoop.Sync
             }
         }
 
-        internal bool TryGetRenderTick(ushort boat, out long tick)
+        internal bool TryGetRenderTick(ushort boat, out double tick)
         {
             if (_clientBoats.TryGetValue(boat, out var cb) && cb.Engaged && cb.Boat != null)
             { tick = cb.RenderTick; return true; }
+            tick = 0;
+            return false;
+        }
+
+        internal bool TryGetRenderTick(ushort boat, out long tick)
+        {
+            if (TryGetRenderTick(boat, out double exact))
+            { tick = (long)Math.Floor(exact); return true; }
             tick = 0;
             return false;
         }
@@ -270,7 +353,15 @@ namespace SailwindCoop.Sync
             float dt = Time.deltaTime;
             if (cb.HaveLastRot && dt > 0.0001f)
             {
-                (bodyRot * Quaternion.Inverse(cb.LastBodyRot)).ToAngleAxis(out float degrees, out Vector3 axis);
+                Quaternion delta = bodyRot * Quaternion.Inverse(cb.LastBodyRot);
+                if (delta.w < 0f)
+                {
+                    delta.x = -delta.x;
+                    delta.y = -delta.y;
+                    delta.z = -delta.z;
+                    delta.w = -delta.w;
+                }
+                delta.ToAngleAxis(out float degrees, out Vector3 axis);
                 if (degrees > 180f) degrees -= 360f;
                 w = axis * (degrees * Mathf.Deg2Rad / dt);
                 if (float.IsNaN(w.x) || float.IsInfinity(w.x) || w.sqrMagnitude > MaxAngularSpeed * MaxAngularSpeed)
@@ -395,7 +486,8 @@ namespace SailwindCoop.Sync
                 else if (hb.Boat != boat)
                 {
                     hb.Boat = boat;
-                    hb.HaveLast = false;
+                    hb.Rb = null;
+                    hb.HaveLast = hb.HaveSent = false;
                     _net.Registry.Register(hb.NetId, NetObjKind.Boat, NetRegistry.HostAuthority, boat);
                     Plugin.Logger.LogInfo("[BoatSync] Boat #" + idx + " rebound ('" + BoatLocator.PathOf(boat) + "')");
                 }
