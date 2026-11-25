@@ -22,8 +22,11 @@ namespace SailwindCoop.Net
         public RefitOutcome Outcome;
         public float HullDamage, WaterLevel;
         public int[] Parts = Array.Empty<int>();
+        public const int HullColorSlots = 5;
+        public int[] CustomColors = Array.Empty<int>();
         public NetSailConfiguration[] Sails = Array.Empty<NetSailConfiguration>();
-        public byte[] Dirt = Array.Empty<byte>();
+        // The surfaces reached by the paid cleaning operation. -1 denotes the primary surface.
+        public int[] CleanedSurfaces = Array.Empty<int>();
         /// <summary>Shipyard Expansion's per-sail entry for the hull (angle, jib flip, texture), empty
         /// without that mod (protocol 101). See <c>Sync/ShipyardExpansionRig.cs</c>.</summary>
         public string ModRig = "";
@@ -35,8 +38,13 @@ namespace SailwindCoop.Net
             w.Put(Baseline); w.Put(Repair); w.Put(Clean); w.Put((byte)Outcome); w.Put(HullDamage); w.Put(WaterLevel);
             if (Parts.Length > ushort.MaxValue || Sails.Length > ushort.MaxValue) throw new InvalidDataException("refit array exceeds wire count");
             w.Put((ushort)Parts.Length); foreach (int part in Parts) w.Put(part);
+            if (CustomColors.Length != 0 && CustomColors.Length != HullColorSlots)
+                throw new InvalidDataException("invalid refit color count");
+            w.Put((byte)CustomColors.Length); foreach (int color in CustomColors) w.Put(color);
             w.Put((ushort)Sails.Length); foreach (var sail in Sails) sail.Write(w);
-            w.Put(Dirt.Length); w.Put(Dirt);
+            if (CleanedSurfaces.Length > ushort.MaxValue) throw new InvalidDataException("refit dirt exceeds wire count");
+            w.Put((ushort)CleanedSurfaces.Length);
+            foreach (int surface in CleanedSurfaces) w.Put(surface);
             string rig = ModRig ?? "";
             if (rig.Length > MaxModRigChars) rig = ""; // never send a cut entry: the receiver would parse it
             w.Put(rig, MaxModRigChars);
@@ -47,10 +55,15 @@ namespace SailwindCoop.Net
             Baseline = r.GetBool(); Repair = r.GetBool(); Clean = r.GetBool(); Outcome = (RefitOutcome)r.GetByte(); HullDamage = r.GetFloat(); WaterLevel = r.GetFloat();
             int count = r.GetUShort(); if (count > r.AvailableBytes / 4) throw new InvalidDataException("truncated refit parts");
             Parts = new int[count]; for (int i = 0; i < count; i++) Parts[i] = r.GetInt();
+            count = r.GetByte();
+            if ((count != 0 && count != HullColorSlots) || count > r.AvailableBytes / 4)
+                throw new InvalidDataException("invalid refit colors");
+            CustomColors = new int[count]; for (int i = 0; i < count; i++) CustomColors[i] = r.GetInt();
             count = r.GetUShort(); if (count > r.AvailableBytes / 36) throw new InvalidDataException("truncated refit sails");
             Sails = new NetSailConfiguration[count]; for (int i = 0; i < count; i++) { Sails[i] = new NetSailConfiguration(); Sails[i].Read(r); }
-            count = r.GetInt(); if (count < 0 || count > r.AvailableBytes) throw new InvalidDataException("truncated refit dirt");
-            Dirt = new byte[count]; r.GetBytes(Dirt, count);
+            count = r.GetUShort(); if (count > r.AvailableBytes / 4) throw new InvalidDataException("truncated refit dirt surfaces");
+            CleanedSurfaces = new int[count];
+            for (int i = 0; i < count; i++) CleanedSurfaces[i] = r.GetInt();
             ModRig = r.GetString(MaxModRigChars);
         }
     }

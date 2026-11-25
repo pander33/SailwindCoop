@@ -64,7 +64,7 @@ namespace ProtocolSmoke
             CheckPopulatedMessage(new PauseRequestMsg { Paused = true }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new PauseStateMsg { Revision = 19, Reasons = WorldPauseReason.Manual | WorldPauseReason.Loading, HostTimeScale = 4f }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new EnvStateMsg { Tick = 12000, PauseRevision = 19, HostTimeScale = 4f }, failures, ref populated, ref truncated);
-            CheckPopulatedMessage(new HelloMsg { ProtocolVersion = Protocol.Version, PlayerGuid = Guid.NewGuid().ToString("N"), PlayerName = "Dice guest", SelectedAvatar = "avatar.bundle" }, failures, ref populated, ref truncated);
+            CheckPopulatedMessage(new HelloMsg { ProtocolVersion = Protocol.Version, GameBuild = "0.41", PlayerGuid = Guid.NewGuid().ToString("N"), PlayerName = "Dice guest", SelectedAvatar = "avatar.bundle" }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new DiceRequestMsg { Action = DiceAction.Place, TableId = 38, Epoch = 14, RequestId = 77, Revision = 90, TurnId = 2, BoatIndex = 511, Stake = 15, MatchId = Guid.NewGuid().ToString("N"), Mask = 5, Flag = true, X = 2.5f, Y = 1.3f, Z = -4, Yaw = 120 }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new DiceStateMsg { TableId = 38, Epoch = 14, Revision = 99, TurnId = 3, RollId = 4, ClockRevision = 7, OwnerNetId = 3, Stake = 25, StakeCurrency = 2, StakesAllowed = true, BoatIndex = 511, MatchId = Guid.NewGuid().ToString("N"), ClockEpoch = "clock", Phase = 4, ResumePhase = 3, Faces = new byte[] { 4, 4, 2 }, HeldMask = 3, RollHeldMask = 3, Running = true, AnchorTick = 1000, ElapsedMs = 700, PresentationAtMs = 500, Players = Enumerable.Range(0, 5).Select(i => new DicePlayerData { Identity = Guid.NewGuid().ToString("N"), Name = "Player " + i, NetId = (uint) i + 1, Connected = true, Ready = true, Scores = new[] { 14, 21, 30 }, Scored = new[] { true, true, true } }).ToArray() }, failures, ref populated, ref truncated);
             CheckPopulatedMessage(new DiceResultMsg { RequestId = 7, Revision = 90, Result = DiceResultKind.ResyncNeeded, Detail = "changed" }, failures, ref populated, ref truncated);
@@ -104,6 +104,11 @@ namespace ProtocolSmoke
                         }
                         if (msg is ItemRequestMsg itemRequest) { itemRequest.Action = ItemAction.State; itemRequest.Amount = boat == 511 ? 0f : 1f; }
                         if (msg is DirtStateMsg dirt) { dirt.Chunk = 1; dirt.Chunks = 2; }
+                        if (msg is RefitBody refit)
+                        {
+                            refit.CustomColors = new[] { -1, 0, 7, 18, 5 };
+                            refit.CleanedSurfaces = new[] { -1, 2 };
+                        }
                         if (msg is ChartStateMsg chart) { chart.Chunk = 1; chart.Chunks = 2; }
                         var writer = Protocol.Write(msg);
                         var reader = new NetDataReader(writer.Data, 1, writer.Length);
@@ -364,7 +369,7 @@ namespace ProtocolSmoke
             if (Protocol.ReadBody(MsgType.ChartState, new NetDataReader(chart.Data, 0, chart.Length)) != null)
                 failures.Add("ChartStateMsg: chunk count above MaxChunks accepted");
             var dirt = new NetDataWriter();
-            dirt.Put(1); dirt.Put(2u); dirt.Put(3u); dirt.Put(4u);
+            dirt.Put(1); dirt.Put(2); dirt.Put(2u); dirt.Put(3u); dirt.Put(4u);
             dirt.Put((ushort)0); dirt.Put((ushort)(DirtStateMsg.MaxChunks + 1)); dirt.Put((byte)0); dirt.Put((ushort)0);
             if (Protocol.ReadBody(MsgType.DirtState, new NetDataReader(dirt.Data, 0, dirt.Length)) != null)
                 failures.Add("DirtStateMsg: chunk count above MaxChunks accepted");

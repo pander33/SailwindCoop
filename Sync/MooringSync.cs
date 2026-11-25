@@ -372,6 +372,7 @@ namespace SailwindCoop.Sync
                     if (rope.IsMoored() && DockFor(rope) != dock) rope.Unmoor();
                     if (!rope.IsMoored())
                     {
+                        if (ItemComponents.Read<bool>(rope, "throwing")) StopRopeMotion(rope);
                         rope.MoorTo(dock);
                         changed = true;
                     }

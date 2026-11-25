@@ -87,6 +87,7 @@ namespace SailwindCoop.Net
 
         // Identity supplied by the runtime layer.
         public string ModVersion = "0.0.1";
+        public string GameBuild = "";
         public Func<string> WorldIdProvider = () => "";   // host's save identity ("" = unknown)
         public string PlayerName = "Player";
         public string PlayerGuid = "";
@@ -585,6 +586,7 @@ namespace SailwindCoop.Net
                     ProtocolVersion = Protocol.Version,
                     ModVersion = ModVersion,
                     WorldId = WorldIdProvider(),
+                    GameBuild = GameBuild,
                     PlayerName = PlayerName,
                     SelectedAvatar = mySelection,
                     PlayerGuid = PlayerGuid,
@@ -881,6 +883,12 @@ namespace SailwindCoop.Net
                 detail = ModVersions.ProtocolMismatch(Protocol.Version, h.ProtocolVersion, ModVersion);
                 return RejectReason.ProtocolMismatch;
             }
+            if (!string.IsNullOrEmpty(GameBuild) && !string.Equals(GameBuild, h.GameBuild, StringComparison.Ordinal))
+            {
+                detail = "host Sailwind " + GameBuild + ", guest Sailwind " +
+                    (string.IsNullOrEmpty(h.GameBuild) ? "unknown" : h.GameBuild);
+                return RejectReason.GameBuildMismatch;
+            }
             // A different mod version is not a reason to refuse: the protocol number alone says whether
             // two builds understand each other (F1). Hosts up to 0.4.2 answered ModVersionMismatch here.
             if (!string.IsNullOrEmpty(ModVersion) && !string.IsNullOrEmpty(h.ModVersion) && h.ModVersion != ModVersion)
@@ -926,7 +934,9 @@ namespace SailwindCoop.Net
         {
             if (Role != Role.Client) return;
             State = LinkState.Rejected;
-            LastError = rej.Reason == RejectReason.ProtocolMismatch && !string.IsNullOrEmpty(rej.Detail)
+            LastError = rej.Reason == RejectReason.GameBuildMismatch
+                ? "Different game versions: " + rej.Detail + "."
+                : rej.Reason == RejectReason.ProtocolMismatch && !string.IsNullOrEmpty(rej.Detail)
                 ? "Different mod versions: " + rej.Detail + "."
                 : "Host rejected: " + rej.Reason + " (" + rej.Detail + ")";
             _log("[CoopNet] " + LastError);

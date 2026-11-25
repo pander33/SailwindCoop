@@ -2,6 +2,20 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.12.0] - 2026-11-25
+
+Everyone must update to wire protocol 118. Requires Sailwind 0.41. The host checks the installed
+game version before transferring the world.
+
+- Shipyard paint colors sync across the crew and late joiners. Painting alone preserves the
+  existing sails, and an early exit rejected by the shipyard keeps the local preview active.
+- Brooms and shipyard orders sync dirt on every cleanable hull surface. Partial orders carry
+  only the cleaning steps reached and the repair actually performed.
+- Dropping a mooring line near a bollard relays the selected target to the host, which waits for
+  that bollard to load.
+- Random floating finds spawn on the host and keep their long-range visibility for guests.
+- Guests apply queued shipyard and dirt updates after loading the host's world.
+
 ## [0.11.0] - 2026-11-22
 
 Everyone must update to wire protocol 116. Requires Sailwind 0.40 or 0.40.1.

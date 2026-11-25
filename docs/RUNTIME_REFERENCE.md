@@ -1,6 +1,7 @@
 # Runtime reference
 
-Current implementation: plugin 0.11.0, Protocol 116, Sailwind 0.40 / 0.40.1.
+Current implementation: plugin 0.12.0, Protocol 118, Sailwind 0.41. The Hello handshake compares
+the players' game versions before the host sends the world.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
 Protocol numbers within subsystem descriptions identify when a feature was introduced.
@@ -42,6 +43,10 @@ Domain notes:
 - **Mooring:** waits for the acknowledgement of the last `RequestId` and for the rope or reel to be
   released. An unavailable dock is acknowledged with `StateAvailable=false`; a client without the
   dock defers application. Rope ends and the length reel are carried through `MooringCarry`.
+  In 0.41, dropping an end near a bollard uses the same Moor request as a targeted throw.
+  A relayed drop returns the end to the deck if the Moor request is still waiting for its dock.
+  Requests with a dock identity wait for that identity. Position lookup is used for messages
+  without an identity.
   Game 0.40.1 parents a moored rope to `Refs.shiftingWorld` (0.40: under the dock's spring), so
   `MooringSync.DockFor` takes the dock from the spring's GameObject, never from the rope's parent.
 - **Anchor:** bound through `RopeControllerAnchor.joint` (`Anchor.Awake` moves it above the hull).
@@ -96,9 +101,17 @@ Domain notes:
   `GameState.lastBoat` therefore takes no damage on any machine.
 - **Instruments, charts, dirt, orb:** watch/quadrant/scroll targets, chip log and fishing rod child
   poses, chart marks per map instance, hull dirt by UV stroke with a chunked PNG result, wind totem
-  orb carry and the actual cast.
-- **Shipyard:** `RefitRequest`/`RefitState` (102/103) carry committed sails, parts, cleaning and
-  repair. Payment and UI are not replayed; the local preview stays out of the shared world and save.
+  orb carry and the actual cast. Dirt is addressed by saveable scene index and surface index
+  (`-1` for the primary cleanable, otherwise its index in `extraCleanables`). A joining guest
+  buffers incoming textures until the host's world has loaded.
+- **Shipyard:** `RefitRequest`/`RefitState` (102/103) carry committed sails, parts, five hull color
+  slots, cleaning and repair. A guest sends the surface indices reached by the paid order.
+  The host clears those surfaces, deferring newly enabled surfaces until their textures are ready,
+  and publishes them via `DirtState` with the same revisions used for broom strokes.
+  Colors apply directly to the existing layout. A partial order carries a repair only if it reached
+  the repair step, and a joining guest installs queued refits after its host world has loaded.
+  Payment and UI are not replayed; the local preview stays out of the shared world and
+  save. An exit rejected while the yard is moving the ship keeps the preview active.
 - **Sleep:** two forms (`Sync/SleepSync.cs`). The game's `FallAsleep` only
   starts a *personal* sleep: dark screen, sleep need recovered at `PersonalWarp` (4), hunger and
   thirst frozen, no time warp, and
@@ -344,6 +357,10 @@ Domain notes:
   item becomes shared through `NotifyClientAuthored` (as a bought good), the host's through its
   item scan. A client writes the takes it received again after `SaveLoadManager.LoadGame`, so a
   take made while it loads the host's save is not lost.
+- **Floating finds (game 0.41):** `RandomFloatingItemSpawner.Update` runs on the host and in
+  single-player. The host registers the finds when its item scan first sees them. Guests receive
+  the registered items and their long-range LOD through
+  `ItemSync`'s normal spawn and late-join manifest.
 - **Teleport to boat:** `Sync/BoatTeleport.cs`, the F8 button. Local only, no message: it boards
   through `PlayerEmbarkerNew` (private `currentBoat`, `TeleportToWalkCol`, `PlayerEmbark`) and the
   pose goes out through `PlayerSync`.

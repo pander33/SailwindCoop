@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using SailwindCoop.Runtime;
@@ -11,18 +12,32 @@ namespace SailwindCoop.Sync
         private sealed class Order : IDisposable
         {
             internal Shipyard Editor;
-            internal bool ReachedCommit, Repair, Clean, Finished, PreviousConfirming;
+            internal bool ReachedCommit, ReachedReset, Repair, Clean, Finished, PreviousConfirming;
             internal InteractionContext.Scope Scope;
             internal Order Previous;
             internal bool Fault;
+            internal readonly List<int> CleanedSurfaces = new List<int>();
             public void Dispose()
             {
                 if (Finished) return; Finished = true;
-                try { if (ReachedCommit) ShipyardSync.Instance?.CommitLocal(Editor, Repair, Clean, Fault); }
+                try
+                {
+                    if (ReachedCommit)
+                        ShipyardSync.Instance?.CommitLocal(Editor, Repair && (!Fault || ReachedReset), Clean, Fault, CleanedSurfaces);
+                }
                 finally { if (ShipyardSync.Instance != null) ShipyardSync.Instance.Confirming = PreviousConfirming; Scope?.Dispose(); _order = Previous; }
             }
         }
         private static Order _order;
+        internal static bool RecordCleaning(int scene, int surface)
+        {
+            var order = _order;
+            if (order == null || !order.ReachedCommit || !order.Clean || InteractionContext.Suppressed) return false;
+            var owner = order.Editor.GetCurrentBoat()?.GetComponent<SaveableObject>();
+            if (owner == null || owner.sceneIndex != scene) return false;
+            order.CleanedSurfaces.Add(surface);
+            return true;
+        }
         internal static void Apply(Harmony harmony)
         {
             var hooks = new PatchHookCatalog();
@@ -32,6 +47,7 @@ namespace SailwindCoop.Sync
             hooks.Install(typeof(Shipyard), "ConfirmOrder", Type.EmptyTypes, m => harmony.Patch(m,
                 prefix: Hook(nameof(PreOrder), Priority.First), postfix: Hook(nameof(EndOrder), Priority.Last), finalizer: Hook(nameof(EndFault))));
             hooks.Install(typeof(ShipyardSailInstaller), "InstallSails", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreInstall))));
+            hooks.Install(typeof(Shipyard), "ResetOrder", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreResetOrder))));
             hooks.Install(typeof(SaveableBoatCustomization), "GetData", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreData)),
                 postfix: Hook(nameof(PostData), Priority.Last)));
             hooks.Install(typeof(Sail), "FixedUpdate", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreSail)), postfix: Hook(nameof(PostSail))));
@@ -44,7 +60,9 @@ namespace SailwindCoop.Sync
             => PatchGuard.Run(() => ShipyardSync.Instance?.BeginPreview(__instance, ship), Report);
         private static void PreCancel(Shipyard __instance) => PatchGuard.Run(() => ShipyardSync.Instance?.BeforeCancel(__instance), Report);
         private static void PostCancel(Shipyard __instance) => PatchGuard.Run(() => ShipyardSync.Instance?.AfterCancel(__instance), Report);
-        private static void PostExit(Shipyard __instance) => PatchGuard.Run(() => ShipyardSync.Instance?.EndPreview(__instance), Report);
+        private static void PostExit(Shipyard __instance) => PatchGuard.Run(() => {
+            if (__instance.GetCurrentBoat() == null) ShipyardSync.Instance?.EndPreview(__instance);
+        }, Report);
         private static void PreOrder(Shipyard __instance, out Order __state)
         {
             Order state = null;
@@ -57,6 +75,11 @@ namespace SailwindCoop.Sync
         }
         // Vanilla reaches this call only after its local payment; no affordability checks are repeated by the mod.
         private static void PreInstall() => PatchGuard.Run(() => { if (_order != null) _order.ReachedCommit = true; }, Report);
+        // ConfirmOrder calls ResetOrder after writing both repaired damage values.
+        private static void PreResetOrder(Shipyard __instance) => PatchGuard.Run(() =>
+        {
+            if (_order?.ReachedCommit == true && _order.Editor == __instance) _order.ReachedReset = true;
+        }, Report);
         private static void EndOrder(Order __state) => PatchGuard.Run(() => __state?.Dispose(), Report);
         private static void EndFault(Order __state, Exception __exception) => PatchGuard.Run(() => {
             if (__state != null) { __state.Fault = __exception != null; __state.Dispose(); }

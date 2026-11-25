@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using HarmonyLib;
 using LiteNetLib;
 using SailwindCoop.Net;
 using SailwindCoop.Runtime;
@@ -29,19 +30,18 @@ namespace SailwindCoop.Sync
         private readonly BoatGenerationQueue<Action> _embedded = new BoatGenerationQueue<Action>();
         private readonly OperationLedger<RefitStateMsg> _refits = new OperationLedger<RefitStateMsg>();
         private uint _nextRefit;
+        private static readonly System.Reflection.FieldInfo SavedColors = typeof(SaveBoatCustomizationData).GetField("customColors");
+        private static readonly Type BoatColorsType = typeof(SaveableBoatCustomization).Assembly.GetType("BoatCustomColors");
+        private static readonly System.Reflection.MethodInfo LoadBoatColors = BoatColorsType != null
+            ? AccessTools.Method(BoatColorsType, "LoadColors", new[] { typeof(int[]) }) : null;
         internal bool ReadingActual, Confirming;
         public Action<ushort> RebuildHull;
         public Action<MsgType, INetMessage, NetPeer> Dispatch;
         private bool Connected => _net.State == LinkState.Connected;
+        private bool RefitWorldReady => Connected && GameState.playing && !GameState.currentlyLoading &&
+            (_net.Role != Role.Client || _guestWorldLoaded());
         internal static bool Suspended(ushort id) => Instance != null && Instance._hulls.TryGetValue(id, out var hull) &&
             (hull.Editing || Time.frameCount < hull.ReadyFrame);
-        internal static bool PendingClean(CleanableObject target)
-        {
-            if (Instance == null || target == null) return false;
-            foreach (var hull in Instance._hulls.Values)
-                if (hull.Custom != null && hull.Gate.Pending && target.transform.IsChildOf(hull.Custom.transform)) return true;
-            return false;
-        }
         private Hull Bind(ushort id)
         {
             var boat = BoatLocator.FindByIndex(id);
@@ -70,6 +70,7 @@ namespace SailwindCoop.Sync
             var damage = hull.Custom.GetComponent<BoatDamage>();
             return new RefitStateMsg { BoatIndex = hull.Id, Generation = BoatGenerationBook.Session.Get(hull.Id),
                 Parts = data.partActiveOptions?.ToArray() ?? Array.Empty<int>(),
+                CustomColors = SavedColors?.GetValue(data) as int[] ?? Array.Empty<int>(),
                 Sails = data.sails.Where((s, i) => installed[i]).Select(s => new NetSailConfiguration { Prefab = s.prefabIndex, Mast = s.mastIndex,
                     Height = s.installHeight, MinAngle = s.minAngle, MaxAngle = s.maxAngle, Health = s.health,
                     Color = s.sailColor, ScaleY = s.scaleY, ScaleZ = s.scaleZ }).ToArray(),
@@ -79,6 +80,8 @@ namespace SailwindCoop.Sync
         internal static SaveBoatCustomizationData Data(RefitBody message)
         {
             var data = new SaveBoatCustomizationData(); data.partActiveOptions.AddRange(message.Parts);
+            if (message.CustomColors.Length != 0)
+                SavedColors?.SetValue(data, (int[])message.CustomColors.Clone());
             foreach (var s in message.Sails) data.sails.Add(new SaveSailData { prefabIndex = s.Prefab, mastIndex = s.Mast,
                 installHeight = s.Height, minAngle = s.MinAngle, maxAngle = s.MaxAngle, health = s.Health,
                 sailColor = s.Color, scaleY = s.ScaleY, scaleZ = s.ScaleZ });
@@ -86,7 +89,7 @@ namespace SailwindCoop.Sync
         }
         internal bool SavedPreview(SaveableBoatCustomization target, out SaveBoatCustomizationData data)
         {
-            data = null; if (!Connected || ReadingActual || Confirming || target == null) return false;
+            data = null; if (!RefitWorldReady || ReadingActual || Confirming || target == null) return false;
             ushort id = ResolveHull(target.transform);
             if (!_hulls.TryGetValue(id, out var hull) || !hull.Editing || hull.Committed == null) return false;
             data = Data(hull.Committed); return true;
@@ -96,14 +99,14 @@ namespace SailwindCoop.Sync
         /// data into its saved entry; put the committed entry back.</summary>
         internal void AfterData(SaveableBoatCustomization target)
         {
-            if (!Connected || ReadingActual || Confirming || target == null) return;
+            if (!RefitWorldReady || ReadingActual || Confirming || target == null) return;
             ushort id = ResolveHull(target.transform);
             if (!_hulls.TryGetValue(id, out var hull) || !hull.Editing || hull.Committed == null) return;
             ShipyardExpansionRig.Restore(hull.Custom, hull.Committed.ModRig);
         }
         internal void BeginPreview(Shipyard editor, GameObject boat)
         {
-            if (!Connected || boat == null || InteractionContext.Suppressed) return;
+            if (!RefitWorldReady || boat == null || InteractionContext.Suppressed) return;
             var hull = Bind(ResolveHull(boat.transform)); if (hull == null) return;
             hull.Committed = Capture(hull); hull.Editor = editor; hull.Editing = true;
             RebuildHull?.Invoke(hull.Id); // Release transient body flags before vanilla creates preview objects.
@@ -121,9 +124,12 @@ namespace SailwindCoop.Sync
         {
             var boat = editor?.GetCurrentBoat(); if (boat == null) return;
             if (!_hulls.TryGetValue(ResolveHull(boat.transform), out var hull)) return;
-            if (hull.Deferred != null && !hull.Gate.Pending) Adopt(hull, hull.Deferred);
+            if (hull.Deferred != null && !hull.Gate.Pending)
+            {
+                ApplyRepair(hull, hull.Deferred);
+                Adopt(hull, hull.Deferred);
+            }
             ItemComponents.Set(editor, "originalData", Data(hull.Committed));
-            if (hull.Committed.Clean || hull.Committed.Repair) ApplyResults(hull, hull.Committed);
         }
         internal void AfterCancel(Shipyard editor)
         {
@@ -135,13 +141,12 @@ namespace SailwindCoop.Sync
             foreach (var hull in _hulls.Values) if (hull.Editor == editor)
             { hull.Editing = false; hull.Editor = null; ScheduleRebuild(hull); }
         }
-        internal void CommitLocal(Shipyard editor, bool repair, bool clean, bool fault)
+        internal void CommitLocal(Shipyard editor, bool repair, bool clean, bool fault, List<int> cleanedSurfaces)
         {
-            if (!Connected || InteractionContext.Suppressed || editor?.GetCurrentBoat() == null) return;
+            if (!RefitWorldReady || InteractionContext.Suppressed || editor?.GetCurrentBoat() == null) return;
             var hull = Bind(ResolveHull(editor.GetCurrentBoat().transform)); if (hull == null) return;
             var result = Capture(hull); result.Repair = repair; result.Clean = clean;
             if (fault) result.Outcome = RefitOutcome.PartialFault;
-            if (clean) result.Dirt = DirtPainter.Capture(hull.Custom.GetComponent<SaveableObject>()?.GetCleanable());
             if (_net.Role == Role.Host)
             {
                 result.Generation = BoatGenerationBook.Session.Next(hull.Id); hull.Committed = result;
@@ -149,8 +154,10 @@ namespace SailwindCoop.Sync
             }
             else
             {
-                if (++_nextRefit == 0) ++_nextRefit; hull.Gate.Begin(_nextRefit);
-                var request = new RefitRequestMsg(); Copy(result, request); request.RequestId = _nextRefit;
+                var request = new RefitRequestMsg(); Copy(result, request);
+                request.CleanedSurfaces = cleanedSurfaces.ToArray();
+                if (++_nextRefit == 0) ++_nextRefit;
+                hull.Gate.Begin(_nextRefit); request.RequestId = _nextRefit;
                 if ((_net.HostModFeatures & ModFeatures.ShipyardExpansion) == 0) request.ModRig = "";
                 _net.Broadcast(request, DeliveryMethod.ReliableOrdered);
             }
@@ -159,9 +166,11 @@ namespace SailwindCoop.Sync
         private static void Copy(RefitBody source, RefitBody target)
         {
             target.BoatIndex = source.BoatIndex; target.Generation = source.Generation; target.Parts = source.Parts;
-            target.Sails = source.Sails; target.RequestId = source.RequestId; target.Requester = source.Requester;
+            target.Sails = source.Sails; target.CustomColors = source.CustomColors;
+            target.RequestId = source.RequestId; target.Requester = source.Requester;
             target.Repair = source.Repair; target.Clean = source.Clean; target.HullDamage = source.HullDamage;
-            target.WaterLevel = source.WaterLevel; target.Dirt = source.Dirt; target.Outcome = source.Outcome; target.Baseline = source.Baseline;
+            target.WaterLevel = source.WaterLevel; target.CleanedSurfaces = source.CleanedSurfaces;
+            target.Outcome = source.Outcome; target.Baseline = source.Baseline;
             target.ModRig = source.ModRig;
         }
 
@@ -224,17 +233,40 @@ namespace SailwindCoop.Sync
                 // Mast.LoadSail bypasses SaveableBoatCustomization.LoadData, where SE applies its data.
                 // On the host this also brings SE's saved entry up to date with a client's refit.
                 ShipyardExpansionRig.Apply(hull.Custom, message.ModRig);
-                ApplyResults(hull, message);
+                ApplyColors(hull, message.CustomColors);
                 foreach (var pointer in UnityEngine.Object.FindObjectsOfType<GoPointer>())
                     if (pointer.GetHeldItem() != null && pointer.GetHeldItem().transform.IsChildOf(hull.Custom.transform) && !pointer.GetHeldItem().gameObject.activeInHierarchy) pointer.DropItem();
             }
         }
-        private static void ApplyResults(Hull hull, RefitBody message)
+        private static void ApplyColors(Hull hull, int[] customColors)
         {
-            if (message.Repair)
-            { var damage = hull.Custom.GetComponent<BoatDamage>(); if (damage != null) { damage.hullDamage = message.HullDamage; damage.waterLevel = message.WaterLevel; } }
-            if (message.Clean && message.Dirt.Length > 0)
-                DirtSync.Instance?.ApplyRefit(hull.Custom.GetComponent<SaveableObject>()?.GetCleanable(), message.Dirt);
+            if (customColors.Length == 0 || BoatColorsType == null) return;
+            var colors = hull.Custom.GetComponent(BoatColorsType);
+            if (colors == null) return;
+            if (LoadBoatColors == null) throw new MissingMethodException("BoatCustomColors.LoadColors");
+            // Vanilla stores the array and mutates it during future previews.
+            LoadBoatColors.Invoke(colors, new object[] { (int[])customColors.Clone() });
+        }
+        private static bool ApplyRepair(Hull hull, RefitBody message)
+        {
+            if (!message.Repair) return false;
+            var damage = hull.Custom.GetComponent<BoatDamage>();
+            if (damage == null) return false;
+            damage.hullDamage = message.HullDamage;
+            damage.waterLevel = message.WaterLevel;
+            return true;
+        }
+        private static void ApplyCleaning(Hull hull, RefitRequestMsg message)
+        {
+            if (!message.Clean || message.CleanedSurfaces.Length == 0) return;
+            var owner = hull.Custom.GetComponent<SaveableObject>();
+            if (owner == null) return;
+            var extra = DirtSync.ExtraSurfaces(owner);
+            foreach (int index in message.CleanedSurfaces)
+            {
+                var target = index == -1 ? owner.GetCleanable() : index >= 0 && index < extra.Length ? extra[index] : null;
+                if (target != null) DirtSync.Instance?.ApplyRefitClean(owner.sceneIndex, index);
+            }
         }
         public void OnRefitRequest(RefitRequestMsg message, NetPeer peer)
         {
@@ -255,14 +287,21 @@ namespace SailwindCoop.Sync
             var result = new RefitStateMsg { BoatIndex = hull.Id, Requester = actor, RequestId = message.RequestId };
             if (!_refits.TryBegin(actor, message.RequestId, result, out var previous)) { SendRefit(peer, previous); return; }
             result.Outcome = RefitOutcome.PartialFault;
-            try { RebuildHull?.Invoke(hull.Id); ApplyConfiguration(hull, message); result.Outcome = RefitOutcome.Applied; }
+            try
+            {
+                var current = Capture(hull);
+                if (SameLayout(current, message)) ApplyInPlace(hull, current, message);
+                else { RebuildHull?.Invoke(hull.Id); ApplyConfiguration(hull, message); }
+                result.Repair = ApplyRepair(hull, message);
+                ApplyCleaning(hull, message);
+                result.Outcome = RefitOutcome.Applied;
+            }
             catch (Exception error) { Report("host refit boat=" + hull.Id, error); }
             finally
             {
                 try
                 {
-                    var actual = Capture(hull); actual.Repair = message.Repair; actual.Clean = message.Clean;
-                    if (actual.Clean) actual.Dirt = DirtPainter.Capture(hull.Custom.GetComponent<SaveableObject>()?.GetCleanable());
+                    var actual = Capture(hull); actual.Repair = result.Repair; actual.Clean = message.Clean;
                     actual.Generation = BoatGenerationBook.Session.Next(hull.Id); actual.Requester = actor;
                     actual.RequestId = message.RequestId; actual.Outcome = result.Outcome; Copy(actual, result);
                     hull.Committed = result; BroadcastRefit(result);
@@ -274,6 +313,11 @@ namespace SailwindCoop.Sync
         public void OnRefitState(RefitStateMsg message, NetPeer peer)
         {
             if (_net.Role != Role.Client || !_net.IsHostPeer(peer)) return;
+            if (!RefitWorldReady)
+            {
+                _refitWaiting.Add(new Packet { Type = message.Type, Message = message, Peer = peer });
+                return;
+            }
             if (message.Outcome == RefitOutcome.MissingObject || message.Generation == 0)
             {
                 if (_hulls.TryGetValue(message.BoatIndex, out var previous)) previous.Gate.Cancel(message.Requester, message.RequestId, _net.MyNetId);
@@ -294,24 +338,31 @@ namespace SailwindCoop.Sync
         private void Install(Hull hull, RefitStateMsg message)
         {
             var current = Capture(hull);
-            if (SameConfiguration(current, message) && !ShipyardExpansionRig.FlipsDiffer(current.ModRig, message.ModRig))
+            if (SameLayout(current, message))
             {
                 bool changedGeneration = BoatGenerationBook.Session.Get(hull.Id) != message.Generation;
-                // Same sails, other SE angles/textures (or a new flip): SE applies them to the existing
-                // sails, no rebuild needed. Un-flipping needs the rebuild below.
-                if (!string.IsNullOrEmpty(message.ModRig) && message.ModRig != current.ModRig)
-                    ShipyardExpansionRig.Apply(hull.Custom, message.ModRig);
-                ApplyResults(hull, message); Adopt(hull, message);
+                ApplyInPlace(hull, current, message);
+                ApplyRepair(hull, message); Adopt(hull, message);
                 if (changedGeneration) ScheduleRebuild(hull);
                 return;
             }
             RebuildHull?.Invoke(hull.Id);
-            try { ApplyConfiguration(hull, message); Adopt(hull, message); }
+            try { ApplyConfiguration(hull, message); ApplyRepair(hull, message); Adopt(hull, message); }
             finally { ScheduleRebuild(hull); }
         }
-        private static bool SameConfiguration(RefitBody a, RefitBody b)
+        private static void ApplyInPlace(Hull hull, RefitBody current, RefitBody message)
         {
-            if (!a.Parts.SequenceEqual(b.Parts) || a.Sails.Length != b.Sails.Length) return false;
+            using (InteractionContext.Begin(InteractionSource.RemoteApply))
+            {
+                if (!string.IsNullOrEmpty(message.ModRig) && message.ModRig != current.ModRig)
+                    ShipyardExpansionRig.Apply(hull.Custom, message.ModRig);
+                if (!current.CustomColors.SequenceEqual(message.CustomColors)) ApplyColors(hull, message.CustomColors);
+            }
+        }
+        private static bool SameLayout(RefitBody a, RefitBody b)
+        {
+            if (!a.Parts.SequenceEqual(b.Parts) || a.Sails.Length != b.Sails.Length ||
+                ShipyardExpansionRig.FlipsDiffer(a.ModRig, b.ModRig)) return false;
             for (int i = 0; i < a.Sails.Length; i++)
             {
                 var x = a.Sails[i]; var y = b.Sails[i];
@@ -349,7 +400,7 @@ namespace SailwindCoop.Sync
         public void Tick(float dt)
         {
             TickOwnership(dt);
-            if (!Connected || !GameState.playing || GameState.currentlyLoading) return;
+            if (!RefitWorldReady) return;
             // A missing hull may load later. Preserve its result until the native registry is ready.
             var refits = _refitWaiting.ToArray(); _refitWaiting.Clear();
             using (InteractionContext.Begin(InteractionSource.RemoteApply))

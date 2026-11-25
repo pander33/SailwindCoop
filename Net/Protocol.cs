@@ -35,7 +35,9 @@ namespace SailwindCoop.Net
         // BoatColors live paint, TentandPlank tarps, Sailor's Keepsakes racks/storm/incense).
         // 115: PlayerHome ownership, BetterNPCBoats fishing boats, RandomEncounters, and HMS Leopard.
         // 116: FishCatchMsg carries Held so client belt withdrawals author directly as held boat puppets.
-        public const int Version = 116;
+        // 117: shipyard hull colors, per-surface dirt and floating items' long-range LOD.
+        // 118: shipyard cleaning sends surface commands; Hello carries the game build.
+        public const int Version = 118;
 
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)

@@ -56,14 +56,10 @@ namespace SailwindCoop.Sync
                     var dock = docks[i];
                     if (dock != null && EndsWithStep(id, dock.name) && DockIdentity(dock) == id) return dock;
                 }
+                // A nearby post can already be loaded while the selected one is still absent.
+                return null;
             }
-            // Identity fallback locates a loaded object, not action eligibility.
-            var near = FindDockNear(real, docks);
-            // The position fallback assumes docks do not move. A mooring point on a boat (Towable
-            // Boats) moves, and on an interpolated copy the nearest one can be the other cleat of a
-            // pair: with an identity given, wait for that identity instead.
-            if (near != null && !string.IsNullOrEmpty(id) && OnBoat(near.transform)) return null;
-            return near;
+            return FindDockNear(real, docks);
         }
         /// <summary>True when the identity's last step is "/name[n]" for this name (names may hold '/' or '[').</summary>
         private static bool EndsWithStep(string id, string name)
@@ -71,11 +67,6 @@ namespace SailwindCoop.Sync
             string step = "/" + name + "[";
             int at = id.LastIndexOf(step, StringComparison.Ordinal);
             return at >= 0 && id.IndexOf('/', at + step.Length) < 0;
-        }
-        private static bool OnBoat(Transform t)
-        {
-            for (; t != null; t = t.parent) if (BoatLocator.IndexOf(t) != BoatLocator.NoBoat) return true;
-            return false;
         }
         private void SendWaitingDock(MooringRequestMsg msg, uint actor)
             => _net.Broadcast(new MooringStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Index = msg.Index,

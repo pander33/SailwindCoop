@@ -1,7 +1,7 @@
 # ⚓ Sailwind LAN/Steam Co-op
 
 [![Version](https://img.shields.io/github/v/release/pander33/SailwindCoop?label=version&color=blue)](https://github.com/pander33/SailwindCoop/releases/latest)
-[![Game](https://img.shields.io/badge/game-Sailwind%200.40-1b2838?logo=steam&logoColor=white)](https://store.steampowered.com/app/1764530/)
+[![Game](https://img.shields.io/badge/game-Sailwind%200.41-1b2838?logo=steam&logoColor=white)](https://store.steampowered.com/app/1764530/)
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.x-orange)](https://github.com/BepInEx/BepInEx/releases)
 [![Players](https://img.shields.io/badge/players-2--5-brightgreen)](#features)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -9,11 +9,11 @@
 A co-op multiplayer mod for Sailwind: sail one world together with up to four friends, over a
 local network, a VPN, or Steam.
 
-**Current Version:** 0.11.0
-**Wire Protocol:** 116. Every machine needs a build with protocol 116.
-**Requirements:** BepInEx 5.x, Sailwind 0.40 (0.40.1 supported)
+**Current Version:** 0.12.0
+**Wire Protocol:** 118. Every machine needs a build with protocol 118.
+**Requirements:** BepInEx 5.x, Sailwind 0.41
 
-The mod is in early development (v0.11.0). Expect bugs, and please report them.
+The mod is in early development (v0.12.0). Expect bugs, and please report them.
 
 ## Features
 
@@ -43,7 +43,7 @@ The mod comes in two editions that play together. The **Thunderstore edition** i
 a mod manager: <https://thunderstore.io/c/sailwind/p/pander33/SailwindCoop/>. The **full
 edition** (GitHub) can also download mods the host has and you are missing. The title of the
 status overlay (F8 -> Settings -> Show Status) shows the edition, for example
-`Sailwind Co-op 0.11.0 (Thunderstore)`.
+`Sailwind Co-op 0.12.0 (Thunderstore)`.
 
 Manual install of the full edition:
 
@@ -116,7 +116,7 @@ in the file. The ones most often changed:
   the game through the firewall on the host; over the internet without a VPN, forward UDP 7777.
 - **The mod does not start:** check that BepInEx is installed (a `BepInEx/LogOutput.log` appears
   after a start) and that `SailwindCoop.dll` is in `BepInEx/plugins/SailwindCoop/`. If a notice
-  appears on screen at start, it says what is wrong (most often a game version other than 0.40).
+  appears on screen at start, it reports the game version or the startup error.
 - **Other players have no model:** `avatar.bundle` must be next to `SailwindCoop.dll`.
 - **Lag:** prefer a wired connection; the host's machine matters most.
 - **Reporting a bug:** press **F8** -> **Settings** -> **Logging** before reproducing the

@@ -814,7 +814,14 @@ internal static class Program
                     int payment = calls.ToList().FindIndex(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stind_I4);
                     int install = calls.ToList().FindIndex(i => i.Operand is MethodReference method && method.Name == "InstallSails");
                     int parts = calls.ToList().FindIndex(i => i.Operand is MethodReference method && method.Name == "ApplyCurrentOrder");
+                    int hullRepair = calls.ToList().FindIndex(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld &&
+                        i.Operand is FieldReference field && field.Name == "hullDamage");
+                    int waterRepair = calls.ToList().FindIndex(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld &&
+                        i.Operand is FieldReference field && field.Name == "waterLevel");
+                    int reset = calls.ToList().FindIndex(i => i.Operand is MethodReference method && method.Name == "ResetOrder");
                     Assert(payment >= 0 && payment < install && install < parts, "paid-success marker is before payment or actual install sequence changed");
+                    Assert(parts < hullRepair && hullRepair < reset && parts < waterRepair && waterRepair < reset,
+                        "the shipyard completion hook must run after hull and water repair");
                     foreach (string name in new[] { "AdmitShip", "CancelOrder", "DischargeShip", "ConfirmOrder" })
                         Assert(types["Shipyard"].Methods.Any(m => m.Name == name && m.HasBody), "shipyard hook missing: " + name);
                     Assert(types["Shipyard"].Fields.Any(f => f.Name == "originalData" && f.FieldType.Name == "SaveBoatCustomizationData"), "cancel data binding changed");
@@ -836,6 +843,31 @@ internal static class Program
                     Assert(types["Cleaner"].Methods.Single(m => m.Name == "LateUpdate").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "PaintObject"), "stroke no longer comes from actual cleaner UV");
                     Assert(types["CleanableObject"].Methods.Single(m => m.Name == "ApplyNewDirtTexture").Body.Instructions.Any(i => i.Operand is FieldReference field && field.Name == "extraTexture" && i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld), "applied dirt is not saved by SaveableObject");
                     Assert(types["Shipyard"].Methods.Single(m => m.Name == "ConfirmOrder").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "CleanFully"), "confirmed cleaning domain entry changed");
+                }
+            });
+            Test("Sailwind 0.41 exposes hull paint, extra dirt, automatic mooring and floating spawns", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var types = game.MainModule.Types.ToDictionary(t => t.Name);
+                    Assert(types["SaveBoatCustomizationData"].Fields.Any(f => f.Name == "customColors" && f.FieldType.FullName == "System.Int32[]"), "saved paint field changed");
+                    Assert(types["BoatCustomColors"].Methods.Any(m => m.Name == "LoadColors" &&
+                        m.Parameters.Count == 1 && m.Parameters[0].ParameterType.FullName == "System.Int32[]"), "paint loader changed");
+                    Assert(types["SaveableObject"].Fields.Any(f => f.Name == "extraCleanables" && f.FieldType.Name == "CleanableObject[]"), "extra dirt binding changed");
+                    var rope = types["PickupableBoatMooringRope"];
+                    Assert(rope.Methods.Single(m => m.Name == "OnDrop").Body.Instructions.Any(i =>
+                        i.Operand is MethodReference method && method.Name == "ThrowRopeSequence"), "native auto-moor path changed");
+                    Assert(rope.Methods.Any(m => m.Name == "ThrowRopeSequenceLocal" && m.Parameters.Count == 1 &&
+                        m.Parameters[0].ParameterType.Name == "Vector3"), "local rope return signature changed");
+                    var spawner = types["RandomFloatingItemSpawner"];
+                    Assert(spawner.Methods.Any(m => m.Name == "Update" &&
+                        m.Parameters.Count == 0 && m.HasBody), "random spawner hook changed");
+                    var spawn = spawner.Methods.Single(m => m.Name == "Spawn").Body.Instructions;
+                    Assert(spawn.Any(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld &&
+                        i.Operand is FieldReference field && field.Name == "farLod" && field.DeclaringType.Name == "ShipItem"),
+                        "floating spawns no longer identify themselves via farLod");
+                    Assert(!spawn.Concat(types["Good"].Methods.Single(m => m.Name == "RegisterAsMissionless").Body.Instructions)
+                        .Any(i => i.Operand is MethodReference method && method.Name == "RegisterToSave"),
+                        "re-audit floating registration: the game now registers these items itself");
                 }
             });
             Test("transform timeline replaces a same-tick final result including its first sample", () => {
@@ -1142,9 +1174,9 @@ internal static class Program
             });
             Test("a mod that did not start names the game version, or the reason on a supported one", () => {
                 string old = SailwindCoop.Runtime.StartupText.Describe("0.39", "TypeLoadException: Could not load type\nstack");
-                Assert(old.Contains("needs Sailwind 0.40") && old.Contains("this game is 0.39") && !old.Contains("TypeLoad"), old);
-                string same = SailwindCoop.Runtime.StartupText.Describe("0.40.2", "TypeLoadException: Could not load type\nstack");
-                Assert(same.Contains("(0.40.2)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
+                Assert(old.Contains("needs Sailwind 0.41") && old.Contains("this game is 0.39") && !old.Contains("TypeLoad"), old);
+                string same = SailwindCoop.Runtime.StartupText.Describe("0.41.1", "TypeLoadException: Could not load type\nstack");
+                Assert(same.Contains("(0.41.1)") && same.Contains("TypeLoadException: Could not load type") && !same.Contains("stack"), same);
                 Assert(SailwindCoop.Runtime.StartupText.Describe(null, null).Contains("this game is unknown"), "no version");
             });
             Test("the step signal fits beside the hand bits, and steps follow the distance walked", () => {

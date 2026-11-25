@@ -236,16 +236,21 @@ namespace SailwindCoop.Sync
             if (carry.Slaved) return;
             carry.Slaved = true; carry.PreviousLayer = carry.Item.gameObject.layer;
             var body = carry.Item.GetComponent<Rigidbody>(); if (body != null) { carry.PreviousKinematic = body.isKinematic; body.isKinematic = true; }
-            carry.Item.StopAllCoroutines();
+            if (carry.Item is PickupableBoatMooringRope rope) StopRopeMotion(rope);
+            else
+            {
+                carry.Item.StopAllCoroutines();
+                if (carry.Item is MooringRopeLengthAdjuster) ItemComponents.Set(carry.Item, "returnSequencePlaying", false);
+            }
+        }
+        private static void StopRopeMotion(PickupableBoatMooringRope rope)
+        {
             // The stopped coroutine is the game's own throw/return sequence. It switches the part's
             // collider off at its start and back on only at its end, so a sequence cut short (the
             // host's reply to a drop arrives well inside it) left the part impossible to point at.
-            if (carry.Item is PickupableBoatMooringRope)
-            {
-                ItemComponents.Set(carry.Item, "throwing", false);
-                var collider = carry.Item.GetComponent<Collider>(); if (collider != null) collider.enabled = true;
-            }
-            else if (carry.Item is MooringRopeLengthAdjuster) ItemComponents.Set(carry.Item, "returnSequencePlaying", false);
+            rope.StopAllCoroutines();
+            ItemComponents.Set(rope, "throwing", false);
+            var collider = rope.GetComponent<Collider>(); if (collider != null) collider.enabled = true;
         }
         private static void RestoreCarry(Carry carry)
         {

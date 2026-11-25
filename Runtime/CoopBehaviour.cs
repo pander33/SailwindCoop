@@ -203,6 +203,7 @@ namespace SailwindCoop.Runtime
             Net = new CoopNet(m => Plugin.Logger.LogInfo(m))
             {
                 ModVersion = Plugin.Version,
+                GameBuild = Application.version,
                 PlayerName = Plugin.Cfg.PlayerName.Value,
                 // Stage 1 will replace this with the host's loaded save identity.
                 WorldIdProvider = () => "",
@@ -255,7 +256,7 @@ namespace SailwindCoop.Runtime
             Lights = new LightSync(Net);
             Items = new ItemSync(Net) { InterpDelayMs = Plugin.Cfg.InterpDelayMs.Value };
             Charts = new ChartSync(Net);
-            Dirt = new DirtSync(Net);
+            Dirt = new DirtSync(Net, () => _clientCoopWorldLoaded);
             Interactions = new InteractionSync(Net);
             WindTotem = new WindTotemSync(Net);
             HouseDoors = new HouseDoorSync(Net);
@@ -278,7 +279,7 @@ namespace SailwindCoop.Runtime
             Markets = new MarketSync(Net);
             FinancedCargo = new FinancedCargoSync(Net);
             Offices = new OfficeStateSync(Net);
-            Shipyard = new ShipyardSync(Net);
+            Shipyard = new ShipyardSync(Net, () => _clientCoopWorldLoaded);
             Shipyard.Dispatch = OnGameMessage;
             Shipyard.RebuildHull = id => { ShipyardSync.ReleaseControls(id); Controls.InvalidateHull(id); Anchor.InvalidateHull(id); Mooring.InvalidateHull(id); Damage.InvalidateHull(id); Interactions.InvalidateHull(id); Dice.InvalidateHull(id); };
             SaveTransfer = new SaveTransferSync(Net) { CoopSlot = Plugin.Cfg.CoopSaveSlot.Value };

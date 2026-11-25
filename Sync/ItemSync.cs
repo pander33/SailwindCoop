@@ -3166,6 +3166,9 @@ namespace SailwindCoop.Sync
         // Lifecycle: spawn/despawn (host authoritative)
         // -----------------------------------------------------------------
 
+        private static readonly FieldInfo FarLodFlag = typeof(ShipItem).GetField("farLod");
+        private static readonly FieldInfo FarLodTemplate = typeof(RefsDirectory).GetField("LODtemplateFar");
+
         private void BroadcastSpawn(ItemEntry e, LiteNetLib.NetPeer peer = null, bool snapshot = false)
         {
             if (e == null || e.Item == null || _operationApplying || e.Item == _authoringItem ||
@@ -3177,6 +3180,7 @@ namespace SailwindCoop.Sync
             {
                 AuthorRequester = e.AuthorRequester, AuthorRequestId = e.AuthorRequestId,
                 IsBaselineItem = _baselineItems.Contains(e.Item),
+                FarLod = FarLodFlag?.GetValue(e.Item) is true,
                 Kind = (byte)NetObjKind.Item,
                 Revision = state.Revision, Tick = state.Tick,
                 Requester = state.Requester, RequestId = state.RequestId,
@@ -3314,6 +3318,7 @@ namespace SailwindCoop.Sync
                     return;
                 }
                 if (e == null || e.Item == null) { _pendingSpawns[msg.InstanceId] = msg; return; }
+                if (msg.FarLod) ApplyFarLod(e.Item);
                 // Before the state: applying it rebuilds the look text, which reads the mission.
                 ApplyMissionIndex(e.Item, msg.InstanceId, msg.MissionIndex);
                 OnItemState(new ItemStateMsg {
@@ -3331,6 +3336,21 @@ namespace SailwindCoop.Sync
                 _spawnWait.Remove(msg.InstanceId);
             }
             // Lifecycle notices are emitted by the originating domain, never by manifests/echoes.
+        }
+
+        private static void ApplyFarLod(ShipItem item)
+        {
+            if (FarLodFlag == null || FarLodFlag.GetValue(item) is true) return;
+            FarLodFlag.SetValue(item, true);
+            // A new item's coroutine reads farLod when it creates the group. A matching item
+            // from the world save may already have built its group with the standard template.
+            var group = item.GetComponent<LODGroup>();
+            var refs = RefsDirectory.instance;
+            if (group == null || refs == null || !(FarLodTemplate?.GetValue(refs) is LODGroup template) || template == null) return;
+            var levels = template.GetLODs();
+            if (levels.Length == 0) return;
+            levels[0].renderers = new[] { item.GetComponent<Renderer>() };
+            group.SetLODs(levels);
         }
 
         public void OnDespawnObject(DespawnObjectMsg msg, LiteNetLib.NetPeer fromPeer)
@@ -4153,12 +4173,18 @@ namespace SailwindCoop.Sync
             ShipItemRegistry.Snapshot(buffers.Scene);
             foreach (var item in buffers.Scene)
             {
-                if (item == null || _destroyingItems.Contains(item) || !HasStableIdentity(item)) continue;
-                int id = InstanceIdOf(item);
+                if (item == null || _destroyingItems.Contains(item)) continue;
+                var saveable = item.GetComponent<SaveablePrefab>();
+                // Vanilla's floating spawner marks its finds sold and farLod, but
+                // Good.RegisterAsMissionless only sets the mission index.
+                if (_net.Role == Role.Host && item.sold && saveable != null && saveable.prefabIndex > 0 &&
+                    saveable.instanceId == 0 && FarLodFlag?.GetValue(item) is true && !InPersonalInventory(item))
+                    saveable.RegisterToSave();
+                if (!HasStableIdentity(item, saveable)) continue;
+                int id = saveable.instanceId;
                 if (_net.Role == Role.Host && (_tombstones.Contains(id) ||
                     (alive.TryGetValue(id, out var other) && other != item)))
                 {
-                    var saveable = item.GetComponent<SaveablePrefab>();
                     do { id = UnityEngine.Random.Range(1, int.MaxValue); }
                     while (_tombstones.Contains(id) || alive.ContainsKey(id) || prev.ContainsKey(id));
                     saveable.instanceId = id;

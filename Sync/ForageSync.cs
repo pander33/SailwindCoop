@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using SailwindCoop.Net;
+using SailwindCoop.Runtime;
 using UnityEngine;
 
 namespace SailwindCoop.Sync
@@ -39,6 +40,7 @@ namespace SailwindCoop.Sync
 
         /// <summary>A session is up: forage spots are kept in step.</summary>
         internal bool Active => _net.Role != Role.None && _net.State == LinkState.Connected;
+        internal bool IsGuest => _net.Role == Role.Client;
 
         /// <summary>The local player took the item of a forage spot (called after the game's Update).</summary>
         internal void OnLocalTaken(int spawner, ShipItem item)
@@ -114,6 +116,14 @@ namespace SailwindCoop.Sync
 
         public static void Apply(Harmony harmony)
         {
+            var floatingSpawner = typeof(WorldItemSpawner).Assembly.GetType("RandomFloatingItemSpawner");
+            if (floatingSpawner != null)
+            {
+                var hooks = new PatchHookCatalog();
+                hooks.Install(floatingSpawner, "Update", Type.EmptyTypes, m => harmony.Patch(m,
+                    prefix: new HarmonyMethod(typeof(ForagePatches), nameof(PreFloatingUpdate))));
+                PatchHealth.Report("Floating items", hooks);
+            }
             _spawnerType = AccessTools.TypeByName("WorldItemSpawner");
             if (_spawnerType == null) throw new MissingMemberException("WorldItemSpawner (game 0.40 forage spots)");
             _item = AccessTools.FieldRefAccess<ShipItem>(_spawnerType, "item");
@@ -139,6 +149,9 @@ namespace SailwindCoop.Sync
             Plugin.Logger.LogInfo("[ForagePatches] WorldItemSpawner.Update patched, LoadGame=" + load);
             SailwindCoop.Runtime.PatchHealth.Report("Forage", load ? 2 : 1, 2);
         }
+
+        // Registered floating items are replicated by ItemSync, including to guests loading a save.
+        private static bool PreFloatingUpdate() => ForageSync.Instance?.IsGuest != true;
 
         private static void PreUpdate(object __instance, out ShipItem __state)
         {

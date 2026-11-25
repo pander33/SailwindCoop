@@ -171,6 +171,7 @@ namespace SailwindCoop.Net
         ServerFull = 4,
         AlreadyConnected = 5,
         SessionLocked = 6,
+        GameBuildMismatch = 7,
     }
 
     public enum MemberJoinState : byte
@@ -226,6 +227,7 @@ namespace SailwindCoop.Net
         public string PlayerName = "";
         public string SelectedAvatar = ""; // avatar bundle file name, e.g. "avatar1.bundle"
         public string PlayerGuid = "";
+        public string GameBuild = "";
 
         public MsgType Type => MsgType.Hello;
 
@@ -237,6 +239,7 @@ namespace SailwindCoop.Net
             w.Put(PlayerName);
             w.Put(SelectedAvatar ?? "");
             w.Put(PlayerGuid ?? "");
+            w.Put(GameBuild ?? "", 64);
         }
 
         public void Deserialize(NetDataReader r)
@@ -247,6 +250,7 @@ namespace SailwindCoop.Net
             PlayerName = r.GetString();
             SelectedAvatar = r.GetString();
             PlayerGuid = r.GetString(64);
+            GameBuild = r.GetString(64);
         }
     }
 
@@ -1536,6 +1540,7 @@ namespace SailwindCoop.Net
         public uint AuthorRequester;
         public uint AuthorRequestId;
         public bool IsBaselineItem;
+        public bool FarLod;
         public byte Kind;          // NetObjKind (Item)
         public int InstanceId;
         public int PrefabIndex;
@@ -1572,6 +1577,7 @@ namespace SailwindCoop.Net
             w.Put(AuthorRequester);
             w.Put(AuthorRequestId);
             w.Put(IsBaselineItem);
+            w.Put(FarLod);
             w.Put(Revision);
             w.Put(Requester);
             Details.Serialize(w);
@@ -1607,6 +1613,7 @@ namespace SailwindCoop.Net
             AuthorRequester = r.GetUInt();
             AuthorRequestId = r.GetUInt();
             IsBaselineItem = r.GetBool();
+            FarLod = r.GetBool();
             Revision = r.GetUInt();
             Requester = r.GetUInt();
             Details.Deserialize(r);

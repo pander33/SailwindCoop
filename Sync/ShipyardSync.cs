@@ -20,10 +20,12 @@ namespace SailwindCoop.Sync
         public static ShipyardSync Instance { get; private set; }
 
         private readonly CoopNet _net;
+        private readonly System.Func<bool> _guestWorldLoaded;
 
-        public ShipyardSync(CoopNet net)
+        public ShipyardSync(CoopNet net, System.Func<bool> guestWorldLoaded)
         {
             _net = net;
+            _guestWorldLoaded = guestWorldLoaded;
             Instance = this;
         }
 
