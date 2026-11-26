@@ -79,6 +79,15 @@ namespace SailwindCoop.Sync
         {
             internal ItemOperationRequestMsg Request;
             internal float Waited;
+            internal ShipItem[] StagedCrateItems;
+
+            internal void DiscardStagedItems()
+            {
+                if (StagedCrateItems == null) return;
+                foreach (var item in StagedCrateItems)
+                    if (item != null) UnityEngine.Object.Destroy(item.gameObject);
+                StagedCrateItems = null;
+            }
         }
         private readonly HashSet<ulong> _completedOperationResults = new HashSet<ulong>();
         private readonly OperationLedger<byte[]> _operationResults = new OperationLedger<byte[]>();
@@ -201,6 +210,9 @@ namespace SailwindCoop.Sync
                 if (peer != null && retained != null) peer.Send(retained, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 return;
             }
+            _waitingOperations.TryGetValue(key, out var waiting);
+            // A retry reuses the admitted payload and the objects staged for that payload.
+            if (waiting != null) msg = waiting.Request;
             if (refreshItems) RefreshItems(force: true);
             // Bind all existing targets before applying any effects; loading is a technical wait.
             foreach (var state in msg.Changed)
@@ -226,6 +238,7 @@ namespace SailwindCoop.Sync
             }
             if ((msg.WorldEffects & 1) != 0 && Rainbow.instance == null)
             { WaitForOperation(msg, peer, key); return; }
+            if (!PrepareCreatedCrateItems(msg, peer, key, ref waiting)) return;
             var result = new ItemOperationResultMsg { Actor = msg.Actor, OperationId = msg.OperationId };
             if (!_operationResults.TryBegin(msg.Actor, msg.OperationId, null, out _)) return;
             _waitingOperations.Remove(key);
@@ -241,6 +254,7 @@ namespace SailwindCoop.Sync
                         var e = HostLookup(state.InstanceId, state.PrefabIndex);
                         if (e?.Item == null) { result.Status = ItemOperationBody.MissingTarget; continue; }
                         // Results are absolute. No owner/distance/amount/cost eligibility is introduced.
+                        CancelCrateRequest(e.InstanceId);
                         try
                         {
                             ApplyScalarState(e.Item, state.Amount, state.Health, state.Sold, state.Nailed);
@@ -257,9 +271,17 @@ namespace SailwindCoop.Sync
                             changed.Add(BuildState(e, _net.Clock.ServerTick));
                         }
                     }
-                    foreach (var creation in msg.Created)
+                    for (int i = 0; i < msg.Created.Length; i++)
                     {
-                        var item = CreateOperationItem(creation.State);
+                        var creation = msg.Created[i];
+                        var item = waiting?.StagedCrateItems?[i];
+                        if (item != null)
+                        {
+                            // Its Start already ran. Publish it only now, at the operation's commit.
+                            RegisterOperationItem(item, creation.State);
+                            waiting.StagedCrateItems[i] = null;
+                        }
+                        else item = CreateOperationItem(creation.State);
                         if (item == null) { result.Status = ItemOperationBody.MissingTarget; continue; }
                         try
                         {
@@ -312,6 +334,7 @@ namespace SailwindCoop.Sync
                 // Ledger retains exactly what succeeded, including after an exception; retry cannot rerun effects.
                 result.Hull = hull.ToArray(); result.Changed = changed.ToArray(); result.Created = created.ToArray(); result.Consumed = consumed.ToArray();
                 _operationApplying = false;
+                waiting?.DiscardStagedItems();
             }
             // Keep the exact reply without retaining the message and its object graph.
             var reply = Protocol.Write(result);
@@ -321,18 +344,36 @@ namespace SailwindCoop.Sync
             _net.Broadcast(result, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Remember("in operation #" + msg.OperationId + " actor=" + msg.Actor + " status=" + result.Status);
         }
-        private void WaitForOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer, ulong key)
+        private WaitingOperation WaitForOperation(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer, ulong key)
         {
-            if (_waitingOperations.TryGetValue(key, out var existing))
-                existing.Request = msg;
-            else
-                _waitingOperations[key] = new WaitingOperation { Request = msg, Waited = 0f };
+            if (!_waitingOperations.TryGetValue(key, out var existing))
+                _waitingOperations[key] = existing = new WaitingOperation { Request = msg, Waited = 0f };
             if (peer != null) peer.Send(new ItemOperationResultMsg {
                 Actor = msg.Actor, OperationId = msg.OperationId, Status = ItemOperationBody.WaitingTarget
             }, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            return existing;
+        }
+
+        private bool PrepareCreatedCrateItems(ItemOperationRequestMsg msg, LiteNetLib.NetPeer peer, ulong key,
+            ref WaitingOperation waiting)
+        {
+            bool ready = true;
+            for (int i = 0; i < msg.Created.Length; i++)
+            {
+                var state = msg.Created[i].State;
+                if (state.CrateId == 0) continue;
+                waiting ??= WaitForOperation(msg, peer, key);
+                waiting.StagedCrateItems ??= new ShipItem[msg.Created.Length];
+                var item = waiting.StagedCrateItems[i];
+                if (item == null)
+                    item = waiting.StagedCrateItems[i] = CreateOperationItem(state, stageCrateItem: true);
+                if (item == null || item.itemRigidbodyC?.GetBody() == null) ready = false;
+            }
+            return ready;
         }
         private void ExpireWaitingOperation(ItemOperationRequestMsg msg, ulong key)
         {
+            if (_waitingOperations.TryGetValue(key, out var waiting)) waiting.DiscardStagedItems();
             _waitingOperations.Remove(key);
             if (!_operationResults.TryBegin(msg.Actor, msg.OperationId, null, out _)) return;
             var result = new ItemOperationResultMsg
@@ -360,32 +401,47 @@ namespace SailwindCoop.Sync
         {
             if (_waitingOperations.Count == 0) return;
             int previous = _waitingOperations.Count;
+            foreach (var waiting in _waitingOperations.Values)
+                if (waiting.Request.Actor == actor) waiting.DiscardStagedItems();
             ItemOperationWaiting.RemoveActor(_waitingOperations, actor);
             int dropped = previous - _waitingOperations.Count;
             if (dropped != 0)
                 Plugin.Logger.LogInfo("[ItemSync] role=" + _net.Role + " dropped " + dropped + " waiting operation(s) of player " + actor);
         }
-        private ShipItem CreateOperationItem(ItemStateMsg state)
+        private ShipItem CreateOperationItem(ItemStateMsg state, bool stageCrateItem = false)
         {
             var directory = PrefabsDirectory.instance?.directory;
             if (directory == null || state.PrefabIndex < 0 || state.PrefabIndex >= directory.Length || directory[state.PrefabIndex] == null) return null;
             if (!WireToWorld(state.Frame, state.BoatIndex, state.Pos, state.Rot, out var pos, out var rot)) return null;
-            UnityEngine.Transform boat = state.Frame == CoordFrame.Boat ? BoatLocator.FindByIndex(state.BoatIndex) : null;
+            // Use the game's unseal staging offset so the proxy can initialize away from the deck.
+            if (stageCrateItem) pos += UnityEngine.Vector3.up * 100.5f;
+            UnityEngine.Transform boat = !stageCrateItem && state.Frame == CoordFrame.Boat ? BoatLocator.FindByIndex(state.BoatIndex) : null;
             var go = boat != null
                 ? UnityEngine.Object.Instantiate(directory[state.PrefabIndex], pos, rot, boat)
                 : UnityEngine.Object.Instantiate(directory[state.PrefabIndex], pos, rot);
             var item = go.GetComponent<ShipItem>(); var saveable = go.GetComponent<SaveablePrefab>();
             if (item == null || saveable == null) { UnityEngine.Object.Destroy(go); return null; }
             DisableTemplateMeshCollider(item);
-            item.sold = state.Sold; saveable.prefabIndex = state.PrefabIndex; saveable.RegisterToSave();
+            if (stageCrateItem)
+            {
+                item.sold = false;
+                return item;
+            }
+            RegisterOperationItem(item, state);
             if (boat != null && state.CrateId == 0 && state.CargoPort < 0)
                 EnsureBoatParentState(item, state.BoatIndex);
             return item;
         }
+        private static void RegisterOperationItem(ShipItem item, ItemStateMsg state)
+        {
+            var saveable = item.GetComponent<SaveablePrefab>();
+            item.sold = state.Sold; saveable.prefabIndex = state.PrefabIndex; saveable.RegisterToSave();
+        }
         private bool CreationMembershipTargetsReady(ItemStateMsg state)
         {
             var carriers = CargoCarrier.carriers;
-            return (state.CrateId == 0 || CrateInventoryFor(state.CrateId) != null) &&
+            var crate = CrateInventoryFor(state.CrateId);
+            return (state.CrateId == 0 || (crate != null && CrateBodyReady(crate))) &&
                 (state.CargoPort < 0 || (carriers != null && state.CargoPort < carriers.Length &&
                     carriers[state.CargoPort] != null && carriers[state.CargoPort].cargo != null));
         }
@@ -605,6 +661,7 @@ namespace SailwindCoop.Sync
         }
         private void ClearOperations()
         {
+            foreach (var waiting in _waitingOperations.Values) waiting.DiscardStagedItems();
             _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _waitingOperationScratch.Clear(); _nextOperationRetry = 0f; _operationLocalCreated.Clear();
             _receivedOperations.Clear(); _completedOperationResults.Clear(); _unfinishedResults.Clear(); _destroyingItems.Clear();
             ItemOperationCapture.Clear();

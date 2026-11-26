@@ -1007,6 +1007,23 @@ internal static class Program
                 Assert(File.ReadAllText(path) == "new" && File.ReadAllText(path + ".bak") == "old", "old files changed");
                 Assert(Directory.GetFiles(dir, "*.tmp").Length == 0, "temp leak");
             });
+            Test("world write failure leaves the primary and all five backups ready for retry", () => {
+                string world = Path.Combine(dir, "slot-test.save");
+                Func<int, string> backup = index => Path.Combine(dir, "slot-test_backup" + index + ".save");
+                File.WriteAllText(world, "previous world");
+                for (int i = 1; i <= 5; i++) File.WriteAllText(backup(i), "backup " + i);
+                ExpectFailure(() => AtomicSaveFile.WriteWorld(world, backup, stream => {
+                    stream.WriteByte(1);
+                    throw new IOException("injected after writing");
+                }));
+                Assert(File.ReadAllText(world) == "previous world", "partial data replaced the world");
+                for (int i = 1; i <= 5; i++) Assert(File.ReadAllText(backup(i)) == "backup " + i, "backups rotated on failure");
+                Assert(Directory.GetFiles(dir, "*.tmp").Length == 0, "failed world write left an open temporary file");
+                AtomicSaveFile.WriteWorld(world, backup, stream => stream.WriteByte(42));
+                Assert(File.ReadAllBytes(world).SequenceEqual(new byte[] { 42 }) &&
+                    File.ReadAllText(backup(1)) == "previous world" && File.ReadAllText(backup(5)) == "backup 4",
+                    "retry did not commit and rotate the saved world");
+            });
             Test("locked target", () => {
                 using (File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                     ExpectFailure(() => Write(path, "broken"));

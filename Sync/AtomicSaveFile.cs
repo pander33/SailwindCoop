@@ -7,6 +7,27 @@ namespace SailwindCoop.Sync
     internal static class AtomicSaveFile
     {
         public static void Write(string path, Action<Stream> serialize, bool preserveBackup = false)
+            => WriteStaged(path, serialize, temp => {
+                if (File.Exists(path))
+                    File.Replace(temp, path, preserveBackup ? null : path + ".bak");
+                else
+                    File.Move(temp, path);
+            });
+
+        internal static void WriteWorld(string path, Func<int, string> backupPath, Action<Stream> serialize)
+            => WriteStaged(path, serialize, temp => {
+                const int backups = 5;
+                File.Delete(backupPath(backups));
+                for (int i = backups - 1; i >= 1; i--)
+                {
+                    string backup = backupPath(i);
+                    if (File.Exists(backup)) File.Move(backup, backupPath(i + 1));
+                }
+                if (File.Exists(path)) File.Replace(temp, path, backupPath(1));
+                else File.Move(temp, path);
+            });
+
+        private static void WriteStaged(string path, Action<Stream> serialize, Action<string> commit)
         {
             string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -16,10 +37,7 @@ namespace SailwindCoop.Sync
                     serialize(stream);
                     stream.Flush(true);
                 }
-                if (File.Exists(path))
-                    File.Replace(temp, path, preserveBackup ? null : path + ".bak");
-                else
-                    File.Move(temp, path);
+                commit(temp);
             }
             finally
             {

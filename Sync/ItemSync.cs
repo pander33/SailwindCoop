@@ -385,6 +385,8 @@ namespace SailwindCoop.Sync
             TickPuppetsAwaitingStart();
 
             if (_net.Role != Role.Host) return;
+            RetryCrateRequests();
+            SendCancelledCrateResults();
             ProcessPendingDynamic();
             SendHeldFromBelt();
             SendExtraState(dt);
@@ -958,6 +960,8 @@ namespace SailwindCoop.Sync
             CancelPendingDynamic(item);
             _droppedBeforeBind.Remove(item);
             if (pointer != null && pointer.GetHeldItem() == item) InstrumentPickedUp(item);
+            if (_net.Role == Role.Host && _pendingCrateRequests.Count != 0)
+                CancelCrateRequest(InstanceIdOf(item));
             if (_net.Role != Role.Client) return;
             if (pointer != null) _gp = pointer;   // HeldItem() reads _gp
             RefreshItems(force: true);
@@ -1189,8 +1193,11 @@ namespace SailwindCoop.Sync
                 return;
             }
             if (!pose) CancelPendingDynamic(e.Item);
+            if (msg.Action == ItemAction.Crate || msg.Action == ItemAction.Pickup || consume)
+                CancelCrateRequest(e.InstanceId);
             if (!continuous) ClearClientHeldPose(e);
-            if (!continuous && msg.RequestId != 0) { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
+            if (!continuous && msg.Action != ItemAction.Crate && msg.RequestId != 0)
+            { e.AckRequester = actor; e.AckRequest = msg.RequestId; }
             if (consume)
             {
                 // The client ate/consumed the item. The eater's PlayerNeeds is personal and already
@@ -1255,24 +1262,12 @@ namespace SailwindCoop.Sync
 
             if (msg.Action == ItemAction.Crate)
             {
-                // Client moved a target item in/out of a crate. Mirror the membership on the host's copy
-                // and broadcast the item's state (carries CrateId) so every peer converges.
-                var ie = HostLookup(msg.InstanceId, msg.PrefabIndex);
-                if (ie != null && ie.Item != null)
-                {
-                    var crateStatus = TryApplyCrateMembership(ie.Item, msg.CrateId);
-                    _net.Broadcast(BuildState(ie, _net.Clock.ServerTick), LiteNetLib.DeliveryMethod.ReliableOrdered);
-                    // Not applied (a crate this host does not know, or no physics proxy yet): nothing
-                    // changed and nothing retries a request; the state above carries the acknowledgement
-                    // and the item's real crate. Say so instead of reporting an insert.
-                    if (crateStatus != ItemApplyStatus.Applied)
-                        Remember("crate #" + ie.Index + "->" + msg.CrateId + " not applied (" + crateStatus +
-                                 (msg.CrateId != 0 && CrateInventoryFor(msg.CrateId) == null ? ", unknown crate" : "") +
-                                 ") actor=" + actor);
-                    else
-                        Remember("in crate #" + ie.Index + "->" + msg.CrateId + " actor=" + actor);
-                }
-                else Remember("reject crate id=" + msg.InstanceId);
+                var status = TryApplyCrateMembership(e.Item, msg.CrateId);
+                if (status == ItemApplyStatus.Pending)
+                    _pendingCrateRequests[e.InstanceId] = new PendingCrateRequest
+                    { Item = e.Item, Message = msg, Actor = actor, Peer = fromPeer, Deadline = Time.unscaledTime + 2f };
+                else
+                    SendCrateResult(e, msg, actor, status);
                 return;
             }
 
@@ -1718,6 +1713,11 @@ namespace SailwindCoop.Sync
         {
             if (actorNetId == 0) return;
             ForgetWaitingOperations(actorNetId);
+            _crateRequestScratch.Clear();
+            foreach (var pair in _pendingCrateRequests)
+                if (pair.Value.Actor == actorNetId) _crateRequestScratch.Add(pair.Key);
+            foreach (int id in _crateRequestScratch) _pendingCrateRequests.Remove(id);
+            _crateRequestScratch.Clear();
 
             int released = 0;
             foreach (var e in _items)
@@ -2797,6 +2797,77 @@ namespace SailwindCoop.Sync
         /// done under the anti-echo guard so the relay patches don't bounce it back.
         /// </summary>
         private void ApplyCrateMembership(ShipItem item, int crateId) => TryApplyCrateMembership(item, crateId);
+        private sealed class PendingCrateRequest
+        {
+            internal ShipItem Item;
+            internal ItemRequestMsg Message;
+            internal uint Actor;
+            internal LiteNetLib.NetPeer Peer;
+            internal float Deadline;
+        }
+        private readonly Dictionary<int, PendingCrateRequest> _pendingCrateRequests = new Dictionary<int, PendingCrateRequest>();
+        private readonly List<int> _crateRequestScratch = new List<int>();
+        private readonly List<PendingCrateRequest> _cancelledCrateRequests = new List<PendingCrateRequest>();
+
+        private void CancelCrateRequest(int id)
+        {
+            if (!_pendingCrateRequests.TryGetValue(id, out var pending)) return;
+            _pendingCrateRequests.Remove(id);
+            _cancelledCrateRequests.Add(pending);
+        }
+
+        private void SendCancelledCrateResults()
+        {
+            foreach (var pending in _cancelledCrateRequests)
+            {
+                // Read the result after the replacing action has run. A despawn supersedes the reply.
+                if (pending.Peer?.ConnectionState != LiteNetLib.ConnectionState.Connected ||
+                    !_byInstanceId.TryGetValue(pending.Message.InstanceId, out var entry) ||
+                    entry.Item == null || entry.Item != pending.Item || _destroyingItems.Contains(entry.Item)) continue;
+                var state = BuildState(entry, _net.Clock.ServerTick);
+                state.Requester = pending.Actor;
+                state.RequestId = pending.Message.RequestId;
+                pending.Peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+            _cancelledCrateRequests.Clear();
+        }
+
+        private void RetryCrateRequests()
+        {
+            if (_pendingCrateRequests.Count == 0) return;
+            _crateRequestScratch.AddRange(_pendingCrateRequests.Keys);
+            foreach (int id in _crateRequestScratch)
+            {
+                if (!_pendingCrateRequests.TryGetValue(id, out var pending)) continue;
+                if (!_byInstanceId.TryGetValue(id, out var entry) || entry.Item == null ||
+                    entry.Item != pending.Item || _destroyingItems.Contains(entry.Item))
+                {
+                    _pendingCrateRequests.Remove(id);
+                    continue;
+                }
+                var status = TryApplyCrateMembership(entry.Item, pending.Message.CrateId);
+                if (status == ItemApplyStatus.Pending && Time.unscaledTime < pending.Deadline) continue;
+                _pendingCrateRequests.Remove(id);
+                SendCrateResult(entry, pending.Message, pending.Actor, status);
+            }
+            _crateRequestScratch.Clear();
+        }
+
+        private void SendCrateResult(ItemEntry entry, ItemRequestMsg request, uint actor, ItemApplyStatus status)
+        {
+            if (request.RequestId != 0 && (entry.AckRequester != actor ||
+                unchecked((int)(request.RequestId - entry.AckRequest)) >= 0))
+            {
+                entry.AckRequester = actor;
+                entry.AckRequest = request.RequestId;
+            }
+            var state = BuildState(entry, _net.Clock.ServerTick);
+            state.Requester = actor;
+            state.RequestId = request.RequestId;
+            _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            Remember("crate #" + entry.Index + "->" + request.CrateId + " " + status + " actor=" + actor);
+        }
+
         private ItemApplyStatus TryApplyCrateMembership(ShipItem item, int crateId)
         {
             if (item == null) return ItemApplyStatus.Pending;
@@ -2805,17 +2876,15 @@ namespace SailwindCoop.Sync
             return _crateMembership.Apply(item,
                 () => sv != null && sv.currentCrateId == crateId && CrateListsMatch(item, target) && (crateId == 0 ||
                     (target != null && target.containedItems.Contains(item))),
-                () => sv != null && item.itemRigidbodyC != null && (crateId == 0 || target != null),
+                () => sv != null && CrateChangeReady(item, sv.currentCrateId, crateId, target),
                 () => {
                     ApplyingCrate = true;
                     try
                     {
-                        foreach (var entry in _items)
-                        {
-                            var inventory = entry.Item != null ? entry.Item.GetComponent<CrateInventory>() : null;
-                                if (inventory != null && inventory != target &&
-                                    (inventory.containedItems.Contains(item) || InstanceIdOf(entry.Item) == sv.currentCrateId)) inventory.WithdrawItem(item);
-                        }
+                        int sourceId = sv.currentCrateId;
+                        foreach (var inventory in CrateInventories())
+                            if (inventory != null && inventory != target && IsCrateSource(inventory, item, sourceId))
+                                inventory.WithdrawItem(item);
                         if (target != null) target.InsertItem(item);
                         else sv.currentCrateId = 0;
                     }
@@ -2831,7 +2900,7 @@ namespace SailwindCoop.Sync
         // Asked for every incoming item state: resolve the crates once per frame, not once per packet.
         private readonly List<CrateInventory> _crateScan = new List<CrateInventory>();
         private int _crateScanFrame = -1, _crateScanCount = -1;
-        private bool CrateListsMatch(ShipItem item, CrateInventory target)
+        private List<CrateInventory> CrateInventories()
         {
             if (_crateScanFrame != Time.frameCount || _crateScanCount != _items.Count)
             {
@@ -2843,15 +2912,38 @@ namespace SailwindCoop.Sync
                     if (entry.CrateInv != null) _crateScan.Add(entry.CrateInv);
                 }
             }
-            foreach (var inventory in _crateScan)
+            return _crateScan;
+        }
+        private bool CrateListsMatch(ShipItem item, CrateInventory target)
+        {
+            foreach (var inventory in CrateInventories())
                 if (inventory != null && inventory != target && inventory.containedItems.Contains(item)) return false;
             return true;
         }
+        private static bool IsCrateSource(CrateInventory inventory, ShipItem item, int sourceId)
+            => inventory.containedItems.Contains(item) ||
+                (sourceId != 0 && inventory.GetComponent<SaveablePrefab>()?.instanceId == sourceId);
+
+        private static bool CrateBodyReady(CrateInventory inventory)
+            => inventory.GetComponent<ShipItem>()?.itemRigidbodyC?.GetBody() != null;
+
+        private bool CrateChangeReady(ShipItem item, int sourceId, int crateId, CrateInventory target)
+        {
+            // Both vanilla methods call UpdateMass on the item and the crate after mutating
+            // membership. The proxy component exists before Start creates its Rigidbody.
+            bool itemReady = item.itemRigidbodyC?.GetBody() != null;
+            if (crateId != 0 && (target == null || !itemReady || !CrateBodyReady(target))) return false;
+            foreach (var inventory in CrateInventories())
+                if (inventory != null && inventory != target && IsCrateSource(inventory, item, sourceId) &&
+                    (!itemReady || !CrateBodyReady(inventory))) return false;
+            return true;
+        }
+
         private bool MembershipTargetsReady(ShipItem item, ItemStateMsg state)
         {
             var carriers = CargoCarrier.carriers;
             return item != null && item.itemRigidbodyC != null &&
-                (state.CrateId == 0 || CrateInventoryFor(state.CrateId) != null) &&
+                CrateChangeReady(item, CrateIdOf(item), state.CrateId, CrateInventoryFor(state.CrateId)) &&
                 (state.CargoPort < 0 || (carriers != null && state.CargoPort < carriers.Length && carriers[state.CargoPort] != null &&
                     carriers[state.CargoPort].cargo != null));
         }
@@ -3756,6 +3848,7 @@ namespace SailwindCoop.Sync
             }
             else
             {
+                CancelCrateRequest(e.InstanceId);
                 _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.ReliableOrdered);
                 Remember("crate(host) #" + e.Index + "->" + CrateIdOf(item));
             }
@@ -5418,6 +5511,9 @@ namespace SailwindCoop.Sync
             _pendingStateCursor = 0;
             _nextPendingStateRetry = 0f;
             _crateMembership.Clear();
+            _pendingCrateRequests.Clear();
+            _cancelledCrateRequests.Clear();
+            _crateRequestScratch.Clear();
             _crateScan.Clear();
             _crateScanFrame = -1;
             _crateScanCount = -1;

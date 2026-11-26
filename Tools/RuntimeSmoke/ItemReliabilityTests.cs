@@ -249,6 +249,9 @@ internal static class ItemReliabilityTests
             Assert(ledger.TryBegin(11, 42, null, out _), "other actor was treated as duplicate");
         });
         test("production T11 snapshot binding membership commit preflight and disconnect paths are wired", VerifyProductionPaths);
+        test("crate mutations wait for item and crate bodies on both network paths", VerifyCrateReadiness);
+        test("superseded crate request can acknowledge a newer host state to its original guest", VerifyCancelledCrateRequest);
+        test("save recovery hooks the iterator and guards both join paths", VerifySaveRecovery);
         test("production consumed cleanup retries past tombstone instead of falsely completing", VerifyConsumedCleanup);
         test("trade sale journal bounds stored authors and receipts while reading legacy entries", VerifyTradeSaleJournalBounds);
         test("production item sync reliability and cleanup paths are wired", VerifyItemSyncFixes);
@@ -266,6 +269,63 @@ internal static class ItemReliabilityTests
         instruction.Operand is MethodReference called && called.Name == name);
     private static IEnumerable<MethodDefinition> Methods(TypeDefinition type)
         => type.Methods.Concat(type.NestedTypes.SelectMany(Methods));
+    private static void VerifyCrateReadiness()
+    {
+        using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
+        {
+            var items = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemSync");
+            var ready = Method(items, "CrateChangeReady");
+            Assert(Calls(ready, "GetBody") && Calls(Method(items, "CrateBodyReady"), "GetBody") &&
+                ready.Body.Instructions.Count(instruction => instruction.Operand is MethodReference called &&
+                    called.Name == "CrateBodyReady") == 2, "item, target or source body guard missing");
+            Assert(Calls(Method(items, "MembershipTargetsReady"), "CrateChangeReady") &&
+                Methods(items).Any(method => method.HasBody && method.Name.Contains("TryApplyCrateMembership") &&
+                    Calls(method, "CrateChangeReady")), "membership bypassed body readiness");
+            Assert(Calls(Method(items, "Tick"), "RetryCrateRequests") &&
+                Calls(Method(items, "RetryCrateRequests"), "TryApplyCrateMembership") &&
+                Calls(Method(items, "RetryCrateRequests"), "SendCrateResult"), "host does not finish deferred requests");
+            var body = Method(items, "ApplyOperation").Body.Instructions.ToList();
+            int prepare = body.FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "PrepareCreatedCrateItems");
+            int begin = body.FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "TryBegin");
+            Assert(prepare >= 0 && prepare < begin && Calls(Method(items, "PrepareCreatedCrateItems"), "GetBody") &&
+                Calls(Method(items, "ExpireWaitingOperation"), "DiscardStagedItems") &&
+                Calls(Method(items, "ForgetWaitingOperations"), "DiscardStagedItems"),
+                "new crate item is applied before readiness or leaks from abandoned operation");
+        }
+    }
+    private static void VerifyCancelledCrateRequest()
+    {
+        using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
+        {
+            var items = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.ItemSync");
+            Assert(Calls(Method(items, "OnItemRequest"), "CancelCrateRequest") &&
+                Calls(Method(items, "NotifyPickup"), "CancelCrateRequest") &&
+                Calls(Method(items, "Tick"), "SendCancelledCrateResults") &&
+                Calls(Method(items, "SendCancelledCrateResults"), "Send"), "cancelled request has no reply path");
+        }
+        var gate = new ItemStateGate();
+        Assert(gate.Receive(4, 10, 0, 0, 10, out _, out _), "baseline missed");
+        gate.Begin(41);
+        Assert(!gate.Receive(5, 11, 12, 100, 10, out _, out _) && gate.Pending, "new action must await pending acknowledgement");
+        Assert(gate.Receive(5, 12, 10, 41, 10, out _, out _) && !gate.Pending && gate.Version == 5,
+            "cancel reply failed to carry the new state");
+    }
+    private static void VerifySaveRecovery()
+    {
+        using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
+        {
+            var save = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Sync.SavePatches");
+            var hooks = Method(save, "ApplyRecovery");
+            Assert(Calls(hooks, "EnumeratorMoveNext") && Calls(hooks, "Patch") &&
+                Calls(Method(save, "FinishSave"), "SetValue"), "save recovery did not hook the coroutine or reset busy");
+            Assert(Calls(Method(save, "WriteWorld"), "WriteWorld"), "vanilla serialization bypasses staged save writing");
+            var runtime = plugin.MainModule.Types.Single(type => type.FullName == "SailwindCoop.Runtime.CoopBehaviour");
+            Assert(Methods(runtime).Any(method => method.HasBody && Calls(method, "ReadHostSaveBytes") &&
+                Calls(method, "get_CurrentSlotSaveFailed")), "host can stream a failed save");
+            Assert(Methods(runtime).Any(method => method.HasBody && method.DeclaringType.Name.Contains("CompleteOwnSave") &&
+                Calls(method, "get_CurrentSlotSaveFailed")), "save-and-join accepts a failed save");
+        }
+    }
     private static void VerifyProductionPaths()
     {
         using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))

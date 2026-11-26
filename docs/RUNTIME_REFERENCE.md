@@ -90,6 +90,12 @@ Domain notes:
   a step or at a mark the game reads (`ItemAgeing`). A log in a stove is the stove's child with
   no pose of its own (`ItemComponents.PlaceFuel`). A tilted pot is emptied by one machine only —
   its holder's, or the host's (`ItemSync.OwnsDrain`) — and its level goes as item state.
+  Crate moves wait for the item and the affected crates' rigidbodies before calling vanilla
+  insert or withdraw. Both vanilla methods recalculate mass after changing membership.
+  Guests retry through the item-state queue. The host gives a delayed crate request up to two
+  real-time seconds and acknowledges the actual state, including when a later action supersedes
+  the request. Compound operations stage newly created crate items before committing changes,
+  so the items' rigidbodies can initialize before insertion.
   Drying, spoiling, the heat left after the stove, a soup's spoiling and the fuel of a burning
   lamp or log belong to the host's world: the host does not take them from a drop or from a
   report of a held item (`ItemSync.KeepWorldOwned`, `ItemDetails.TakeWorldOwned`), and the
@@ -200,6 +206,11 @@ Domain notes:
   menu blocks local locomotion independently of the clock, including diving with the primary
   stick, while gravity, collisions and the secondary-stick pointer remain active.
 - **Saves:** the profile and the co-op slot are written atomically with a backup and `GameVersion`.
+  If the game's `DoSaveGame` coroutine throws, the recovery patch clears its manager's busy flag
+  and records the failed slot. World transfer and Save and Join require that slot to complete
+  a successful save before proceeding. The coroutine exception still reaches Unity.
+  The vanilla world save writes and closes a temporary file before rotating the game's five
+  backups and replacing the primary. A serialization failure leaves the primary and backups intact.
   A join from a loaded world first returns to the title screen (`CoopBehaviour.LeaveWorldFirst`):
   the session is torn down, an own world is saved, the game's static state is reset and scene 0 is
   loaded again, then the join is repeated. The game itself never leaves a world, so this path has

@@ -335,6 +335,7 @@ namespace SailwindCoop.Runtime
             PatchHealth.Install("Shop", () => ShopPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Forage", () => ForagePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Save", () => SavePatches.Apply(_harmony), patchFault);
+            PatchHealth.Install("Save recovery", () => SavePatches.ApplyRecovery(_harmony), patchFault);
             PatchHealth.Install("Dice save lifecycle", () => DiceSavePatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Sleep", () => SleepPatches.Apply(_harmony), patchFault);
             PatchHealth.Install("Needs FPS", () => NeedsFrameRatePatches.Apply(_harmony), patchFault);
@@ -1341,6 +1342,13 @@ namespace SailwindCoop.Runtime
             }
 
             if (AbortIfSaveStopped(peer, netId, sessionGen, epoch)) yield break;
+            if (SavePatches.CurrentSlotSaveFailed)
+            {
+                Notice("The last save failed. Save this world again before a player can join.");
+                Net.SetMemberState(netId, MemberJoinState.Failed);
+                Net.DisconnectPlayer(netId, "The host's last save failed.", kicked: false);
+                yield break;
+            }
             byte[] bytes = SaveTransferSync.ReadHostSaveBytes();
             // Length check matters as much as null: SendSaveTo silently returns on an empty array, and
             // with the pause taken just below that would freeze the host until the 120 s safety timeout,
@@ -1922,7 +1930,7 @@ namespace SailwindCoop.Runtime
                     for (float t = 0f; t < 30f && SaveTransferSync.HostSaveBusy(); t += Time.unscaledDeltaTime) yield return null;
                     if (SaveTransferSync.HostSaveBusy()) started = false;
                 }
-                if (started)
+                if (started && !SavePatches.CurrentSlotSaveFailed)
                 {
                     try
                     {
