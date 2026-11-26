@@ -161,6 +161,21 @@ namespace SailwindCoop.Net
         public bool Running => _net != null;
         public LanHost[] Hosts => _list.Snapshot();
 
+        /// <summary>Zero-allocation per-frame overload for 3 candidate ports.</summary>
+        public void Tick(bool wanted, float now, int port0, int port1, int port2)
+        {
+            if (!wanted) { if (_net != null) Stop(); return; }
+            _now = now;
+            if (_net == null && !Start(now)) return;
+            _net.PollEvents();
+            _list.Expire(now);
+            if (now < _nextQuery) return;
+            _nextQuery = now + QueryInterval;
+            if (port0 > 0 && port0 <= 65535) Query(port0);
+            if (port1 > 0 && port1 <= 65535 && port1 != port0) Query(port1);
+            if (port2 > 0 && port2 <= 65535 && port2 != port0 && port2 != port1) Query(port2);
+        }
+
         /// <summary>Every frame. <paramref name="ports"/> are the ports a host may listen on.</summary>
         public void Tick(bool wanted, float now, params int[] ports)
         {

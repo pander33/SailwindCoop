@@ -115,8 +115,12 @@ namespace SailwindCoop.Net
             if (Ready) Guarded(() => { BlockCore(steamId); return true; }, false);
         }
 
+        private static readonly Func<bool> _failureIsFinal = FailureIsFinalCore;
+        private static readonly Func<ulong> _takeJoinRequest = TakeJoinRequestCore;
+        private static readonly Func<string> _takeFailure = TakeFailureCore;
+
         /// <summary>Client: Steam has said the host cannot be reached at all, so waiting is pointless.</summary>
-        public static bool FailureIsFinal => Ready && Guarded(FailureIsFinalCore, false);
+        public static bool FailureIsFinal => Ready && Guarded(_failureIsFinal, false);
 
         /// <summary>
         /// The host the player asked to join through Steam itself ("Join Game" in the friends list or
@@ -124,13 +128,13 @@ namespace SailwindCoop.Net
         /// </summary>
         public static ulong TakeJoinRequest()
         {
-            return Ready ? Guarded(TakeJoinRequestCore, 0UL) : 0UL;
+            return Ready ? Guarded(_takeJoinRequest, 0UL) : 0UL;
         }
 
         /// <summary>The last peer-to-peer failure Steam reported, once.</summary>
         public static string TakeFailure()
         {
-            return Ready ? Guarded(TakeFailureCore, null) : null;
+            return Ready ? Guarded(_takeFailure, null) : null;
         }
 
         public static void Shutdown()

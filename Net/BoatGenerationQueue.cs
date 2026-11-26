@@ -30,6 +30,13 @@ namespace SailwindCoop.Net
         public List<T> TakeReady(BoatGenerationBook book, Func<ushort, bool> suspended)
         {
             var ready = new List<T>();
+            TakeReady(book, suspended, ready);
+            return ready;
+        }
+        public void TakeReady(BoatGenerationBook book, Func<ushort, bool> suspended, List<T> ready)
+        {
+            ready.Clear();
+            if (_entries.Count == 0) return;
             for (int i = 0; i < _entries.Count;)
             {
                 var entry = _entries[i]; var order = book.Compare(entry.Boat, entry.Generation);
@@ -37,7 +44,6 @@ namespace SailwindCoop.Net
                 else if (order == GenerationOrder.Current && !suspended(entry.Boat)) { ready.Add(entry.Value); _entries.RemoveAt(i); }
                 else i++;
             }
-            return ready;
         }
         public void Clear() => _entries.Clear();
     }

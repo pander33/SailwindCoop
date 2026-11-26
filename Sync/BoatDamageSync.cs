@@ -73,13 +73,13 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_net.State != LinkState.Connected) return;
             if (_fleet != null)
             {
                 _pumpSync.Tick(dt);
                 foreach (var c in _fleet.Values) c.Tick(dt);
                 return;
             }
-            if (_net.State != LinkState.Connected) return;
             RefreshBoat();
 
             if (_net.Role == Role.Host) SendSnapshot(dt);

@@ -189,13 +189,12 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_net.Role != Role.Host || _net.State != LinkState.Connected) return;
             if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
-            if (_net.Role != Role.Host) return;
-            if (_net.State != LinkState.Connected) return;
 
             RefreshNodes();
             // Before the send decisions: a crank follows the local length changes of the whole frame.
-            DriveCranks(dt);
+            DriveCranks(dt, HeldButton());
             if (_ropes.Length == 0 && _nodes.Length == 0) return;
 
             _replyTimer += Time.unscaledDeltaTime;
@@ -218,24 +217,38 @@ namespace SailwindCoop.Sync
         // Client: receive
         // -----------------------------------------------------------------
 
+        private ControlStateMsg _scratchState;
+
+        private ControlStateMsg PrepareScratchState()
+        {
+            var s = _scratchState ?? (_scratchState = new ControlStateMsg());
+            if (s.WheelInputs == null || s.WheelInputs.Length != _wheels.Length) s.WheelInputs = new float[_wheels.Length];
+            if (s.Lengths == null || s.Lengths.Length != _ropes.Length) s.Lengths = new float[_ropes.Length];
+            if (s.Rotations == null || s.Rotations.Length != _nodes.Length) s.Rotations = new Quaternion[_nodes.Length];
+            if (s.WheelLocks == null || s.WheelLocks.Length != _wheels.Length) s.WheelLocks = new bool[_wheels.Length];
+            if (s.RopeEpochs == null || s.RopeEpochs.Length != _ropes.Length) s.RopeEpochs = new ControlEpoch[_ropes.Length];
+            if (s.WheelEpochs == null || s.WheelEpochs.Length != _wheels.Length) s.WheelEpochs = new ControlEpoch[_wheels.Length];
+            return s;
+        }
+
         private void SendState(LiteNetLib.NetPeer peer, bool reconcile, bool reliable = false, bool periodic = false)
         {
-            var inputs = new float[_wheels.Length];
+            var state = PrepareScratchState();
+            var inputs = state.WheelInputs;
             for (int i = 0; i < inputs.Length; i++) inputs[i] = _wheels[i] != null ? _wheels[i].currentInput : 0f;
-            var lens = new float[_ropes.Length];
+            var lens = state.Lengths;
             for (int i = 0; i < _ropes.Length; i++)
                 lens[i] = _ropes[i] != null ? _ropes[i].currentLength : 0f;
 
-            var rots = new Quaternion[_nodes.Length];
+            var rots = state.Rotations;
             for (int i = 0; i < _nodes.Length; i++)
                 rots[i] = _nodes[i].T != null ? _nodes[i].T.localRotation : Quaternion.identity;
 
-            var locks = new bool[_wheels.Length];
-            var ropeEpochs = new ControlEpoch[_ropes.Length]; var wheelEpochs = new ControlEpoch[_wheels.Length];
+            var locks = state.WheelLocks;
+            var ropeEpochs = state.RopeEpochs; var wheelEpochs = state.WheelEpochs;
             for (int i = 0; i < ropeEpochs.Length; i++) ropeEpochs[i] = _ropeTracks[i].Capture(lens[i]);
             for (int i = 0; i < wheelEpochs.Length; i++) { locks[i] = _wheels[i] != null && Locked(_wheels[i]); wheelEpochs[i] = _wheelTracks[i].Capture(inputs[i], locks[i]); }
-            var state = new ControlStateMsg { BoatIndex = _boatId, LayoutHash = _layoutHash, Tick = _net.Clock.ServerTick, Reconcile = reconcile, WheelInputs = inputs, Lengths = lens, Rotations = rots,
-                WheelLocks = locks, RopeEpochs = ropeEpochs, WheelEpochs = wheelEpochs };
+            state.BoatIndex = _boatId; state.LayoutHash = _layoutHash; state.Generation = 0; state.Tick = _net.Clock.ServerTick; state.Reconcile = reconcile;
             if (peer != null) { peer.Send(state, LiteNetLib.DeliveryMethod.ReliableOrdered); return; }
             if (periodic)
             {
@@ -245,6 +258,8 @@ namespace SailwindCoop.Sync
                 reliable = mode == StreamSend.Reliable;
             }
             else _stream.Sent(reliable);
+            // Swap scratch and sent buffers so _sentState retains the transmitted values with zero allocations.
+            _scratchState = _sentState;
             _sentState = state;
             _net.Broadcast(state, reliable ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
         }
@@ -351,18 +366,18 @@ namespace SailwindCoop.Sync
         /// </summary>
         public void ApplyClient(float dt)
         {
+            if (_net.Role != Role.Client || _net.State != LinkState.Connected) return;
             if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyClient(dt); return; }
-            if (_net.Role != Role.Client) return;
 
             AskResync();
-            ForwardLocalRopeChanges(dt);
+            GoPointerButton heldBtn = HeldButton();
+            ForwardLocalRopeChanges(dt, heldBtn);
             // Lengths received this frame are applied; the cranks they imply move before rendering.
-            DriveCranks(dt);
+            DriveCranks(dt, heldBtn);
 
             // Steering: forward the wheel's input to the host while the local player turns it.
             // We do NOT drive the rudder locally — the host steers authoritatively and its rudder
             // angle comes back through the node-rotation sync below.
-            GoPointerButton heldBtn = HeldButton();
             ForwardSteering(dt, heldBtn);
 
             if (!_haveTargets || _nodes.Length == 0) return;
@@ -508,6 +523,11 @@ namespace SailwindCoop.Sync
             }
         }
 
+        private static readonly HarmonyLib.AccessTools.FieldRef<GoPointer, GoPointerButton> StickyButtonRef =
+            InitControlsFieldRef<GoPointer, GoPointerButton>("stickyClickedButton");
+        private static readonly HarmonyLib.AccessTools.FieldRef<GoPointer, GoPointerButton> ClickedButtonRef =
+            InitControlsFieldRef<GoPointer, GoPointerButton>("clickedButton");
+
         /// <summary>The local player's sticky or actively clicked control, or null.</summary>
         private GoPointerButton HeldButton()
         {
@@ -515,13 +535,23 @@ namespace SailwindCoop.Sync
             {
                 if (_gp == null) _gp = Object.FindObjectOfType<GoPointer>();
                 if (_gp == null) return null;
-                if (_fSticky == null)
-                    _fSticky = typeof(GoPointer).GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
-                var sticky = _fSticky?.GetValue(_gp) as GoPointerButton;
+                GoPointerButton sticky;
+                if (StickyButtonRef != null) sticky = StickyButtonRef(_gp);
+                else
+                {
+                    if (_fSticky == null)
+                        _fSticky = typeof(GoPointer).GetField("stickyClickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
+                    sticky = _fSticky?.GetValue(_gp) as GoPointerButton;
+                }
                 if (sticky != null) return sticky;
-                if (_fClicked == null)
-                    _fClicked = typeof(GoPointer).GetField("clickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
-                var clicked = _fClicked?.GetValue(_gp) as GoPointerButton;
+                GoPointerButton clicked;
+                if (ClickedButtonRef != null) clicked = ClickedButtonRef(_gp);
+                else
+                {
+                    if (_fClicked == null)
+                        _fClicked = typeof(GoPointer).GetField("clickedButton", BindingFlags.NonPublic | BindingFlags.Instance);
+                    clicked = _fClicked?.GetValue(_gp) as GoPointerButton;
+                }
                 // GoPointer assigns clickedButton before Click; a denied Click is not a grab.
                 return clicked != null && clicked.IsCliked() ? clicked : null;
             }
@@ -532,17 +562,22 @@ namespace SailwindCoop.Sync
         /// Actual grabbed input or a DeltaToLength hook marks a rope dirty. A dirty final
         /// value remains queued after quick-release; unrelated world divergence is not input.
         /// </summary>
-        private void ForwardLocalRopeChanges(float dt)
+        private void ForwardLocalRopeChanges(float dt, GoPointerButton held)
         {
             if (_ropes.Length == 0 || _hostLen.Length != _ropes.Length) return;
 
-            var held = HeldButton();
+            bool anyGrabbed = false;
+            for (int i = 0; i < _winches.Length; i++)
+            {
+                var w = _winches[i];
+                if (w != null && Grabbed(w.rotHandle)) { anyGrabbed = true; break; }
+            }
             // A grab protects the local node; an unheld divergence is never evidence of input.
             for (int i = 0; i < _ropes.Length; i++)
             {
                 var rc = _ropes[i];
                 if (rc == null) continue;
-                if (IsLocalRopeHeld(rc, held))
+                if (IsLocalRopeHeld(rc, held, anyGrabbed))
                 {
                     if (rc is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false))
                         _ropeHostPending[i] = false;
@@ -787,15 +822,18 @@ namespace SailwindCoop.Sync
                                      ", client=" + client + " - this part is not applied");
         }
 
-        private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held)
+        private bool IsLocalRopeHeld(RopeController rope, GoPointerButton held, bool anyWinchGrabbed = true)
         {
             if (rope == null) return false;
             if (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.PreserveRope(anchorRope) ?? false)) return true;
             if (held is GPButtonRopeWinch heldWinch && heldWinch.rope == rope) return true;
-            for (int i = 0; i < _winches.Length; i++)
+            if (anyWinchGrabbed)
             {
-                var w = _winches[i];
-                if (w != null && w.rope == rope && Grabbed(w.rotHandle)) return true;
+                for (int i = 0; i < _winches.Length; i++)
+                {
+                    var w = _winches[i];
+                    if (w != null && w.rope == rope && Grabbed(w.rotHandle)) return true;
+                }
             }
             if (held == null) return false;
             return rope is RopeControllerSteeringWheel && held is GPButtonSteeringWheel && held.transform.IsChildOf(_boundBoat);
@@ -859,6 +897,8 @@ namespace SailwindCoop.Sync
             _gp = null;
             _fSticky = null;
             _fClicked = null;
+            _sentState = null;
+            _scratchState = null;
             ResetCranks();
         }
     }

@@ -8,7 +8,13 @@ namespace SailwindCoop.Sync
 {
     internal static class DirtPatches
     {
-        private sealed class Stroke { internal byte[] Before; internal bool Color; }
+        private struct Stroke { internal bool Active; internal bool Color; }
+        private static readonly AccessTools.FieldRef<Cleaner, ShipItem> CleanerItemRef = InitCleanerItemRef();
+        private static AccessTools.FieldRef<Cleaner, ShipItem> InitCleanerItemRef()
+        {
+            try { return AccessTools.FieldRefAccess<Cleaner, ShipItem>("item"); }
+            catch { return null; }
+        }
         internal static void Apply(Harmony harmony)
         {
             var hooks = new PatchHookCatalog();
@@ -29,39 +35,50 @@ namespace SailwindCoop.Sync
         // closure per call). Report never throws.
         private static void PreHold(Cleaner __instance, out InteractionContext.Scope __state)
         {
-            __state = null;
+            __state = default(InteractionContext.Scope);
             try
             {
-                var item = ItemComponents.Read<ShipItem>(__instance, "item");
-                if (item?.held != null && !InteractionContext.Suppressed)
+                var sync = DirtSync.Instance;
+                if (sync == null || !sync.Connected || InteractionContext.Suppressed) return;
+                var item = CleanerItemRef != null ? CleanerItemRef(__instance) : ItemComponents.Read<ShipItem>(__instance, "item");
+                if (item?.held != null)
                     __state = InteractionContext.Begin(item.held.GetHeldItem() == item ? InteractionSource.ActiveHold : InteractionSource.RemoteApply);
             }
             catch (Exception e) { Report(e); }
         }
         private static void PreOrder(out InteractionContext.Scope __state)
         {
-            InteractionContext.Scope state = null;
+            __state = default(InteractionContext.Scope);
             // Concrete UI command. Failed affordability checks never reach CleanFully.
-            PatchGuard.Run(() => { if (!InteractionContext.Suppressed) state = InteractionContext.Begin(InteractionSource.LocalInput); }, Report); __state = state;
+            try { if (!InteractionContext.Suppressed) __state = InteractionContext.Begin(InteractionSource.LocalInput); }
+            catch (Exception e) { Report(e); }
         }
         private static void EndScope(InteractionContext.Scope __state)
         {
-            try { __state?.Dispose(); }
+            try { __state.Dispose(); }
             catch (Exception e) { Report(e); }
         }
         private static bool PreStroke(CleanableObject paintedObject, out Stroke __state)
         {
-            Stroke state = null; bool run = true;
-            PatchGuard.Run(() => {
+            __state = default(Stroke);
+            try
+            {
+                var sync = DirtSync.Instance;
                 // ItemSync uses a pointer marker for broom animation. It is not a local hand.
-                if (InteractionContext.Suppressed || (DirtSync.Instance?.IsClient == true &&
-                    !InteractionContext.HasInput && DirtSync.Registered(paintedObject))) { run = false; return; }
-                byte[] before = DirtSync.Instance?.BeforeStroke(paintedObject);
-                if (before != null) state = new Stroke { Before = before, Color = Input.GetKey("v") };
-            }, Report); __state = state; return run;
+                if (InteractionContext.Suppressed || (sync != null && sync.IsClient &&
+                    !InteractionContext.HasInput && DirtSync.Registered(paintedObject))) return false;
+                if (sync != null && sync.BeforeStroke(paintedObject))
+                    __state = new Stroke { Active = true, Color = Input.GetKey("v") };
+            }
+            catch (Exception e) { Report(e); }
+            return true;
         }
         private static void PostStroke(CleanableObject paintedObject, Vector2 offset, Stroke __state)
-            => PatchGuard.Run(() => { if (__state != null) DirtSync.Instance?.AfterStroke(paintedObject, __state.Before, offset, __state.Color); }, Report);
+        {
+            if (!__state.Active) return;
+            try { DirtSync.Instance?.AfterStroke(paintedObject, offset, __state.Color); }
+            catch (Exception e) { Report(e); }
+        }
         private static bool PreCoat(CleanableObject paintedObject)
             => PatchGuard.Prefix(() => !(DirtSync.Instance?.IsClient == true && GameState.playing && !GameState.currentlyLoading &&
                 !InteractionContext.Suppressed && DirtSync.Registered(paintedObject)), Report);

@@ -83,8 +83,9 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (!Connected) return;
             if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
-            if (!Connected || _anchor == null) return;
+            if (_anchor == null) return;
             if (_net.Role == Role.Client) AskResync();
             if (LocalHeld) RestoreSlaved();
             _sendTimer += dt;
@@ -190,8 +191,9 @@ namespace SailwindCoop.Sync
         // Let it run for a local hand and for free host physics; remote copies are driven here.
         public bool SuppressPhysics(Anchor anchor)
         {
+            if (!Connected) return false;
             if (_fleet != null) return ForAnchor(anchor)?.SuppressPhysics(anchor) ?? false;
-            return Connected && anchor == _anchor && !LocalHeld &&
+            return anchor == _anchor && !LocalHeld &&
                 (_net.Role == Role.Client || _holder != 0 || HooksHangMoreCompat.IsAttached(anchor));
         }
 
@@ -404,8 +406,9 @@ namespace SailwindCoop.Sync
 
         public void ApplyRemote()
         {
+            if (!Connected || Time.timeScale <= 0.0001f) return;
             if (_fleet != null) { foreach (var c in _fleet.Values) c.ApplyRemote(); return; }
-            if (!Connected || LocalHeld || _gate.HasPending || _anchor == null || !_slave.HasData || Time.timeScale <= 0.0001f ||
+            if (LocalHeld || _gate.HasPending || _anchor == null || !_slave.HasData ||
                 (_holder == 0 && HooksHangMoreCompat.IsAttached(_anchor))) return;
             if (_net.Role == Role.Host && _holder == 0) return;
             EnsureSlaved(_holder != 0);

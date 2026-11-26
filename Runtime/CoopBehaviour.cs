@@ -115,16 +115,8 @@ namespace SailwindCoop.Runtime
         /// writes the host's world into.</summary>
         public bool PendingJoinReplacesOwnSave =>
             !_inHostWorldCopy && SaveSlots.currentSlot == Mathf.Clamp(Plugin.Cfg.CoopSaveSlot.Value, 0, 5);
-        public bool ClientJoined
-        {
-            get
-            {
-                if (!_clientCoopWorldLoaded || Net.Role != Role.Client || Net.State != LinkState.Connected) return false;
-                foreach (var member in Net.RosterSnapshot)
-                    if (member.NetId == Net.MyNetId && member.State == MemberJoinState.Ready) return true;
-                return false;
-            }
-        }
+        public bool ClientJoined =>
+            _clientCoopWorldLoaded && Net.Role == Role.Client && Net.State == LinkState.Connected && Net.IsMemberReady(Net.MyNetId);
         public bool HasPendingWorldJoin => _pendingWorldJoin != null;
         public string JoinProgress
         {
@@ -529,9 +521,10 @@ namespace SailwindCoop.Runtime
                 // Сразу за Env: именно он держит последний известный timeScale хоста.
                 new SyncStep("HostPause.Tick", () => HostPause.Tick(Env, Net.Role == Role.Host && Pause.Active)),
                 new SyncStep("CrestWater.TickHost", () => { if (Net.Role == Role.Host) CrestWater.TickHost(Net); }),
-                // Замер воды крутится на обеих ролях: он нужен для дампа, а дамп снимают одновременно.
+                // Замер воды нужен только для WaterDump (Debug-панель) в активной сессии.
                 new SyncStep("CrestWater.TickProbe", () =>
                 {
+                    if (Net.State != LinkState.Connected || !GameState.playing || !Plugin.Cfg.EnableDebugPanel.Value) return;
                     var t = Players.LocalBoat ?? Players.ResolveLocalPlayerBodyNow();
                     if (t != null) CrestWater.TickProbe(t.position);
                 }),

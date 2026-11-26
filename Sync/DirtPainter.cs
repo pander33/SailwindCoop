@@ -44,7 +44,7 @@ namespace SailwindCoop.Sync
             try
             {
                 Graphics.Blit(target.GetCurrentDirtTex(), canvas);
-                stamp = new RenderTexture(1024, 1024, 24);
+                stamp = RenderTexture.GetTemporary(1024, 1024, 24);
                 Graphics.Blit(brush.mainTexture, stamp, new Vector2(25, 25), -new Vector2(u, v) * 25 + new Vector2(0.5f, 0.5f));
                 Graphics.Blit(stamp, canvas, colorPass ? color : brush);
                 RenderTexture.active = canvas;
@@ -55,7 +55,7 @@ namespace SailwindCoop.Sync
             finally
             {
                 RenderTexture.active = previous;
-                if (stamp != null) { stamp.Release(); UnityEngine.Object.Destroy(stamp); }
+                if (stamp != null) RenderTexture.ReleaseTemporary(stamp);
                 if (texture != null) UnityEngine.Object.Destroy(texture);
             }
         }

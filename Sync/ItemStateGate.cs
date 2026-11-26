@@ -21,6 +21,42 @@ namespace SailwindCoop.Sync
         internal uint PendingRequest { get { Expire(); return _pending; } }
         internal uint Version => _revision;
         internal bool HasState => _haveState;
+        internal struct Snapshot
+        {
+            internal uint Pending, Revision;
+            internal long PendingSince, PoseTick;
+            internal bool HaveState;
+            internal bool Receive(uint revision, long poseTick, uint requester, uint request, uint localPlayer,
+                out bool newRevision, out bool newPose)
+            {
+                newRevision = newPose = false;
+                if (Pending != 0 && Clock() - PendingSince >= PendingTimeoutMs)
+                {
+                    uint abandoned = Pending; Pending = 0;
+                    try { Expired?.Invoke(abandoned); } catch { }
+                }
+                bool ack = Pending != 0 && requester == localPlayer && request == Pending;
+                if (Pending != 0 && !ack) return false;
+                int delta = unchecked((int)(revision - Revision));
+                if (HaveState && delta < 0) return false;
+                if (ack) Pending = 0;
+                newRevision = !HaveState || delta > 0;
+                newPose = newRevision || poseTick > PoseTick;
+                if (!newRevision && !newPose && !ack) return false;
+                HaveState = true; Revision = revision;
+                if (newPose) PoseTick = poseTick;
+                return true;
+            }
+        }
+        internal Snapshot CaptureSnapshot() => new Snapshot
+        {
+            Pending = _pending, PendingSince = _pendingSince, Revision = _revision, PoseTick = _poseTick, HaveState = _haveState
+        };
+        internal void Commit(in Snapshot accepted)
+        {
+            _pending = accepted.Pending; _pendingSince = accepted.PendingSince;
+            _revision = accepted.Revision; _poseTick = accepted.PoseTick; _haveState = accepted.HaveState;
+        }
         internal ItemStateGate Copy() => new ItemStateGate { _pending = _pending, _pendingSince = _pendingSince, _revision = _revision, _poseTick = _poseTick, _haveState = _haveState };
         internal void Commit(ItemStateGate accepted)
         { _pending = accepted._pending; _pendingSince = accepted._pendingSince; _revision = accepted._revision; _poseTick = accepted._poseTick; _haveState = accepted._haveState; }

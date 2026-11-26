@@ -24,6 +24,7 @@ namespace SailwindCoop.Sync
             internal byte[] Png;
             internal uint Revision = 1;
             internal bool Dirty;
+            internal bool NeedsCapture;
             internal float LastSent = float.NegativeInfinity;
             // Latest request per actor still owed an acknowledgement in the next coalesced texture.
             internal readonly Dictionary<uint, KeyValuePair<uint, DirtOutcome>> Acks = new Dictionary<uint, KeyValuePair<uint, DirtOutcome>>();
@@ -38,6 +39,7 @@ namespace SailwindCoop.Sync
             internal byte[] Ready;
         }
         private readonly Dictionary<long, Surface> _surfaces = new Dictionary<long, Surface>();
+        private readonly Dictionary<CleanableObject, Surface> _byTarget = new Dictionary<CleanableObject, Surface>();
         private readonly Dictionary<long, Incoming> _incoming = new Dictionary<long, Incoming>();
         private readonly HashSet<long> _pendingRefitCleans = new HashSet<long>();
         private uint _nextRequest;
@@ -79,6 +81,8 @@ namespace SailwindCoop.Sync
         internal static bool Registered(CleanableObject target) => Address(target, out _, out _);
         private Surface Bind(CleanableObject target)
         {
+            if (target == null) return null;
+            if (_byTarget.TryGetValue(target, out var cached) && cached.Target == target) return cached;
             if (!Address(target, out int id, out int index) || ItemComponents.Read<Material>(target, "dirtMaterial") == null ||
                 !DirtPainter.HasTexture(target)) return null;
             long key = SurfaceKey(id, index);
@@ -86,7 +90,9 @@ namespace SailwindCoop.Sync
             {
                 if (old.Target != target)
                 {
+                    if (!ReferenceEquals(old.Target, null)) _byTarget.Remove(old.Target);
                     old.Target = target;
+                    _byTarget[target] = old;
                     if (_net.Role == Role.Host) { Capture(old); old.Dirty = true; }
                     else RequestBaseline(old);
                 }
@@ -94,6 +100,7 @@ namespace SailwindCoop.Sync
             }
             var surface = new Surface { Id = id, Index = index, Target = target, Png = DirtPainter.Capture(target), Dirty = _net.Role == Role.Host };
             _surfaces[key] = surface;
+            _byTarget[target] = surface;
             if (_net.Role == Role.Client) RequestBaseline(surface);
             return surface;
         }
@@ -101,19 +108,17 @@ namespace SailwindCoop.Sync
         {
             SceneIndex = surface.Id, SurfaceIndex = surface.Index, Action = DirtAction.Baseline
         }, DeliveryMethod.ReliableOrdered);
-        internal byte[] BeforeStroke(CleanableObject target)
+        internal bool BeforeStroke(CleanableObject target)
         {
-            if (!WorldReady || !InteractionContext.HasInput || InteractionContext.Suppressed) return null;
+            if (!WorldReady || !InteractionContext.HasInput || InteractionContext.Suppressed) return false;
             var surface = Bind(target);
-            if (surface == null) return null;
+            if (surface == null) return false;
             FinishPendingRefitClean(surface);
-            return DirtPainter.Capture(target);
+            return true;
         }
-        internal void AfterStroke(CleanableObject target, byte[] before, Vector2 uv, bool colorPass)
+        internal void AfterStroke(CleanableObject target, Vector2 uv, bool colorPass)
         {
-            if (before == null || InteractionContext.Suppressed || !WorldReady) return;
-            var after = DirtPainter.Capture(target);
-            if (before.SequenceEqual(after)) return;
+            if (InteractionContext.Suppressed || !WorldReady) return;
             var surface = Bind(target); if (surface == null) return;
             Submit(surface, DirtAction.Stroke, uv.x, uv.y, colorPass);
             LastAction = "out clean scene=" + surface.Id;
@@ -140,7 +145,7 @@ namespace SailwindCoop.Sync
         }
         private void Submit(Surface surface, DirtAction action, float u, float v, bool colorPass)
         {
-            if (_net.Role == Role.Host) { Capture(surface); return; } // Tick sends the coalesced texture.
+            if (_net.Role == Role.Host) { surface.NeedsCapture = true; surface.Dirty = true; return; } // Tick captures & sends the coalesced texture.
             if (_net.Role != Role.Client) return;
             if (++_nextRequest == 0) ++_nextRequest; surface.Gate.Begin(_nextRequest);
             _net.Broadcast(new DirtRequestMsg { SceneIndex = surface.Id, SurfaceIndex = surface.Index, Action = action, U = u, V = v,
@@ -151,11 +156,13 @@ namespace SailwindCoop.Sync
             if (!Connected || _net.Role != Role.Host) return;
             var surface = Bind(target);
             if (surface == null) return;
-            Capture(surface);
+            surface.NeedsCapture = true;
+            surface.Dirty = true;
         }
         private static bool Capture(Surface surface)
         {
             if (surface == null || !DirtPainter.HasTexture(surface.Target)) return false;
+            surface.NeedsCapture = false;
             byte[] png = DirtPainter.Capture(surface.Target);
             if (surface.Png != null && surface.Png.SequenceEqual(png)) return false;
             surface.Png = png; surface.Revision++; surface.Dirty = true; return true;
@@ -186,6 +193,32 @@ namespace SailwindCoop.Sync
         private const float SendInterval = 0.25f;
         private void Flush(Surface surface)
         {
+            if (surface.NeedsCapture)
+            {
+                bool changed;
+                try { changed = Capture(surface); }
+                catch (Exception error)
+                {
+                    surface.NeedsCapture = false;
+                    surface.Dirty = false;
+                    surface.LastSent = Time.unscaledTime;
+                    if (surface.Acks.Count > 0)
+                    {
+                        foreach (var ack in new List<KeyValuePair<uint, KeyValuePair<uint, DirtOutcome>>>(surface.Acks))
+                            _net.Broadcast(new DirtStateMsg { SceneIndex = surface.Id, SurfaceIndex = surface.Index,
+                                Requester = ack.Key, RequestId = ack.Value.Key, Outcome = DirtOutcome.Fault }, DeliveryMethod.ReliableOrdered);
+                        surface.Acks.Clear();
+                    }
+                    Plugin.Logger.LogWarning("[DirtSync] host scene=" + surface.Id + " flush capture fault: " + error);
+                    return;
+                }
+                if (!changed && surface.Acks.Count == 0)
+                {
+                    surface.Dirty = false;
+                    surface.LastSent = Time.unscaledTime;
+                    return;
+                }
+            }
             if (surface.Acks.Count == 0) { Send(surface, null); return; }
             foreach (var ack in new List<KeyValuePair<uint, KeyValuePair<uint, DirtOutcome>>>(surface.Acks))
                 Send(surface, null, ack.Key, ack.Value.Key, ack.Value.Value);
@@ -203,8 +236,7 @@ namespace SailwindCoop.Sync
             if (msg.Action == DirtAction.Baseline) { Capture(surface); Send(surface, peer); return; }
             var result = new Result();
             if (!surface.Operations.TryBegin(actor, msg.RequestId, result, out var previous))
-            { Send(surface, peer, actor, msg.RequestId, previous.Outcome); return; }
-            byte[] before = surface.Png;
+            { if (surface.NeedsCapture) Capture(surface); Send(surface, peer, actor, msg.RequestId, previous.Outcome); return; }
             try
             {
                 using (InteractionContext.Begin(InteractionSource.RemoteApply))
@@ -218,30 +250,26 @@ namespace SailwindCoop.Sync
             finally
             {
                 // Even a partially applied Unity operation is acknowledged with its actual current texture.
-                try
-                {
-                    Capture(surface);
-                    if (!before.SequenceEqual(surface.Png)) LastAction = "in clean scene=" + surface.Id + " actor=" + actor;
-                    // A scrubbing guest sends a stroke per frame; the texture goes out coalesced from Tick.
-                    surface.Acks[actor] = new KeyValuePair<uint, DirtOutcome>(msg.RequestId, result.Outcome); surface.Dirty = true;
-                }
-                catch (Exception error)
-                {
-                    result.Outcome = DirtOutcome.Fault;
-                    peer.Send(new DirtStateMsg { SceneIndex = surface.Id, SurfaceIndex = surface.Index, Requester = actor, RequestId = msg.RequestId,
-                        Outcome = DirtOutcome.Fault }, DeliveryMethod.ReliableOrdered);
-                    Plugin.Logger.LogWarning("[DirtSync] host scene=" + surface.Id + " result fault: " + error);
-                }
+                // Defer PNG encoding to Tick/Flush (4 Hz) so per-frame scrubbing never stalls the main thread.
+                surface.NeedsCapture = true;
+                LastAction = "in clean scene=" + surface.Id + " actor=" + actor;
+                surface.Acks[actor] = new KeyValuePair<uint, DirtOutcome>(msg.RequestId, result.Outcome);
+                surface.Dirty = true;
             }
         }
         private void Send(Surface surface, NetPeer peer, uint actor = 0, uint request = 0, DirtOutcome outcome = DirtOutcome.Applied)
         {
-            int chunks = Math.Max(1, (surface.Png.Length + 4095) / 4096);
+            int total = surface.Png.Length;
+            int chunks = Math.Max(1, (total + 4095) / 4096);
             if (chunks > DirtStateMsg.MaxChunks) throw new System.IO.InvalidDataException("dirt texture exceeds chunk format");
             for (int i = 0; i < chunks; i++)
             {
+                int offset = i * 4096;
+                int len = Math.Max(0, Math.Min(4096, total - offset));
+                byte[] slice = len == 0 ? Array.Empty<byte>() : new byte[len];
+                if (len > 0) Buffer.BlockCopy(surface.Png, offset, slice, 0, len);
                 var msg = new DirtStateMsg { SceneIndex = surface.Id, SurfaceIndex = surface.Index, Revision = surface.Revision, Requester = actor, RequestId = request,
-                    Outcome = outcome, Chunk = (ushort)i, Chunks = (ushort)chunks, Png = surface.Png.Skip(i * 4096).Take(4096).ToArray() };
+                    Outcome = outcome, Chunk = (ushort)i, Chunks = (ushort)chunks, Png = slice };
                 if (peer == null) _net.Broadcast(msg, DeliveryMethod.ReliableOrdered); else peer.Send(msg, DeliveryMethod.ReliableOrdered);
             }
             if (peer == null) { surface.Dirty = false; surface.LastSent = Time.unscaledTime; }
@@ -286,7 +314,7 @@ namespace SailwindCoop.Sync
             return true;
         }
         public void Clear()
-        { _surfaces.Clear(); _incoming.Clear(); _pendingRefitCleans.Clear(); _nextRequest = 0; _scanTimer = 0; LastAction = "—"; }
+        { _surfaces.Clear(); _byTarget.Clear(); _incoming.Clear(); _pendingRefitCleans.Clear(); _nextRequest = 0; _scanTimer = 0; LastAction = "—"; }
 
         internal void ApplyRefitClean(int scene, int index)
         {

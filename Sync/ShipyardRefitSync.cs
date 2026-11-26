@@ -397,22 +397,29 @@ namespace SailwindCoop.Sync
             }
             return false;
         }
+        private Func<ushort, bool> _isSuspended;
+        private readonly List<Action> _readyEmbedded = new List<Action>();
+        private readonly List<Packet> _readyWaiting = new List<Packet>();
+
         public void Tick(float dt)
         {
             TickOwnership(dt);
             if (!RefitWorldReady) return;
             // A missing hull may load later. Preserve its result until the native registry is ready.
-            var refits = _refitWaiting.ToArray(); _refitWaiting.Clear();
-            using (InteractionContext.Begin(InteractionSource.RemoteApply))
-            foreach (var packet in refits)
+            if (_refitWaiting.Count > 0)
             {
-                if (packet.Peer == null || packet.Peer.ConnectionState != ConnectionState.Connected) continue;
-                var current = packet;
-                PatchGuard.Run(() =>
+                var refits = _refitWaiting.ToArray(); _refitWaiting.Clear();
+                using (InteractionContext.Begin(InteractionSource.RemoteApply))
+                foreach (var packet in refits)
                 {
-                    if (current.Message is RefitRequestMsg request) OnRefitRequest(request, current.Peer);
-                    else OnRefitState((RefitStateMsg)current.Message, current.Peer);
-                }, e => Report("queued refit " + current.Type, e));
+                    if (packet.Peer == null || packet.Peer.ConnectionState != ConnectionState.Connected) continue;
+                    var current = packet;
+                    PatchGuard.Run(() =>
+                    {
+                        if (current.Message is RefitRequestMsg request) OnRefitRequest(request, current.Peer);
+                        else OnRefitState((RefitStateMsg)current.Message, current.Peer);
+                    }, e => Report("queued refit " + current.Type, e));
+                }
             }
             foreach (var hull in _hulls.Values)
             {
@@ -420,13 +427,28 @@ namespace SailwindCoop.Sync
                     PatchGuard.Run(() => Install(hull, hull.Deferred), e => Report("client refit retry boat=" + hull.Id, e));
                 if (!Suspended(hull.Id)) Thaw(hull);
             }
+            if (_embedded.Count == 0 && _waiting.Count == 0) return;
+            var isSuspended = _isSuspended ?? (_isSuspended = Suspended);
             // Same origin as inside PollEvents: a replayed packet is remote state, never local input.
             using (InteractionContext.Begin(InteractionSource.RemoteApply))
             {
-                foreach (var apply in _embedded.TakeReady(BoatGenerationBook.Session, Suspended)) apply();
-                foreach (var packet in _waiting.TakeReady(BoatGenerationBook.Session, Suspended))
-                    if (packet.Peer != null && packet.Peer.ConnectionState == ConnectionState.Connected)
-                        Dispatch?.Invoke(packet.Type, packet.Message, packet.Peer);
+                if (_embedded.Count > 0)
+                {
+                    _embedded.TakeReady(BoatGenerationBook.Session, isSuspended, _readyEmbedded);
+                    for (int i = 0; i < _readyEmbedded.Count; i++) _readyEmbedded[i]();
+                    _readyEmbedded.Clear();
+                }
+                if (_waiting.Count > 0)
+                {
+                    _waiting.TakeReady(BoatGenerationBook.Session, isSuspended, _readyWaiting);
+                    for (int i = 0; i < _readyWaiting.Count; i++)
+                    {
+                        var packet = _readyWaiting[i];
+                        if (packet.Peer != null && packet.Peer.ConnectionState == ConnectionState.Connected)
+                            Dispatch?.Invoke(packet.Type, packet.Message, packet.Peer);
+                    }
+                    _readyWaiting.Clear();
+                }
             }
         }
         public void SendBaseline(NetPeer peer)

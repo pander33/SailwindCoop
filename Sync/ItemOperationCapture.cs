@@ -163,8 +163,9 @@ namespace SailwindCoop.Sync
                     first = __instance as ShipItem;
                     second = (__args[0] as FoodState)?.GetComponent<ShipItem>();
                 }
-                else if (name == "CutPack" || name == "Drink" || name == "EatFood" ||
-                    ((type == typeof(ShipItemLight) || type == typeof(ShipItemOakum)) && name == "OnAltActivate"))
+                else if (name == "CutPack" || name == "Drink" || name == "EatFood" || name == "FinishCast" ||
+                    ((type == typeof(ShipItemLight) || type == typeof(ShipItemOakum) ||
+                      type == typeof(ShipItemElixir) || type == typeof(ShipItemRandomElixir)) && name == "OnAltActivate"))
                     first = __instance as ShipItem;
 
                 state = ItemOperationCapture.Begin(type.Name + "." + name,

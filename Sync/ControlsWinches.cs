@@ -35,6 +35,8 @@ namespace SailwindCoop.Sync
         // Non-public on the game class: the crank angle the next GetRotationDelta counts from.
         private static readonly FieldInfo WinchAngle = typeof(GPButtonRopeWinch).GetField("lastAngle",
             BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly HarmonyLib.AccessTools.FieldRef<GPButtonRopeWinch, float> WinchAngleRef =
+            InitControlsFieldRef<GPButtonRopeWinch, float>("lastAngle");
         /// <summary>False once that field cannot be kept in step: then the cranks are left alone,
         /// because a pose written without it would be read as player input as soon as someone grabs
         /// the winch (a rope length jump). A missing handle is better than a moved rope.</summary>
@@ -60,13 +62,18 @@ namespace SailwindCoop.Sync
         /// Drive every crank whose rope length somebody else changed. Host: from <see cref="Tick"/>,
         /// client: from <see cref="ApplyClient"/>; both fan out through the boat contexts.
         /// </summary>
-        internal void DriveCranks(float dt)
+        internal void DriveCranks(float dt, GoPointerButton held)
         {
             if (!_winchAngleUsable) return;
             if (_crank.Length != _winches.Length) ResetCranks();
             if (_winches.Length == 0 || _net.State != LinkState.Connected) return;
 
-            GoPointerButton held = HeldButton();
+            bool anyGrabbed = false;
+            for (int i = 0; i < _winches.Length; i++)
+            {
+                var w = _winches[i];
+                if (w != null && Grabbed(w.rotHandle)) { anyGrabbed = true; break; }
+            }
             for (int i = 0; i < _winches.Length; i++)
             {
                 var winch = _winches[i];
@@ -80,7 +87,7 @@ namespace SailwindCoop.Sync
                 // rope: two winches may share one rope, and a crank in the hand must never be driven.
                 // A carried anchor lengthens its rope as the player walks (Anchor.Update); the game does
                 // not turn the winch for that, so the crank stands as if held and keeps its reference.
-                bool heldHere = held == winch || Grabbed(winch.rotHandle) || IsLocalRopeHeld(rope, held) ||
+                bool heldHere = held == winch || (anyGrabbed && Grabbed(winch.rotHandle)) || IsLocalRopeHeld(rope, held, anyGrabbed) ||
                     (rope is RopeControllerAnchor anchorRope && (AnchorSync.Instance?.AnchorCarried(anchorRope) ?? false));
 
                 CrankStep step = _crank[i].Advance(rope.currentLength, heldHere, z, dt,
@@ -104,6 +111,7 @@ namespace SailwindCoop.Sync
         private static bool SetWinchAngle(GPButtonRopeWinch winch, float z)
         {
             if (!_winchAngleUsable) return false;
+            if (WinchAngleRef != null) { WinchAngleRef(winch) = z; return true; }
             if (WinchAngle == null) { DisableCranks("field not found"); return false; }
             try { WinchAngle.SetValue(winch, z); return true; }
             catch (System.Exception e) { DisableCranks(e.Message); return false; }

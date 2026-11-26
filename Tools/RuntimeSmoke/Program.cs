@@ -1328,7 +1328,7 @@ internal static class Program
     }
     private static void BeginFixtureInput(out InteractionContext.Scope __state)
         => __state = InteractionContext.Begin(InteractionSource.LocalInput);
-    private static void EndFixtureInput(InteractionContext.Scope __state) => __state?.Dispose();
+    private static void EndFixtureInput(InteractionContext.Scope __state) => __state.Dispose();
     private sealed class HookFixture : HookBase { public void Action() { } }
     private sealed class SleepEntryFixture
     {

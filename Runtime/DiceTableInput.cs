@@ -89,11 +89,21 @@ namespace SailwindCoop.Runtime
 			return local != null && table?.View != null && table.View.Root != null && Vector3.Distance(local.position, table.View.Root.transform.position) < metres;
 		}
 
+		private static bool HasPlayer(DicePlayerData[] players, uint netId)
+		{
+			if (players == null) return false;
+			for (int i = 0; i < players.Length; i++)
+				if (players[i].NetId == netId) return true;
+			return false;
+		}
+
 		public void ObservePresence()
 		{
 			closeUp.Tick();
 			if (!closeUp.Active) buttonPeek = false;
+			if (sync.TableCount == 0) return;
 			var coop = CoopBehaviour.Instance;
+			uint myNetId = coop.Net.MyNetId;
 			bool available = !GameState.inBed && !GameState.sleeping;
 			foreach (var table in sync.Tables)
 			{
@@ -101,12 +111,10 @@ namespace SailwindCoop.Runtime
 				bool visible = available && !placing && GameState.playing && !GameState.currentlyLoading &&
 					!coop.CoopMenuOpen && !BoatCamera.on && Time.timeScale > 0 &&
 					(closeUp.Active ? closeUp.Table == table : !GameState.inCursorMenu && Within(table, 2.5f));
-				table.View?.ShowActionCues(visible && SuggestAction(table, CupTarget, coop.Net.MyNetId),
-					visible && SuggestAction(table, BoardTarget, coop.Net.MyNetId),
-					visible && SuggestAction(table, DiceTableView.TableTarget, coop.Net.MyNetId));
-			}
-			foreach (var table in sync.Tables.Where(t => t.State.Players.Any(p => p.NetId == coop.Net.MyNetId)))
-			{
+				table.View?.ShowActionCues(visible && SuggestAction(table, CupTarget, myNetId),
+					visible && SuggestAction(table, BoardTarget, myNetId),
+					visible && SuggestAction(table, DiceTableView.TableTarget, myNetId));
+				if (!HasPlayer(table.State.Players, myNetId)) continue;
 				// On shore there is no deck to stay on: a player who walked a few steps away is still at the table.
 				bool here = available && (table.State.BoatIndex == BoatLocator.NoBoat ? Within(table, ShorePresenceMetres) : coop.Players.LocalBoatIndex == table.State.BoatIndex);
 				if (!here && (!presence.TryGetValue(table.State.TableId, out bool previous) || previous)) sync.Request(table, DiceAction.Presence, flag: false);
@@ -123,7 +131,8 @@ namespace SailwindCoop.Runtime
 			if (coop == null || coop.Net.Role == Role.None ||
 				!GameState.playing || GameState.currentlyLoading || GameState.inBed || GameState.sleeping || GameState.inCursorMenu || BoatCamera.on ||
 				pointer.GetHeldItem() != null || Time.timeScale <= 0) return false;
-			var camera = Camera.main; if (camera == null) return false;
+			if (!placing && sync.TableCount == 0) return false;
+			var camera = coop.Players.PickRenderCamera(); if (camera == null) return false;
 			var ray = new Ray(camera.transform.position, camera.transform.forward);
 			if (placing)
 			{

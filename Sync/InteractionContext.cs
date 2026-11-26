@@ -13,18 +13,21 @@ namespace SailwindCoop.Sync
         internal static bool HasInput => _source == InteractionSource.LocalInput || _source == InteractionSource.ActiveHold;
         internal static Scope Begin(InteractionSource source) => new Scope(source);
 
-        internal sealed class Scope : IDisposable
+        internal struct Scope : IDisposable
         {
             private readonly InteractionSource _previous;
+            private readonly bool _active;
             private bool _disposed;
             internal Scope(InteractionSource source)
             {
                 _previous = _source;
+                _active = true;
+                _disposed = false;
                 if (!Suppressed) _source = source;
             }
             public void Dispose()
             {
-                if (_disposed) return;
+                if (!_active || _disposed) return;
                 _disposed = true;
                 _source = _previous;
             }

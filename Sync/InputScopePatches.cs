@@ -43,7 +43,7 @@ namespace SailwindCoop.Sync
         // not PatchGuard, whose closure and delegates were garbage on every call. Report never throws.
         private static bool PreInput(GoPointer __instance, out InteractionContext.Scope __state)
         {
-            __state = null;
+            __state = default(InteractionContext.Scope);
             try { __state = InteractionContext.Begin(InteractionSource.LocalInput); }
             catch (Exception e) { Report(e); }
             // A release edge could otherwise be lost during the hold. StartMenu uses its own
@@ -65,7 +65,7 @@ namespace SailwindCoop.Sync
         }
         private static void FinishInput(InteractionContext.Scope __state)
         {
-            try { __state?.Dispose(); }
+            try { __state.Dispose(); }
             catch (Exception e) { Report(e); }
         }
 

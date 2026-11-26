@@ -36,6 +36,18 @@ namespace SailwindCoop.Net
         public float PipeHeat;
         public bool HasClock, ClockOpen, HasQuadrant, QuadrantInspect, HasScroll, ScrollOpen, HasTotem, TotemSpent;
         public int ScrollPage;
+        public void Reset()
+        {
+            HasFood = false; Dried = Smoked = Salted = Spoiled = 0f; InWater = false;
+            HasCookable = false; CookHeat = 0f; CookStoveId = 0; CookSlot = -1;
+            RecipeKind = 0; Water = Energy = UncookedEnergy = Vitamins = Protein = SoupSpoiled = SoupSalted = 0f;
+            TeaAmount = CookedTeaAmount = 0f; TeaType = 0;
+            HasStove = false; StoveHeat = 0f;
+            HasFuel = false; FuelLit = FuelInserted = false; FuelStoveId = 0;
+            HasPipe = false; PipeHeat = 0f;
+            HasClock = ClockOpen = HasQuadrant = QuadrantInspect = HasScroll = ScrollOpen = HasTotem = TotemSpent = false;
+            ScrollPage = 0;
+        }
         public void Serialize(NetDataWriter w)
         {
             w.Put(HasFood);

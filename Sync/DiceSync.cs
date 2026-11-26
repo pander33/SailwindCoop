@@ -38,8 +38,10 @@ namespace SailwindCoop.Sync
 		private const string NoHistory = "No completed matches.";
 		// Development builds of protocol 92 kept table places in the save under this key.
 		private const string LegacyTablesKey = "SailwindCoop.DiceTables";
+		private readonly List<DiceTable> _tickTables = new List<DiceTable>();
 		public string JournalText = NoHistory;
-		public IEnumerable<DiceTable> Tables => tables.Values;
+		public Dictionary<uint, DiceTable>.ValueCollection Tables => tables.Values;
+		public int TableCount => tables.Count;
 		public DiceTableInput Input { get; }
 		public DiceSync(CoopNet net)
 		{
@@ -70,11 +72,18 @@ namespace SailwindCoop.Sync
 				EnsureJournal();
 				if (journalDirty && Time.realtimeSinceStartup >= nextJournalRetry) SaveJournal();
 				bool changedClock = clock.SetRunning(tick, Time.timeScale > 0);
-				foreach (var table in tables.Values.ToArray())
+				if (tables.Count > 0)
 				{
-					bool changed = table.Game.Advance(clock.Elapsed(tick));
-					if (changed || changedClock) Publish(table);
-					if (table.Game.Phase == DicePhase.Removed) Drop(table);
+					_tickTables.Clear();
+					foreach (var table in tables.Values) _tickTables.Add(table);
+					for (int i = 0; i < _tickTables.Count; i++)
+					{
+						var table = _tickTables[i];
+						bool changed = table.Game.Advance(clock.Elapsed(tick));
+						if (changed || changedClock) Publish(table);
+						if (table.Game.Phase == DicePhase.Removed) Drop(table);
+					}
+					_tickTables.Clear();
 				}
 			}
 			foreach (var table in tables.Values)

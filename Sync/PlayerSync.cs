@@ -1346,6 +1346,8 @@ namespace SailwindCoop.Sync
             _lastLocalBoatSeenAt = 0f;
             _boatSurfaceValidUntil = 0f;
             _localCrouching = null;
+            _renderCam = null;
+            _renderCamAt = 0f;
             _sendTimer = 0f;
             _haveLast = false;
             _haveYaw = false;
@@ -2349,10 +2351,17 @@ namespace SailwindCoop.Sync
             return null;
         }
 
+        private Camera _renderCam;
+        private float _renderCamAt;
+
         /// <summary>The highest-depth enabled camera — usually the one drawing the main view.</summary>
-        private Camera PickRenderCamera()
+        internal Camera PickRenderCamera()
         {
-            if (Camera.main != null) return Camera.main;
+            float now = Time.unscaledTime;
+            if (_renderCam != null && _renderCam.isActiveAndEnabled && now < _renderCamAt) return _renderCam;
+            Camera main = Camera.main;
+            if (main != null) { _renderCam = main; _renderCamAt = now + 0.5f; return main; }
+            _renderCam = null;
             Camera best = null;
             foreach (var c in Camera.allCameras)
                 if (c.enabled && (best == null || c.depth > best.depth)) best = c;

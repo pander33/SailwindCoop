@@ -757,7 +757,7 @@ namespace SailwindCoop.Net
     /// Identity-by-index is safe because both machines load the same boat; a count
     /// mismatch on either array is detected and that part is skipped.
     /// </summary>
-    public sealed class ControlEpoch
+    public struct ControlEpoch
     {
         public uint Revision, Requester, RequestId;
         public void Serialize(NetDataWriter w) { w.Put(Revision); w.Put(Requester); w.Put(RequestId); }
@@ -765,14 +765,15 @@ namespace SailwindCoop.Net
         internal static void Write(NetDataWriter w, ControlEpoch[] values)
         {
             w.Put((ushort)values.Length);
-            foreach (var value in values) value.Serialize(w);
+            for (int i = 0; i < values.Length; i++) values[i].Serialize(w);
         }
         internal static ControlEpoch[] Read(NetDataReader r)
         {
             int count = r.GetUShort();
             if (count > r.AvailableBytes / 12) throw new System.FormatException("Truncated control epochs");
+            if (count == 0) return System.Array.Empty<ControlEpoch>();
             var values = new ControlEpoch[count];
-            for (int i = 0; i < count; i++) { values[i] = new ControlEpoch(); values[i].Deserialize(r); }
+            for (int i = 0; i < count; i++) values[i].Deserialize(r);
             return values;
         }
     }
@@ -1405,7 +1406,7 @@ namespace SailwindCoop.Net
             LightOn = r.GetBool();
             int extraCount = r.GetByte();
             if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
-            Extras = new float[extraCount];
+            Extras = extraCount == 0 ? System.Array.Empty<float>() : new float[extraCount];
             for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
 
             Index = r.GetUShort();
@@ -1497,7 +1498,7 @@ namespace SailwindCoop.Net
             LightOn = r.GetBool();
             int extraCount = r.GetByte();
             if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
-            Extras = new float[extraCount];
+            Extras = extraCount == 0 ? System.Array.Empty<float>() : new float[extraCount];
             for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
 
             IsInteraction = r.GetBool();
@@ -1621,7 +1622,7 @@ namespace SailwindCoop.Net
             LightOn = r.GetBool();
             int extraCount = r.GetByte();
             if (extraCount > r.AvailableBytes / 4) throw new System.IO.InvalidDataException("truncated item extras");
-            Extras = new float[extraCount];
+            Extras = extraCount == 0 ? System.Array.Empty<float>() : new float[extraCount];
             for (int i = 0; i < extraCount; i++) Extras[i] = r.GetFloat();
             Tick = r.GetLong();
             Attached = r.GetBool();

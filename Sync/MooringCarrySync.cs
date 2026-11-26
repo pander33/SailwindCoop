@@ -105,11 +105,13 @@ namespace SailwindCoop.Sync
             if (!periodic) carry.Stream.Sent(reliable);
             carry.Sent = true; carry.SentPos = msg.Pos; carry.SentRot = msg.Rot; carry.SentFrame = msg.Frame; carry.SentHolder = msg.HolderNetId;
         }
+        private readonly MooringCarryStateMsg _probe = new MooringCarryStateMsg();
+
         /// <summary>Host: a part sends only while its pose or holder changes, then one reliable
         /// resting pose. A part lying still, held or not, sends nothing.</summary>
         private void StreamCarry(Carry carry)
         {
-            var probe = new MooringCarryStateMsg(); CaptureCarry(carry, probe);
+            var probe = _probe; CaptureCarry(carry, probe);
             bool changed = !carry.Sent || probe.Frame != carry.SentFrame || probe.HolderNetId != carry.SentHolder ||
                 (probe.Pos - carry.SentPos).sqrMagnitude > 1e-4f || Quaternion.Angle(probe.Rot, carry.SentRot) > 0.1f;
             var mode = carry.Stream.Next(changed);

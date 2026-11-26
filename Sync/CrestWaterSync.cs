@@ -60,6 +60,14 @@ namespace SailwindCoop.Sync
 
         private static readonly FieldInfo CurrentMultField =
             typeof(OceanUpdaterCrest).GetField("currentMult", BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly HarmonyLib.AccessTools.FieldRef<OceanUpdaterCrest, float> CurrentMultRef =
+            InitFieldRef<OceanUpdaterCrest, float>("currentMult");
+
+        private static HarmonyLib.AccessTools.FieldRef<T, TField> InitFieldRef<T, TField>(string name)
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<T, TField>(name); }
+            catch { return null; }
+        }
         private static readonly FieldInfo WavesUpField =
             typeof(OceanUpdaterCrest).GetField("wavesUp", BindingFlags.NonPublic | BindingFlags.Instance);
         private static readonly FieldInfo WavesDownField =
@@ -547,7 +555,13 @@ namespace SailwindCoop.Sync
                 GameState.eyesFullyClosed = _hostEyesClosed;
                 // Не позволяем клиенту самостоятельно завершить цикл (currentMult >= 1f -> DCTInertiaNewCycle)
                 // раньше, чем переключение wavesUp придёт от хоста, иначе клиент запишет свой угол волны.
-                if (__instance != null && CurrentMultField != null)
+                if (__instance != null && CurrentMultRef != null)
+                {
+                    ref float cur = ref CurrentMultRef(__instance);
+                    float maxBeforeWrap = Mathf.Max(0f, 0.9995f - __instance.lerpRateInertial * Time.deltaTime);
+                    if (cur > maxBeforeWrap) cur = maxBeforeWrap;
+                }
+                else if (__instance != null && CurrentMultField != null)
                 {
                     float cur = (float)CurrentMultField.GetValue(__instance);
                     float maxBeforeWrap = Mathf.Max(0f, 0.9995f - __instance.lerpRateInertial * Time.deltaTime);

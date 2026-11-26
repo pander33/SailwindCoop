@@ -44,8 +44,19 @@ namespace SailwindCoop.Sync
             return false;
         }
         private static readonly FieldInfo WheelLocked = typeof(GPButtonSteeringWheel).GetField("locked", BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly HarmonyLib.AccessTools.FieldRef<GPButtonSteeringWheel, bool> WheelLockedRef = InitControlsFieldRef<GPButtonSteeringWheel, bool>("locked");
+        private static readonly HarmonyLib.AccessTools.FieldRef<TouchRotateHandle, bool> HandleDebugGrabbedRef = InitControlsFieldRef<TouchRotateHandle, bool>("debugGrabbed");
+        private static readonly HarmonyLib.AccessTools.FieldRef<TouchRotateHandle, UnityEngine.Object> HandleGrabbableRef = InitControlsFieldRef<TouchRotateHandle, UnityEngine.Object>("grabbable");
+
+        private static HarmonyLib.AccessTools.FieldRef<T, TField> InitControlsFieldRef<T, TField>(string name)
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<T, TField>(name); }
+            catch { return null; }
+        }
+
         internal static bool Locked(GPButtonSteeringWheel wheel)
         {
+            if (WheelLockedRef != null) return WheelLockedRef(wheel);
             if (WheelLocked == null) throw new MissingFieldException("GPButtonSteeringWheel", "locked");
             return (bool)WheelLocked.GetValue(wheel);
         }
@@ -57,8 +68,9 @@ namespace SailwindCoop.Sync
         internal static bool Grabbed(TouchRotateHandle handle)
         {
             if (handle == null) return false;
-            if (ItemComponents.Read<bool>(handle, "debugGrabbed")) return true;
-            return ItemComponents.Read<UnityEngine.Object>(handle, "grabbable") != null && handle.IsGrabbed();
+            if (HandleDebugGrabbedRef != null ? HandleDebugGrabbedRef(handle) : ItemComponents.Read<bool>(handle, "debugGrabbed")) return true;
+            var grabbable = HandleGrabbableRef != null ? HandleGrabbableRef(handle) : ItemComponents.Read<UnityEngine.Object>(handle, "grabbable");
+            return grabbable != null && handle.IsGrabbed();
         }
         private static ControlTrack[] Tracks(int count)
         { var tracks = new ControlTrack[count]; for (int i = 0; i < count; i++) tracks[i] = new ControlTrack(); return tracks; }

@@ -25,7 +25,7 @@ namespace SailwindCoop.Sync
                     if (ReachedCommit)
                         ShipyardSync.Instance?.CommitLocal(Editor, Repair && (!Fault || ReachedReset), Clean, Fault, CleanedSurfaces);
                 }
-                finally { if (ShipyardSync.Instance != null) ShipyardSync.Instance.Confirming = PreviousConfirming; Scope?.Dispose(); _order = Previous; }
+                finally { if (ShipyardSync.Instance != null) ShipyardSync.Instance.Confirming = PreviousConfirming; Scope.Dispose(); _order = Previous; }
             }
         }
         private static Order _order;
@@ -112,6 +112,8 @@ namespace SailwindCoop.Sync
             try
             {
                 if (__instance == null) return;
+                var net = Runtime.CoopBehaviour.Instance?.Net;
+                if (net == null || net.Role != Net.Role.Client || net.State != Net.LinkState.Connected) return;
                 var body = __instance.GetComponent<Rigidbody>();
                 if (body != null && !body.isKinematic && ControlsSync.HoldsBody(body)) body.isKinematic = true;
             }

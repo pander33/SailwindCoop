@@ -40,7 +40,22 @@ namespace SailwindCoop.Sync
         private static void Capture(Harmony harmony, PatchHookCatalog hooks, Type type, string method)
             => hooks.Install(type, method, Type.EmptyTypes, m => harmony.Patch(m, prefix: Callback(nameof(PreSimulation)), postfix: Callback(nameof(PostSimulation))));
         private static void Report(Exception e) { try { Plugin.Logger?.LogWarning("[ItemSimulationPatches] " + e); } catch { } }
-        private static ShipItem Item(object instance) => instance as ShipItem ?? (instance as UnityEngine.Component)?.GetComponent<ShipItem>();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<UnityEngine.Component, ShipItem> _componentItems =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<UnityEngine.Component, ShipItem>();
+        private static ShipItem Item(object instance)
+        {
+            if (instance is ShipItem direct) return direct;
+            var comp = instance as UnityEngine.Component;
+            if (comp == null) return null;
+            if (_componentItems.TryGetValue(comp, out var cached) && cached != null) return cached;
+            var found = comp.GetComponent<ShipItem>();
+            if (found != null)
+            {
+                _componentItems.Remove(comp);
+                _componentItems.Add(comp, found);
+            }
+            return found;
+        }
         private static bool SharedClient(ShipItem item) => item != null && ItemSync.Instance != null && ItemSync.Instance.IsRemoteSimulationItem(item);
         // These hooks run every frame for every food item, stove, lamp and fuel in the world, including
         // single-player. Only a connected client has anything to do here; everyone else returns before
@@ -108,44 +123,41 @@ namespace SailwindCoop.Sync
 
                 _boatMassDeferred.Clear();
                 Transform boatRoot = __instance.transform;
-                for (int i = list.Count - 1; i >= 0; i--)
+                int write = 0;
+                int count = list.Count;
+                for (int i = 0; i < count; i++)
                 {
                     var irb = list[i];
-                    if (irb == null) continue;
+                    if (irb == null) { list[write++] = null; continue; }
                     if (!irb.gameObject.activeInHierarchy || irb.GetCurrentBox() != null)
                     {
                         _boatMassDeferred.Add(irb);
-                        list.RemoveAt(i);
                         continue;
                     }
                     var body = irb.GetBody();
                     if (body == null)
                     {
                         _boatMassDeferred.Add(irb);
-                        list.RemoveAt(i);
                         continue;
                     }
                     float mass = body.mass;
                     if (float.IsNaN(mass) || float.IsInfinity(mass) || mass < 0f)
                     {
                         _boatMassDeferred.Add(irb);
-                        list.RemoveAt(i);
                         continue;
                     }
                     var item = irb.GetShipItem();
                     if (item == null)
                     {
-                        list.RemoveAt(i);
                         continue;
                     }
                     if (item.currentActualBoat == null || item.currentActualBoat.parent != boatRoot)
                     {
-                        list.RemoveAt(i);
                         continue;
                     }
                     // Locally host-held items use Refs.observerMirror.transform.localPosition in vanilla
                     // BoatMass.UpdateMass(), not irb.transform.localPosition.
-                    if (item.held != null) continue;
+                    if (item.held != null) { list[write++] = irb; continue; }
                     bool badParent = item.currentWalkCol != null && irb.transform.parent != item.currentWalkCol;
                     bool badPos = !IsValidBoatLocal(irb.transform.localPosition);
                     if (badParent || badPos)
@@ -160,10 +172,12 @@ namespace SailwindCoop.Sync
                         if (badParent || badPos)
                         {
                             _boatMassDeferred.Add(irb);
-                            list.RemoveAt(i);
+                            continue;
                         }
                     }
+                    list[write++] = irb;
                 }
+                if (write < count) list.RemoveRange(write, count - write);
             }
             catch (Exception error) { Report(error); }
         }
@@ -181,7 +195,7 @@ namespace SailwindCoop.Sync
                         for (int i = 0; i < _boatMassDeferred.Count; i++)
                         {
                             var irb = _boatMassDeferred[i];
-                            if (irb != null && !list.Contains(irb)) list.Add(irb);
+                            if (irb != null) list.Add(irb);
                         }
                     }
                 }

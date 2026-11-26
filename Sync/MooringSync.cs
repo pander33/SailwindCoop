@@ -98,6 +98,7 @@ namespace SailwindCoop.Sync
 
         public void Tick(float dt)
         {
+            if (_net.State != LinkState.Connected) return;
             if (_fleet != null) { foreach (var c in _fleet.Values) c.Tick(dt); return; }
             if (_net.Role == Role.Client) AskResync();
             TickCarry(dt);

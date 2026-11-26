@@ -37,6 +37,7 @@ namespace SailwindCoop.Sync
         private static bool _usingFallback;
         private static Runtime.CoopLog.Repeat _reflectReport;
 
+        private static readonly List<bool> _hadObject = new List<bool>();
         private static FieldInfo _npcBoatsField;
         private static bool _fieldLookupDone;
 
@@ -70,26 +71,32 @@ namespace SailwindCoop.Sync
         public static void Invalidate()
         {
             _cache.Clear();
+            _hadObject.Clear();
             _cacheStamp = float.NegativeInfinity;
         }
 
         private static bool HasDestroyed()
         {
             for (int i = 0; i < _cache.Count; i++)
-                if (_cache[i] == null) return true;   // Unity-null: объект уничтожен вместе со сценой
+                if (_hadObject[i] && _cache[i] == null) return true;   // Unity-null: ранее живой объект уничтожен
             return false;
         }
 
         private static void Rescan()
         {
             _cache.Clear();
+            _hadObject.Clear();
             _cacheStamp = Time.unscaledTime;
 
             var fromSave = ReadSaveOrder();
             if (fromSave != null && fromSave.Length > 0)
             {
                 _usingFallback = false;
-                for (int i = 0; i < fromSave.Length; i++) _cache.Add(fromSave[i]);
+                for (int i = 0; i < fromSave.Length; i++)
+                {
+                    _cache.Add(fromSave[i]);
+                    _hadObject.Add(fromSave[i] != null);
+                }
                 return;
             }
 
@@ -98,7 +105,11 @@ namespace SailwindCoop.Sync
             if (found == null || found.Length == 0) return;
             Array.Sort(found, (a, b) => string.CompareOrdinal(BoatLocator.PathOf(SafeTransform(a)),
                                                               BoatLocator.PathOf(SafeTransform(b))));
-            for (int i = 0; i < found.Length; i++) _cache.Add(found[i]);
+            for (int i = 0; i < found.Length; i++)
+            {
+                _cache.Add(found[i]);
+                _hadObject.Add(found[i] != null);
+            }
         }
 
         private static Transform SafeTransform(NPCBoatController c)

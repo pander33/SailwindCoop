@@ -69,6 +69,11 @@ namespace SailwindCoop.Sync
             public readonly ItemRequestOrder Requests = new ItemRequestOrder();
             public StoveFuel Fuel;
             public bool FuelResolved;
+            public SaveablePrefab Saveable;
+            public FoodState Food;
+            public CookableFood Cook;
+            public CrateInventory CrateInv;
+            public bool ComponentsResolved;
             public float LampFull;
             public bool LampResolved;
             public bool Cargo;
@@ -314,6 +319,9 @@ namespace SailwindCoop.Sync
                     _saveIdentity.Add(data.instanceId, data.prefabIndex);
         }
 
+        private readonly List<SpawnObjectMsg> _pendingSpawnScratch = new List<SpawnObjectMsg>();
+        private float _nextPendingSpawnCheck;
+
         public void Tick(float dt)
         {
             TickTradeSales();
@@ -321,16 +329,23 @@ namespace SailwindCoop.Sync
             RefreshItems(dt);
             if (_net.Role == Role.Client && _baselineReady && _pendingSpawns.Count != 0)
             {
-                var waiting = new List<SpawnObjectMsg>(_pendingSpawns.Values);
                 float now = Time.unscaledTime;
-                List<SpawnObjectMsg> reported = null;
-                foreach (var spawn in waiting)
+                if (now >= _nextPendingSpawnCheck)
                 {
-                    bool due = _spawnWait.Due(spawn.InstanceId, now, out bool report);
-                    if (report) (reported ?? (reported = new List<SpawnObjectMsg>())).Add(spawn);
-                    if (due) OnSpawnObject(spawn, null);
+                    _nextPendingSpawnCheck = now + 0.1f;
+                    _pendingSpawnScratch.Clear();
+                    foreach (var v in _pendingSpawns.Values) _pendingSpawnScratch.Add(v);
+                    List<SpawnObjectMsg> reported = null;
+                    for (int i = 0; i < _pendingSpawnScratch.Count; i++)
+                    {
+                        var spawn = _pendingSpawnScratch[i];
+                        bool due = _spawnWait.Due(spawn.InstanceId, now, out bool report);
+                        if (report) (reported ?? (reported = new List<SpawnObjectMsg>())).Add(spawn);
+                        if (due) OnSpawnObject(spawn, null);
+                    }
+                    _pendingSpawnScratch.Clear();
+                    if (reported != null) ReportSpawnWait(reported);
                 }
-                if (reported != null) ReportSpawnWait(reported);
             }
             if (_net.Role == Role.Client) RetryPendingItemStates();
             if (_net.Role == Role.Client && _cargoAfterAuthor.Count != 0) SendCargoAfterAuthor();
@@ -366,7 +381,9 @@ namespace SailwindCoop.Sync
             long tick = _net.Clock.ServerTick;
             foreach (var e in _items)
             {
-                if (e.Item == null || !ShouldReplicate(e.Item)) continue;
+                if (e.Item == null) continue;
+                ResolveComponents(e);
+                if (!HasStableIdentity(e.Item, e.Saveable)) continue;
                 bool hostHeld = LocalHand(e.Item);
                 bool freeMoving = e.HolderNetId == 0 && IsMoving(e.Item);
                 if (hostHeld || freeMoving)
@@ -592,7 +609,7 @@ namespace SailwindCoop.Sync
 
         private void UpdateSolidCargo(ItemEntry e, bool held)
         {
-            if (!held && e.InventorySlot < 0 && IsCargo(e) && FreeProxy(e.Item)) _solidCargo.Add(e.Item);
+            if (!held && e.InventorySlot < 0 && IsCargo(e) && FreeProxy(e)) _solidCargo.Add(e.Item);
             else _solidCargo.Remove(e.Item);
         }
 
@@ -607,9 +624,10 @@ namespace SailwindCoop.Sync
             => item.big || item is ShipItemCrate || item.GetComponent<Good>() != null;
 
         /// <summary>A proxy the game would keep solid: not in a belt slot, a crate, a stove.</summary>
-        private static bool FreeProxy(ShipItem item)
+        private static bool FreeProxy(ItemEntry e)
         {
-            if (!item.gameObject.activeInHierarchy || ItemComponents.InStove(item)) return false;
+            var item = e.Item;
+            if (!item.gameObject.activeInHierarchy || InStove(e)) return false;
             var irb = item.GetItemRigidbody();
             return irb != null && !irb.inStove && irb.GetCurrentBox() == null && irb.GetCurrentInventorySlot() == null;
         }
@@ -1442,7 +1460,7 @@ namespace SailwindCoop.Sync
             if (!_hostIds.Contains(msg.InstanceId) || !_byInstanceId.TryGetValue(msg.InstanceId, out var e) || e.Item == null)
                 return WaitForItemState(msg, "item identity");
             if (e.PrefabIndex != msg.PrefabIndex) return WaitForItemState(msg, "prefab mismatch");
-            var accepted = e.Gate.Copy();
+            var accepted = e.Gate.CaptureSnapshot();
             long gateTick = e.RemotePose != null && SameHeldAttachment(e.RemotePose, msg)
                 ? Math.Max(msg.SampleTick, e.RemotePose.SampleTick) : msg.SampleTick;
             if (!accepted.Receive(msg.Revision, gateTick, msg.Requester, msg.RequestId, _net.MyNetId, out bool semantic, out bool pose))
@@ -1465,7 +1483,6 @@ namespace SailwindCoop.Sync
                 return WaitForItemState(msg, "stove binding");
             if (!locallyHeld && (msg.CrateId != 0 || msg.CargoPort >= 0) && !MembershipTargetsReady(e.Item, msg))
                 return WaitForItemState(msg, "container target");
-            return e.Gate.Apply(accepted, () => {
             // The writes below can partially succeed before a container or binding fails.
             e.AppliedRemoteState = null;
             e.HolderNetId = msg.HolderNetId;
@@ -1500,8 +1517,8 @@ namespace SailwindCoop.Sync
             if (!locallyHeld && pose) PushRemoteItemPose(e, msg);
             e.AppliedRemoteState = ownReport || locallyHeld ? null : msg;
             e.AppliedLocalRequest = e.LastLocalRequest;
+            e.Gate.Commit(accepted);
             return ItemApplyStatus.Applied;
-            });
         }
 
         private void PushRemoteItemPose(ItemEntry e, ItemStateMsg msg)
@@ -2421,8 +2438,25 @@ namespace SailwindCoop.Sync
             };
         }
 
-        private ItemStateMsg BuildState(ItemEntry e, long tick)
+        private static void ResolveComponents(ItemEntry e)
         {
+            if (e.ComponentsResolved) return;
+            e.ComponentsResolved = true;
+            e.Saveable = e.Item.GetComponent<SaveablePrefab>();
+            e.Food = e.Item.GetComponent<FoodState>();
+            e.Cook = e.Item.GetComponent<CookableFood>();
+            e.CrateInv = e.Item.GetComponent<CrateInventory>();
+            if (!e.FuelResolved) { e.Fuel = e.Item.GetComponent<StoveFuel>(); e.FuelResolved = true; }
+        }
+
+        private ItemStateMsg _extraScratch;
+
+        private ItemStateMsg BuildState(ItemEntry e, long tick)
+            => BuildStateInto(e, tick, new ItemStateMsg(), allowReuse: false);
+
+        private ItemStateMsg BuildStateInto(ItemEntry e, long tick, ItemStateMsg state, bool allowReuse)
+        {
+            ResolveComponents(e);
             BuildPose(e.Item, tick, out CoordFrame frame, out ushort boatIndex, out Vector3 pos, out Quaternion rot, out Vector3 vel);
             // The host shows a client's held item delayed (ApplyClientHeldOnHost); what it sends is the
             // holder's own last sample, so the other clients do not get that delay on top of theirs.
@@ -2433,33 +2467,31 @@ namespace SailwindCoop.Sync
             uint holder = e.HolderNetId != 0 ? e.HolderNetId : (LocalHand(e.Item) ? _net.MyNetId : 0);
             int inventorySlot = PersonalInventorySlotOf(e.Item);
             if (inventorySlot < 0) inventorySlot = e.InventorySlot;
-            var state = new ItemStateMsg
-            {
-                Requester = e.AckRequester,
-                RequestId = e.AckRequest,
-                LightOn = e.Item is ShipItemLight light && LightSync.IsOn(light),
-                Extras = Array.Empty<float>(),
-                Details = ItemComponents.Capture(e.Item),
-                Index = e.Index,
-                InstanceId = e.InstanceId,
-                PrefabIndex = e.PrefabIndex,
-                Tick = tick,
-                PoseTick = held?.Tick ?? long.MinValue,
-                Frame = frame,
-                BoatIndex = boatIndex,
-                Pos = pos,
-                Rot = rot,
-                Vel = vel,
-                HolderNetId = holder,
-                Amount = FoldableState.Capture(e.Item),
-                Health = e.Item.health,
-                Sold = e.Item.sold,
-                Nailed = e.Item.nailed,
-                CrateId = CrateIdOf(e.Item),
-                CargoPort = CargoPortOf(e.Item),
-                InventorySlot = inventorySlot,
-                Attached = IsProxyAttached(e.Item),
-            };
+            state.Requester = e.AckRequester;
+            state.RequestId = e.AckRequest;
+            state.LightOn = e.Item is ShipItemLight light && LightSync.IsOn(light);
+            state.Extras = Array.Empty<float>();
+            if (state.Details == null) state.Details = new ItemDetails();
+            ItemComponents.CaptureInto(e.Item, state.Details, e.Food, e.Cook, e.Fuel);
+            state.Index = e.Index;
+            state.InstanceId = e.InstanceId;
+            state.PrefabIndex = e.PrefabIndex;
+            state.Tick = tick;
+            state.PoseTick = held?.Tick ?? long.MinValue;
+            state.Frame = frame;
+            state.BoatIndex = boatIndex;
+            state.Pos = pos;
+            state.Rot = rot;
+            state.Vel = vel;
+            state.HolderNetId = holder;
+            state.Amount = FoldableState.Capture(e.Item);
+            state.Health = e.Item.health;
+            state.Sold = e.Item.sold;
+            state.Nailed = e.Item.nailed;
+            state.CrateId = CrateIdOf(e.Item);
+            state.CargoPort = CargoPortOf(e.Item);
+            state.InventorySlot = inventorySlot;
+            state.Attached = IsProxyAttached(e.Item);
             // A new revision is what makes SendExtraState send the item. Drying, spoiling, a burning
             // log and a burning lamp move every frame, so compared exactly every such item in the
             // world was sent twice a second for the whole session.
@@ -2467,6 +2499,7 @@ namespace SailwindCoop.Sync
             {
                 if (++e.Revision == 0) ++e.Revision;
                 e.LastSemantic = state;
+                if (allowReuse && ReferenceEquals(state, _extraScratch)) _extraScratch = null;
             }
             state.Revision = e.Revision;
             e.InstrumentEpoch.Observe(state.Revision, state.Requester, state.RequestId);
@@ -2694,8 +2727,9 @@ namespace SailwindCoop.Sync
                 _crateScan.Clear(); _crateScanFrame = Time.frameCount; _crateScanCount = _items.Count;
                 foreach (var entry in _items)
                 {
-                    var inventory = entry.Item != null ? entry.Item.GetComponent<CrateInventory>() : null;
-                    if (inventory != null) _crateScan.Add(inventory);
+                    if (entry.Item == null) continue;
+                    ResolveComponents(entry);
+                    if (entry.CrateInv != null) _crateScan.Add(entry.CrateInv);
                 }
             }
             foreach (var inventory in _crateScan)
@@ -2973,10 +3007,10 @@ namespace SailwindCoop.Sync
                     pos = item.transform.position;
                     rot = item.transform.rotation;
                 }
-                // A solid proxy is moved only when its item moved: cargo at rest on deck then costs
-                // the physics scene nothing each frame.
+                // A kinematic puppet proxy is moved only when its item moved: items at rest on deck
+                // then cost the physics/transform scene nothing each frame.
                 var pt = proxy.transform;
-                if (!solid || (pt.position - pos).sqrMagnitude > 1e-8f || Quaternion.Angle(pt.rotation, rot) > 0.01f)
+                if (!kinematic || (pt.position - pos).sqrMagnitude > 1e-8f || Quaternion.Angle(pt.rotation, rot) > 0.01f)
                 {
                     pt.position = pos;
                     pt.rotation = rot;
@@ -4072,13 +4106,15 @@ namespace SailwindCoop.Sync
             _extraCursor = end >= count ? 0 : end;
             // BuildState advances the revision exactly when the item's semantic state differs from the
             // last one built. Unchanged items send nothing; a run of changes ends with one reliable state.
+            long tick = _net.Clock.ServerTick;
             for (int i = from; i < end; i++)
             {
                 var e = _items[i];
                 if (e.Item == null) continue;
                 // Other callers of BuildState (operation capture, pose stream) advance the revision too,
                 // so compare with the revision this pass last sent rather than with the value before the call.
-                var state = BuildState(e, _net.Clock.ServerTick);
+                var scratch = _extraScratch ?? (_extraScratch = new ItemStateMsg());
+                var state = BuildStateInto(e, tick, scratch, allowReuse: true);
                 if (e.Revision != e.SentRevision) { e.SentRevision = e.Revision; _net.Broadcast(state, LiteNetLib.DeliveryMethod.Unreliable); e.SemanticActive = true; }
                 else if (e.SemanticActive) { _net.Broadcast(state, LiteNetLib.DeliveryMethod.ReliableOrdered); e.SemanticActive = false; }
             }
@@ -4252,6 +4288,11 @@ namespace SailwindCoop.Sync
                 if (e.Item != item)
                 {
                     e.FuelResolved = false;
+                    e.ComponentsResolved = false;
+                    e.Saveable = null;
+                    e.Food = null;
+                    e.Cook = null;
+                    e.CrateInv = null;
                     e.LampResolved = false;
                     e.CargoResolved = false;
                     e.PuppetApplied = false;
@@ -5270,6 +5311,9 @@ namespace SailwindCoop.Sync
             _unsealedCrate = null;
             _cargoMembership.Clear();
             _pendingSpawns.Clear();
+            _pendingSpawnScratch.Clear();
+            _nextPendingSpawnCheck = 0f;
+            _extraScratch = null;
             _spawnWait.Clear();
             _pendingMissionGoods.Clear();
             _nextRequest = 0;

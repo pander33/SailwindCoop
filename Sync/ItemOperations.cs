@@ -7,7 +7,12 @@ namespace SailwindCoop.Sync
     public sealed partial class ItemSync
     {
         internal bool IsSessionActive => _net.State == LinkState.Connected && _net.Role != Role.None;
-        internal bool IsRemoteSimulationItem(ShipItem item) => IsClientSession && item != null && _hostIds.Contains(InstanceIdOf(item));
+        internal bool IsRemoteSimulationItem(ShipItem item)
+        {
+            if (!IsClientSession || item == null) return false;
+            if (_byItem.TryGetValue(item, out var entry)) return _hostIds.Contains(entry.InstanceId);
+            return _hostIds.Contains(InstanceIdOf(item));
+        }
         internal void NotifyPipeUse(ShipItem item)
         {
             // The same mark as a pot: the state after the last puff must go out too.

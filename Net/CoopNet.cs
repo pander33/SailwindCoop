@@ -201,6 +201,13 @@ namespace SailwindCoop.Net
             (string.IsNullOrEmpty(_tunnel.LastError) ? "" : " err=" + _tunnel.LastError);
         public double RttMs => Clock.RttMs;
         public SessionMemberInfo[] RosterSnapshot => (SessionMemberInfo[])_roster.Clone();
+        public bool IsMemberReady(uint netId)
+        {
+            var roster = _roster;
+            for (int i = 0; i < roster.Length; i++)
+                if (roster[i].NetId == netId) return roster[i].State == MemberJoinState.Ready;
+            return false;
+        }
         /// <summary>The latest mod version in the session when it is later than this machine's, else "".</summary>
         public string NewerModVersion { get; private set; } = "";
         /// <summary>Name of the member who runs <see cref="NewerModVersion"/>.</summary>
@@ -1099,14 +1106,15 @@ namespace SailwindCoop.Net
             {
                 // Written once for all clients, not once per client.
                 NetDataWriter writer = null;
+                int len = 0;
                 bool oversized = false;
                 foreach (var s in _sessions.Values)
                 {
                     if (!s.HandshakeDone) continue;
-                    if (writer == null) writer = Protocol.Write(msg);
+                    if (writer == null) { writer = Protocol.WriteShared(msg); len = writer.Length; }
                     oversized |= s.Peer.SendWritten(writer, method);
                 }
-                if (oversized) PeerExt.ReportOversized(msg.Type, writer.Length);
+                if (oversized) PeerExt.ReportOversized(msg.Type, len);
             }
             else if (_hostPeer != null)
             {
@@ -1168,10 +1176,17 @@ namespace SailwindCoop.Net
                 if ((HostModFeatures & feature) == feature) _hostPeer?.Send(message, method);
                 return;
             }
+            NetDataWriter writer = null;
+            int len = 0;
+            bool oversized = false;
             foreach (var session in _sessions.Values)
                 if (session.HandshakeDone && session.JoinState == MemberJoinState.Ready &&
                     session.Peer != except && (session.ModFeatures & feature) == feature)
-                    session.Peer.Send(message, method);
+                {
+                    if (writer == null) { writer = Protocol.WriteShared(message); len = writer.Length; }
+                    oversized |= session.Peer.SendWritten(writer, method);
+                }
+            if (oversized) PeerExt.ReportOversized(message.Type, len);
         }
 
         /// <summary>Host: sends optional mod data only to clients that can apply it.</summary>
@@ -1193,8 +1208,16 @@ namespace SailwindCoop.Net
         public void RelayExcept(INetMessage msg, NetPeer except, DeliveryMethod method)
         {
             if (Role != Role.Host) return;
+            NetDataWriter writer = null;
+            int len = 0;
+            bool oversized = false;
             foreach (var s in _sessions.Values)
-                if (s.HandshakeDone && s.Peer != except) s.Peer.Send(msg, method);
+                if (s.HandshakeDone && s.Peer != except)
+                {
+                    if (writer == null) { writer = Protocol.WriteShared(msg); len = writer.Length; }
+                    oversized |= s.Peer.SendWritten(writer, method);
+                }
+            if (oversized) PeerExt.ReportOversized(msg.Type, len);
         }
     }
 }

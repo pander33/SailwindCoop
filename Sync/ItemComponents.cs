@@ -105,17 +105,35 @@ namespace SailwindCoop.Sync
                 return false;
             }
         }
+        private static readonly HarmonyLib.AccessTools.FieldRef<StoveFuel, bool> FuelLitRef = InitItemFieldRef<StoveFuel, bool>("lit");
+        private static readonly HarmonyLib.AccessTools.FieldRef<StoveFuel, StoveFuelTrigger> FuelTriggerRef = InitItemFieldRef<StoveFuel, StoveFuelTrigger>("fuelTrigger");
+        private static readonly HarmonyLib.AccessTools.FieldRef<ShipItemPipe, float> PipeHeatRef = InitItemFieldRef<ShipItemPipe, float>("currentHeat");
+        private static readonly HarmonyLib.AccessTools.FieldRef<CookableFoodKettle, ShipItemKettle> CookKettleRef = InitItemFieldRef<CookableFoodKettle, ShipItemKettle>("kettle");
+        private static readonly HarmonyLib.AccessTools.FieldRef<ShipItemStove, StoveFuelTrigger> StoveFuelTriggerRef = InitItemFieldRef<ShipItemStove, StoveFuelTrigger>("fuelTrigger");
+        private static readonly HarmonyLib.AccessTools.FieldRef<StoveFuelTrigger, int> TriggerCurrentFuelRef = InitItemFieldRef<StoveFuelTrigger, int>("currentFuel");
+        private static readonly HarmonyLib.AccessTools.FieldRef<CookableFoodKettle, AudioSource> CookBoilAudioRef = InitItemFieldRef<CookableFoodKettle, AudioSource>("boilAudio");
+
+        private static HarmonyLib.AccessTools.FieldRef<T, TField> InitItemFieldRef<T, TField>(string name)
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<T, TField>(name); }
+            catch { return null; }
+        }
+
         private static int Id(ShipItem item) => item != null ? item.GetComponent<SaveablePrefab>()?.instanceId ?? 0 : 0;
         internal static ItemDetails Capture(ShipItem item)
         {
             var state = new ItemDetails();
-            var food = item.GetComponent<FoodState>();
+            CaptureInto(item, state, item.GetComponent<FoodState>(), item.GetComponent<CookableFood>(), item.GetComponent<StoveFuel>());
+            return state;
+        }
+        internal static void CaptureInto(ShipItem item, ItemDetails state, FoodState food, CookableFood cook, StoveFuel fuel)
+        {
+            state.Reset();
             if (food != null)
             {
                 state.HasFood = true; state.Dried = food.dried; state.Smoked = food.smoked;
                 state.Salted = food.salted; state.Spoiled = food.spoiled; state.InWater = food.inWater;
             }
-            var cook = item.GetComponent<CookableFood>();
             if (cook != null)
             {
                 state.HasCookable = true; state.CookHeat = cook.GetCurrentHeat();
@@ -135,16 +153,20 @@ namespace SailwindCoop.Sync
                 state.CookedTeaAmount = kettle.currentCookedTeaAmount; state.TeaType = (int)kettle.currentTeaType;
             }
             if (item is ShipItemStove stove) { state.HasStove = true; state.StoveHeat = stove.GetHeat(); }
-            var fuel = item.GetComponent<StoveFuel>();
             if (fuel != null)
             {
-                state.HasFuel = true; state.FuelLit = Read<bool>(fuel, "lit"); state.FuelInserted = fuel.inserted;
-                var trigger = Read<StoveFuelTrigger>(fuel, "fuelTrigger");
+                state.HasFuel = true;
+                state.FuelLit = FuelLitRef != null ? FuelLitRef(fuel) : Read<bool>(fuel, "lit");
+                state.FuelInserted = fuel.inserted;
+                var trigger = FuelTriggerRef != null ? FuelTriggerRef(fuel) : Read<StoveFuelTrigger>(fuel, "fuelTrigger");
                 if (trigger != null) state.FuelStoveId = Id(trigger.GetComponentInParent<ShipItemStove>());
             }
-            if (item is ShipItemPipe pipe) { state.HasPipe = true; state.PipeHeat = Read<float>(pipe, "currentHeat"); }
+            if (item is ShipItemPipe pipe)
+            {
+                state.HasPipe = true;
+                state.PipeHeat = PipeHeatRef != null ? PipeHeatRef(pipe) : Read<float>(pipe, "currentHeat");
+            }
             CaptureInstruments(item, state);
-            return state;
         }
         internal static void Apply(ShipItem item, ItemDetails state, StoveBindings? targets = null)
         {
@@ -247,8 +269,9 @@ namespace SailwindCoop.Sync
         }
         internal static bool InStove(ShipItem item)
         {
-            var parent = item != null ? item.transform.parent : null;
-            return parent != null && parent.GetComponent<ShipItemStove>() != null;
+            if (item == null) return false;
+            var parent = item.transform.parent;
+            return parent != null && parent != item.currentActualBoat && parent.GetComponent<ShipItemStove>() != null;
         }
         // The rest of vanilla StoveFuelTrigger.InsertFuel: the log leaves physics and sits inside the
         // stove as its child. Without it the burning log stays a loose item that can be picked up, on
@@ -296,11 +319,11 @@ namespace SailwindCoop.Sync
         {
             var slot = cook.GetCurrentCookTrigger();
             if (slot == null || slot.stove == null || cook.GetCurrentHeat() < 1f) return;
-            var kettle = Read<ShipItemKettle>(cook, "kettle");
+            var kettle = CookKettleRef != null ? CookKettleRef(cook) : Read<ShipItemKettle>(cook, "kettle");
             if (kettle == null || kettle.currentWater <= 0f) return;
-            var fire = Read<StoveFuelTrigger>(slot.stove, "fuelTrigger");
-            if (fire == null || Read<int>(fire, "currentFuel") <= 0) return;
-            var audio = Read<AudioSource>(cook, "boilAudio");
+            var fire = StoveFuelTriggerRef != null ? StoveFuelTriggerRef(slot.stove) : Read<StoveFuelTrigger>(slot.stove, "fuelTrigger");
+            if (fire == null || (TriggerCurrentFuelRef != null ? TriggerCurrentFuelRef(fire) : Read<int>(fire, "currentFuel")) <= 0) return;
+            var audio = CookBoilAudioRef != null ? CookBoilAudioRef(cook) : Read<AudioSource>(cook, "boilAudio");
             if (audio == null) return;
             if (!audio.enabled) { audio.enabled = true; audio.Play(); }
             audio.volume += Time.deltaTime * 0.22f;

@@ -63,9 +63,14 @@ namespace SailwindCoop.Sync
             if (_body != null) { TickDown(); return; }
             var coop = CoopBehaviour.Instance;
             Transform player = coop?.Players?.LocalPlayer;
-            Camera cam = Camera.main;
             if (!Enabled || _net.State != LinkState.Connected || !CoordSpace.Ready || !GameState.playing ||
-                GameState.currentlyLoading || player == null || cam == null || coop.Items == null)
+                GameState.currentlyLoading || player == null || coop.Items == null)
+            {
+                _tracks.Clear(); _held = null;
+                return;
+            }
+            Camera cam = coop.Players.PickRenderCamera();
+            if (cam == null)
             {
                 _tracks.Clear(); _held = null;
                 return;
@@ -134,9 +139,11 @@ namespace SailwindCoop.Sync
         internal bool TryLying(out Vector3 head, out Vector3 feetDir)
         {
             head = feetDir = Vector3.zero;
-            Transform player = CoopBehaviour.Instance?.Players?.LocalPlayer;
-            Camera cam = Camera.main;
-            if (_body == null || player == null || cam == null) return false;
+            if (_body == null) return false;
+            var players = CoopBehaviour.Instance?.Players;
+            Transform player = players?.LocalPlayer;
+            Camera cam = players?.PickRenderCamera();
+            if (player == null || cam == null) return false;
             Quaternion frame = player.parent != null ? player.parent.rotation : Quaternion.identity;
             Vector3 bodyUp = frame * (_body.transform.localRotation * Vector3.up);
             if (Vector3.Angle(bodyUp, frame * Vector3.up) < LieAngle) return false;

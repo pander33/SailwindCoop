@@ -39,10 +39,31 @@ namespace SailwindCoop.Net
         // 118: shipyard cleaning sends surface commands; Hello carries the game build.
         public const int Version = 118;
 
+        [System.ThreadStatic]
+        private static NetDataWriter _sharedWriter;
+
         /// <summary>Writes [msgType][payload] into a fresh writer ready to send.</summary>
         public static NetDataWriter Write(INetMessage msg)
         {
             var w = new NetDataWriter();
+            w.Put((byte)msg.Type);
+            msg.Serialize(w);
+            return w;
+        }
+
+        /// <summary>Writes [msgType][payload] into a reusable thread-local writer for synchronous sends.</summary>
+        internal static NetDataWriter WriteShared(INetMessage msg)
+        {
+            var w = _sharedWriter;
+            if (w == null)
+            {
+                w = new NetDataWriter(true, 256);
+                _sharedWriter = w;
+            }
+            else
+            {
+                w.Reset();
+            }
             w.Put((byte)msg.Type);
             msg.Serialize(w);
             return w;
@@ -227,9 +248,10 @@ namespace SailwindCoop.Net
 
         public static void Send(this NetPeer peer, INetMessage msg, DeliveryMethod method)
         {
-            var writer = Protocol.Write(msg);
+            var writer = Protocol.WriteShared(msg);
+            int len = writer.Length;
             if (peer.SendWritten(writer, method, msg.Type == MsgType.EconomyState ? MarketChannel : (byte)0))
-                ReportOversized(msg.Type, writer.Length);
+                ReportOversized(msg.Type, len);
         }
 
         /// <summary>Sends an already written message (see <see cref="Protocol.Write"/>); one writer can go
