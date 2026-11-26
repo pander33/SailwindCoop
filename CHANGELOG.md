@@ -2,6 +2,30 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.12.1] - 2026-11-26
+
+Requires Sailwind 0.41. Wire protocol 118 is unchanged, so 0.12.0 and 0.12.1 can connect.
+Update the host to get the world save recovery fix.
+
+### Fixed
+
+- A failed world save no longer leaves the save manager busy. The game writes to a temporary
+  file before replacing the primary save and rotating backups, so a serialization failure
+  leaves the previous save intact. A failed slot must save successfully before it can be sent
+  to a guest or used by Save and Join.
+- Crate inserts and withdrawals wait for the item and crate physics to be ready. A superseded
+  request returns the current state to the guest, and compound operations wait for newly
+  created crate items to initialize before applying their results.
+- A mooring line held by a guest no longer reattaches itself when it passes a bollard on the host.
+- Finishing shipyard or broom input restores the interaction state so later actions can be relayed.
+
+### Performance
+
+- Settled item copies skip redundant transform and physics work. Knockdown checks skip stationary
+  items, and wind totems no longer need periodic scene scans while idle.
+- Broom strokes are batched before encoding the dirt texture. Control sync and network sends
+  reuse buffers to reduce per-frame allocations.
+
 ## [0.12.0] - 2026-11-25
 
 Everyone must update to wire protocol 118. Requires Sailwind 0.41. The host checks the installed

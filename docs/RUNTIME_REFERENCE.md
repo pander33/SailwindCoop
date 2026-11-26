@@ -1,6 +1,6 @@
 # Runtime reference
 
-Current implementation: plugin 0.12.0, Protocol 118, Sailwind 0.41. The Hello handshake compares
+Current implementation: plugin 0.12.1, Protocol 118, Sailwind 0.41. The Hello handshake compares
 the players' game versions before the host sends the world.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
