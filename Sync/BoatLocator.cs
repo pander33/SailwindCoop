@@ -78,6 +78,7 @@ namespace SailwindCoop.Sync
         public static void Invalidate()
         {
             _cacheStamp = float.NegativeInfinity;
+            _checkedFrame = -1;
             _hullsValid = false;
         }
 
@@ -118,11 +119,24 @@ namespace SailwindCoop.Sync
 
         public static int SceneIndexOf(ushort index) => index == NoBoat ? -1 : (index & 0xFF);
 
+        private static int _checkedFrame = -1;
+
         private static void EnsureScan()
         {
             // Unscaled: timeScale is 0 on the host during a join.
-            if (_haveScan && Time.unscaledTime - _cacheStamp < CacheSeconds && !HasDestroyed()) return;
+            // Check HasDestroyed at most once per frame so hundreds of boat lookups per frame skip native null scans.
+            int frame = Time.frameCount;
+            if (_haveScan)
+            {
+                if (_checkedFrame == frame) return;
+                if (Time.unscaledTime - _cacheStamp < CacheSeconds && !HasDestroyed())
+                {
+                    _checkedFrame = frame;
+                    return;
+                }
+            }
             Rescan();
+            _checkedFrame = frame;
         }
 
         private static bool HasDestroyed()

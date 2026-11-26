@@ -70,17 +70,23 @@ namespace SailwindCoop.Sync
         // ShipItem.ExtraFixedUpdate only enters and leaves boats by the embark trigger. On the host an
         // item in a client's hand has its root collider off, so the game sees no trigger and calls
         // ExitBoat two steps after each boat-frame pose had put it back: one "ExitBoat" log line,
-        // a BoatMass remove/add and a broken hanging joint per pose. The holder's pose frame decides
-        // membership while it is held; the counter is kept at zero so the drop starts with full grace.
+        // a BoatMass remove/add and a broken hanging joint per pose. On the client, remote-driven
+        // puppets get their boat membership from the host's stream (ApplyRemote), so local trigger
+        // enter/exit must not detach settled boat puppets or hijack world puppets onto passing boats.
+        // The counter is kept at zero so a drop or local takeover starts with full grace.
         private static AccessTools.FieldRef<ShipItem, int> _frameCounter;
         private static bool _frameCounterMissing;
         private static bool PreBoatMembership(ShipItem __instance)
         {
             var sync = ItemSync.Instance;
-            if (sync == null || !sync.IsHostSession) return true;
+            if (sync == null) return true;
+            bool isHost = sync.IsHostSession;
+            bool isClient = !isHost && sync.IsClientSession;
+            if (!isHost && !isClient) return true;
             try
             {
-                if (!sync.HeldByRemotePlayer(__instance)) return true;
+                if (isHost ? !sync.HeldByRemotePlayer(__instance) : !sync.IsRemotePuppetItem(__instance))
+                    return true;
                 if (_frameCounter == null && !_frameCounterMissing)
                 {
                     try { _frameCounter = AccessTools.FieldRefAccess<ShipItem, int>("frameCounter"); }

@@ -95,6 +95,6 @@ namespace SailwindCoop.Sync
             return dock;
         }
         private static bool PreTrigger(PickupableBoatMooringRope __instance)
-            => PatchGuard.Prefix(() => !(MooringSync.Instance?.SuppressCarryTrigger(__instance) ?? false), Report);
+            => PatchGuard.Prefix(() => !(MooringSync.Instance?.SuppressDockTrigger(__instance) ?? false), Report);
     }
 }

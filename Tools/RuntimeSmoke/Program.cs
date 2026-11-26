@@ -557,14 +557,20 @@ internal static class Program
             Test("Harmony input finalizer restores origin and preserves vanilla fault", () => {
                 var harmony = new Harmony("sailwind.runtime-smoke.input-scope");
                 try {
-                    harmony.Patch(typeof(InputFixture).GetMethod(nameof(InputFixture.Input)),
+                    var target = typeof(InputFixture).GetMethod(nameof(InputFixture.Input));
+                    // Mirror ShipyardRefitPatches (Priority.First/Last) + DirtPatches (Normal postfix+finalizer) on one method.
+                    harmony.Patch(target,
+                        prefix: new HarmonyMethod(typeof(OuterInputFixturePatch).GetMethod(nameof(OuterInputFixturePatch.Begin), BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.First },
+                        postfix: new HarmonyMethod(typeof(OuterInputFixturePatch).GetMethod(nameof(OuterInputFixturePatch.End), BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.Last },
+                        finalizer: new HarmonyMethod(typeof(OuterInputFixturePatch).GetMethod(nameof(OuterInputFixturePatch.End), BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.Last });
+                    harmony.Patch(target,
                         prefix: new HarmonyMethod(typeof(Program).GetMethod(nameof(BeginFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)),
                         postfix: new HarmonyMethod(typeof(Program).GetMethod(nameof(EndFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)),
                         finalizer: new HarmonyMethod(typeof(Program).GetMethod(nameof(EndFixtureInput), BindingFlags.Static | BindingFlags.NonPublic)));
                     new InputFixture().Input(false);
-                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "normal call leaked");
+                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "normal call leaked: " + InteractionContext.Source);
                     ExpectFailure(() => new InputFixture().Input(true));
-                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "original fault leaked");
+                    Assert(InteractionContext.Source == InteractionSource.WorldSimulation, "original fault leaked: " + InteractionContext.Source);
                 } finally { harmony.UnpatchSelf(); }
             });
             Test("hook catalog rejects wrong overload and inherited empty fallback", () => {
@@ -1326,9 +1332,15 @@ internal static class Program
             if (fail) throw new InvalidOperationException("vanilla input fault");
         }
     }
+    private static class OuterInputFixturePatch
+    {
+        internal static void Begin(out InteractionContext.Scope __state)
+            => __state = InteractionContext.Begin(InteractionSource.LocalInput);
+        internal static void End(ref InteractionContext.Scope __state) => __state.Dispose();
+    }
     private static void BeginFixtureInput(out InteractionContext.Scope __state)
         => __state = InteractionContext.Begin(InteractionSource.LocalInput);
-    private static void EndFixtureInput(InteractionContext.Scope __state) => __state.Dispose();
+    private static void EndFixtureInput(ref InteractionContext.Scope __state) => __state.Dispose();
     private sealed class HookFixture : HookBase { public void Action() { } }
     private sealed class SleepEntryFixture
     {

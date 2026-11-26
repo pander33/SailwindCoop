@@ -19,7 +19,7 @@ namespace SailwindCoop.Sync
         {
             var hooks = new PatchHookCatalog();
             hooks.Install(typeof(Cleaner), "LateUpdate", Type.EmptyTypes, m => harmony.Patch(m,
-                prefix: Callback(nameof(PreHold)), postfix: Callback(nameof(EndScope)), finalizer: Callback(nameof(EndScope))));
+                prefix: Callback(nameof(PreHold)), finalizer: Callback(nameof(EndScope))));
             hooks.Install(typeof(Shipyard), "ConfirmOrder", Type.EmptyTypes, m => harmony.Patch(m,
                 prefix: Callback(nameof(PreOrder)), postfix: Callback(nameof(EndScope)), finalizer: Callback(nameof(EndScope))));
             hooks.Install(typeof(MasterPainter), "PaintObject", new[] { typeof(CleanableObject), typeof(Vector2), typeof(Texture) }, m => harmony.Patch(m,
@@ -53,7 +53,7 @@ namespace SailwindCoop.Sync
             try { if (!InteractionContext.Suppressed) __state = InteractionContext.Begin(InteractionSource.LocalInput); }
             catch (Exception e) { Report(e); }
         }
-        private static void EndScope(InteractionContext.Scope __state)
+        private static void EndScope(ref InteractionContext.Scope __state)
         {
             try { __state.Dispose(); }
             catch (Exception e) { Report(e); }

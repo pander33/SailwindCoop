@@ -28,6 +28,15 @@ namespace SailwindCoop.Sync
                 entry.HolderNetId != 0 && entry.HolderNetId != _net.MyNetId &&
                 (actor == 0 || entry.HolderNetId == actor);
 
+        /// <summary>Client: the item's pose and boat membership are driven by the host stream
+        /// (not locally held). Suppresses vanilla <c>ShipItem.ExtraFixedUpdate</c> so embark-trigger
+        /// enter/exit cannot fight <see cref="ApplyRemote"/> or detach settled puppets.</summary>
+        internal bool IsRemotePuppetItem(ShipItem item)
+            => item != null && IsClientSession && _byItem.TryGetValue(item, out var entry) &&
+                entry.HolderNetId != _net.MyNetId &&
+                (ReferenceEquals(item.held, null) || !LocalHand(item)) &&
+                entry.Net.HasData;
+
         private sealed class ItemEntry
         {
             public ushort Index;
@@ -51,6 +60,8 @@ namespace SailwindCoop.Sync
             public CoordFrame LastFrame;
             public ushort LastBoatIndex;
             public bool WasActive;   // host: was streaming this item last tick (to send a final resting pose)
+            public bool HostMoving;  // host: recently moving or dropped (watched by PlayerKnockdown)
+            public float HostMovingUntil; // host: keeps knockdown watch alive across ThrowItemAfterDelay / release
             public int InventorySlot = -1;
             public bool DropWithoutProxyVelocity;
             public bool ForceWorldPoseUntilDrop;
@@ -79,6 +90,9 @@ namespace SailwindCoop.Sync
             public bool Cargo;
             public bool CargoResolved;
             public bool PuppetApplied;
+            public bool PuppetSettled;
+            public bool PuppetSettledWorld;
+            public int SettledOriginEpoch;
             public bool PuppetSolid;
             public bool PuppetProbed;
             public bool PuppetWallAttachDriver;
@@ -302,9 +316,16 @@ namespace SailwindCoop.Sync
         internal void CollectLoose(List<ShipItem> into)
         {
             into.Clear();
-            foreach (var e in _items)
+            bool isClient = _net.Role == Role.Client;
+            bool isHost = _net.Role == Role.Host;
+            float now = isHost ? Time.time : 0f;
+            for (int i = 0; i < _items.Count; i++)
             {
-                if (e.Item == null || e.HolderNetId != 0 || e.InventorySlot >= 0 || e.Item.held != null) continue;
+                var e = _items[i];
+                if (e.HolderNetId != 0 || e.InventorySlot >= 0) continue;
+                if (isClient && e.PuppetSettled) continue;
+                if (isHost && !e.HostMoving && now >= e.HostMovingUntil) continue;
+                if (e.Item == null || !ReferenceEquals(e.Item.held, null)) continue;
                 if (!e.Item.gameObject.activeInHierarchy) continue;
                 into.Add(e.Item);
             }
@@ -386,6 +407,7 @@ namespace SailwindCoop.Sync
                 if (!HasStableIdentity(e.Item, e.Saveable)) continue;
                 bool hostHeld = LocalHand(e.Item);
                 bool freeMoving = e.HolderNetId == 0 && IsMoving(e.Item);
+                e.HostMoving = hostHeld || freeMoving;
                 if (hostHeld || freeMoving)
                 {
                     _net.Broadcast(BuildState(e, tick), LiteNetLib.DeliveryMethod.Unreliable);
@@ -486,6 +508,9 @@ namespace SailwindCoop.Sync
             catch { return false; }
         }
 
+        private Vector3 _lastOriginOffset;
+        private int _originEpoch = 1;
+
         public void ApplyRemote()
         {
             if (_net.Role == Role.Host) { ApplyClientHeldOnHost(); return; }
@@ -496,13 +521,31 @@ namespace SailwindCoop.Sync
             double localNow = _net.Clock.LocalTimeMs;
             double serverNow = localNow + _net.Clock.OffsetMs;
             if (Time.frameCount % 600 == 0 && _solidCargo.Count > 0) _solidCargo.RemoveWhere(IsNullShipItem);
-
-            foreach (var e in _items)
+            Vector3 originOffset = CoordSpace.RealToLocal(Vector3.zero);
+            if (CoordSpace.ShiftingThisFrame || (originOffset - _lastOriginOffset).sqrMagnitude > 1e-10f)
             {
-                if (e.Item == null) continue;
-                if (e.HolderNetId == _net.MyNetId) continue;   // I hold it → the game drives it locally
+                _lastOriginOffset = originOffset;
+                _originEpoch++;
+            }
+
+            int frame = Time.frameCount;
+            var boats = Runtime.CoopBehaviour.Instance?.Boats;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var e = _items[i];
+                if (e.HolderNetId == _net.MyNetId) { e.PuppetSettled = false; continue; }   // I hold it → the game drives it locally
                 if (!e.Net.HasData) continue;
-                if (InStove(e)) continue;   // rides its stove
+                // Settled boat-local puppets ride their boat via Unity's parent hierarchy; settled world
+                // puppets stay fixed until FloatingOriginManager shifts (_originEpoch). Revalidate 1/64th
+                // per frame (~once per 0.6s) as a safety net against external edits or destroyed items.
+                if (e.PuppetSettled &&
+                    (!e.PuppetSettledWorld || e.SettledOriginEpoch == _originEpoch) &&
+                    ((i + frame) & 63) != 0 &&
+                    !ReferenceEquals(e.Item, null) &&
+                    ReferenceEquals(e.Item.held, null))
+                    continue;
+                if (e.Item == null) continue;
+                if (InStove(e)) { e.PuppetSettled = false; continue; }   // rides its stove
 
                 // Every other item (free OR held by a remote player) is a kinematic PUPPET driven purely
                 // by the host's stream. We disable the game's own ItemRigidbody so it can't fight the
@@ -514,8 +557,23 @@ namespace SailwindCoop.Sync
                 UpdateSolidCargo(e, held);
                 PrepareForRemotePose(e.Item, held);   // layer 2 while in a hand, else 0
                 SetPuppet(e, true);
-                ApplyItemPose(e, localNow, serverNow);
+                bool poseSettled = ApplyItemPose(e, boats, localNow, serverNow, out Transform settledBoat, out bool settledWorld);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
+                if (!held && poseSettled && e.PuppetApplied && settledBoat != null && e.Item.transform.parent == settledBoat)
+                {
+                    e.PuppetSettled = true;
+                    e.PuppetSettledWorld = false;
+                }
+                else if (!held && poseSettled && e.PuppetApplied && settledWorld && !CoordSpace.ShiftingThisFrame)
+                {
+                    e.PuppetSettled = true;
+                    e.PuppetSettledWorld = true;
+                    e.SettledOriginEpoch = _originEpoch;
+                }
+                else
+                {
+                    e.PuppetSettled = false;
+                }
             }
         }
 
@@ -529,36 +587,72 @@ namespace SailwindCoop.Sync
             if (!CoordSpace.Ready || Time.timeScale <= 0.0001f) return;
             double localNow = _net.Clock.LocalTimeMs;
             double serverNow = localNow + _net.Clock.OffsetMs;
+            var boats = Runtime.CoopBehaviour.Instance?.Boats;
             foreach (var e in _items)
             {
                 if (e.Item == null || e.HeldSample == null || !e.Net.HasData) continue;
                 if (e.HolderNetId == 0 || e.HolderNetId == _net.MyNetId) continue;
                 if (InStove(e)) continue;
-                ApplyItemPose(e, localNow, serverNow);
+                ApplyItemPose(e, boats, localNow, serverNow, out _, out _);
                 MoveProxyToItem(e.Item, kinematic: true, Vector3.zero);
             }
         }
 
-        private void ApplyItemPose(ItemEntry e, double localNow, double serverNow)
+        private bool ApplyItemPose(ItemEntry e, BoatSync boats, double localNow, double serverNow, out Transform settledBoat, out bool settledWorld)
         {
+            settledBoat = null;
+            settledWorld = false;
             var target = e.Item.transform;
-            var coop = Runtime.CoopBehaviour.Instance;
             if (e.HolderNetId != 0)
             {
                 e.HeldPose.InterpDelayMs = e.Net.InterpDelayMs;
                 PlayerSync.ApplyCarriedPose(e.HeldPose, target, e.HolderNetId, localNow, serverNow);
-                return;
+                return false;
             }
-            var boats = coop?.Boats;
-            if (e.HolderNetId == 0 && e.RemotePose?.Frame == CoordFrame.Boat && boats != null &&
-                boats.TryGetRenderTick(e.RemotePose.BoatIndex, out double hullTick)) e.Net.ApplyAt(target, hullTick);
-            else if (e.HolderNetId == 0 && e.FreePlayback != null)
-                e.Net.ApplyAt(target, e.FreePlayback.AdvanceExact(serverNow, localNow, InterpDelayMs));
-            else e.Net.Apply(target, serverNow);
+            Transform worldRoot = FloatingOriginManager.instance != null ? FloatingOriginManager.instance.transform : null;
+            bool freeRemote = e.InventorySlot < 0 && e.RemotePose != null &&
+                e.RemotePose.CrateId == 0 && e.RemotePose.CargoPort < 0 && !e.RemotePose.Attached &&
+                e.Item.gameObject.activeInHierarchy;
+            if (e.RemotePose?.Frame == CoordFrame.Boat)
+            {
+                ushort boatIdx = e.RemotePose.BoatIndex;
+                Transform boat = BoatLocator.FindByIndex(boatIdx);
+                double tick = boats != null && boats.TryGetRenderTick(boatIdx, out double hullTick)
+                    ? hullTick : serverNow - e.Net.InterpDelayMs;
+                Transform parent = target.parent;
+                if (boat != null && freeRemote &&
+                    (parent == null || parent == worldRoot || (parent == e.Item.currentActualBoat && parent != boat)))
+                    EnsureBoatParentState(e.Item, boatIdx);
+                if (boat != null && target.parent == boat)
+                {
+                    if (e.Net.ApplyLocalAt(target, tick, out bool settled) && settled)
+                    {
+                        settledBoat = boat;
+                        return true;
+                    }
+                    return false;
+                }
+                e.Net.ApplyAt(target, tick);
+                return false;
+            }
+            if (freeRemote && e.Item.currentActualBoat != null && target.parent == e.Item.currentActualBoat)
+                EnsureWorldParentState(e.Item);
+            double worldTick = e.FreePlayback != null
+                ? e.FreePlayback.AdvanceExact(serverNow, localNow, InterpDelayMs)
+                : serverNow - e.Net.InterpDelayMs;
+            e.Net.ApplyAt(target, worldTick);
+            Transform worldParent = target.parent;
+            if ((worldParent == null || worldParent == worldRoot) && e.Net.IsSettledAt(worldTick))
+            {
+                settledWorld = true;
+                return true;
+            }
+            return false;
         }
 
         private static void ResetItemPose(ItemEntry e)
         {
+            e.PuppetSettled = false;
             e.Net.Clear();
             e.ClearHeldPose();
             e.FreePlayback = null;
@@ -699,7 +793,10 @@ namespace SailwindCoop.Sync
         private static void InvalidatePuppetState(ShipItem item)
         {
             if (item != null && Instance != null && Instance._byItem.TryGetValue(item, out var entry))
+            {
                 entry.PuppetApplied = false;
+                entry.PuppetSettled = false;
+            }
         }
 
         /// <summary>
@@ -1001,6 +1098,8 @@ namespace SailwindCoop.Sync
             }
             else if (_net.Role == Role.Host)
             {
+                e.HostMoving = true;
+                e.HostMovingUntil = Time.time + 0.25f;
                 // Host dropped: send exactly one reliable free-state so clients stop following the hand,
                 // place the item at the release point and resume local physics with the throw impulse.
                 e.HolderNetId = 0;
@@ -1485,6 +1584,7 @@ namespace SailwindCoop.Sync
                 return WaitForItemState(msg, "container target");
             // The writes below can partially succeed before a container or binding fails.
             e.AppliedRemoteState = null;
+            e.PuppetSettled = false;
             e.HolderNetId = msg.HolderNetId;
             e.InventorySlot = msg.InventorySlot;
             // Every accepted revision is complete; no individual metadata field bypasses ordering.
@@ -1523,6 +1623,7 @@ namespace SailwindCoop.Sync
 
         private void PushRemoteItemPose(ItemEntry e, ItemStateMsg msg)
         {
+            e.PuppetSettled = false;
             var previous = e.RemotePose;
             if (previous != null && msg.SampleTick < previous.SampleTick && SameHeldAttachment(previous, msg))
             {
@@ -1886,6 +1987,11 @@ namespace SailwindCoop.Sync
             // static walk copy, so map the direction into that frame's axes.
             if (frame == CoordFrame.Boat) vel = BoatToProxyAxes(item, vel);
             MoveProxyToItem(item, kinematic: false, vel);
+            if (Instance != null && Instance._byItem.TryGetValue(item, out var entry))
+            {
+                entry.HostMoving = true;
+                entry.HostMovingUntil = Time.time + 0.25f;
+            }
             LogItemTransition("after free " + reason, item);
         }
 
@@ -2156,6 +2262,11 @@ namespace SailwindCoop.Sync
                 ClearStaleHangFlags(item);
                 SetPuppet(item, false);
                 MoveProxyToItem(item, kinematic: false, Vector3.zero);
+                if (Instance != null && Instance._byItem.TryGetValue(item, out var entry))
+                {
+                    entry.HostMoving = true;
+                    entry.HostMovingUntil = Time.time + 0.25f;
+                }
             }
             catch { }
         }
@@ -3079,6 +3190,7 @@ namespace SailwindCoop.Sync
                     if (_fShipItemCurrentBoatCollider != null)
                         _fShipItemCurrentBoatCollider.SetValue(item, embarkCollider);
                 }
+                item.frameCounter = 0;
 
                 var saveable = item.GetComponent<SaveablePrefab>();
                 var boatSaveable = boat.parent != null ? boat.parent.GetComponent<SaveableObject>() : null;
@@ -4296,6 +4408,7 @@ namespace SailwindCoop.Sync
                     e.LampResolved = false;
                     e.CargoResolved = false;
                     e.PuppetApplied = false;
+                    e.PuppetSettled = false;
                     e.AppliedRemoteState = null;
                     e.RemotePose = null;
                     ResetItemPose(e);
@@ -5295,6 +5408,8 @@ namespace SailwindCoop.Sync
             _hostIds.Clear();
             _tombstones.Clear();
             _pendingStates.Clear();
+            _lastOriginOffset = Vector3.zero;
+            _originEpoch = 1;
 #if DEBUG
             _nextPendingReport = 0f;
             _pendingAttemptsByReason.Clear();

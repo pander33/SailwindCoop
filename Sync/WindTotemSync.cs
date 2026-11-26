@@ -1,4 +1,3 @@
-using System.Reflection;
 using SailwindCoop.Net;
 using UnityEngine;
 
@@ -20,7 +19,6 @@ namespace SailwindCoop.Sync
     {
         private readonly CoopNet _net;
         private GoPointer _gp;
-        private FieldInfo _fHeldItem;
         private float _sendTimer;
         private bool _active;          // overlay: client currently steering the wind
         private Vector3 _lastWind;
@@ -87,7 +85,6 @@ namespace SailwindCoop.Sync
         {
             ClearOrbs();
             _gp = null;
-            _fHeldItem = null;
             _sendTimer = 0f;
             _active = false;
             _lastWind = Vector3.zero;
@@ -116,10 +113,7 @@ namespace SailwindCoop.Sync
             try
             {
                 if (_gp == null) _gp = Object.FindObjectOfType<GoPointer>();
-                if (_gp == null) return null;
-                if (_fHeldItem == null)
-                    _fHeldItem = typeof(GoPointer).GetField("heldItem", BindingFlags.NonPublic | BindingFlags.Instance);
-                return _fHeldItem != null ? _fHeldItem.GetValue(_gp) as PickupableItem : null;
+                return _gp != null ? _gp.GetHeldItem() : null;
             }
             catch { return null; }
         }

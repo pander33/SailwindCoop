@@ -30,7 +30,7 @@ namespace SailwindCoop.Sync
         // Pos is where the item last moved to and Time when. A body the physics moves (every item on
         // the host) moves only on frames with a FixedUpdate, so a step is divided by the time it took,
         // not by the frame it shows up in. Seen is the last frame the item was near.
-        private struct Track { public Transform Parent; public Vector3 Pos; public float Time; public int Seen; }
+        private sealed class Track { public Transform Parent; public Vector3 Pos; public float Time; public int Seen; }
 
         private static readonly FieldInfo ThrowPower = AccessTools.Field(typeof(GoPointer), "currentThrowPower");
 
@@ -80,32 +80,49 @@ namespace SailwindCoop.Sync
             if (dt <= 0f) return;   // a stopped world: nothing flies
 
             coop.Items.CollectLoose(_loose);
+            if (_loose.Count == 0)
+            {
+                if (_tracks.Count > 0) _tracks.Clear();
+                return;
+            }
             int frame = Time.frameCount;
             float time = Time.time;
+            Vector3 playerPos = player.position;
             Vector3 up = player.up;
-            Vector3 low = player.position - up * (FeetBelow - .2f), high = cam.transform.position;
-            bool canFall = Time.time >= _immuneUntil && CanFall(coop);
+            Vector3 low = playerPos - up * (FeetBelow - .2f), high = cam.transform.position;
+            bool canFall = time >= _immuneUntil && CanFall(coop);
             Vector3 hitVel = Vector3.zero, hitAt = Vector3.zero;
             bool hit = false;
-            foreach (var item in _loose)
+            const float watchSqr = WatchMetres * WatchMetres;
+            for (int i = 0; i < _loose.Count; i++)
             {
+                var item = _loose[i];
                 Transform t = item.transform;
                 Vector3 now = t.position;
-                if ((now - player.position).sqrMagnitude > WatchMetres * WatchMetres) continue;
+                if ((now - playerPos).sqrMagnitude > watchSqr) continue;
                 Transform parent = t.parent;
-                Vector3 framed = parent != null ? parent.InverseTransformPoint(now) : CoordSpace.LocalToReal(now);
-                if (!_tracks.TryGetValue(item, out Track last) || last.Parent != parent || last.Seen != frame - 1)
+                Vector3 framed = parent != null ? t.localPosition : CoordSpace.LocalToReal(now);
+                if (!_tracks.TryGetValue(item, out Track last))
                 {
                     _tracks[item] = new Track { Parent = parent, Pos = framed, Time = time, Seen = frame };
                     continue;
                 }
-                // Where the item was, as its own frame stands now: the velocity is the item's own.
-                Vector3 before = parent != null ? parent.TransformPoint(last.Pos) : CoordSpace.RealToLocal(last.Pos);
+                if (last.Parent != parent || last.Seen != frame - 1)
+                {
+                    last.Parent = parent; last.Pos = framed; last.Time = time; last.Seen = frame;
+                    continue;
+                }
                 float elapsed = time - last.Time;
-                if ((now - before).sqrMagnitude < 1e-8f || elapsed <= 0f)
+                if ((framed - last.Pos).sqrMagnitude < 1e-8f || elapsed <= 0f)
                 {
                     last.Seen = frame;   // no physics step this frame: the step is measured when it comes
-                    _tracks[item] = last;
+                    continue;
+                }
+                // Where the item was, as its own frame stands now: the velocity is the item's own.
+                Vector3 before = parent != null ? parent.TransformPoint(last.Pos) : CoordSpace.RealToLocal(last.Pos);
+                if ((now - before).sqrMagnitude < 1e-8f)
+                {
+                    last.Seen = frame;
                     continue;
                 }
                 if (canFall && !hit && !(ReferenceEquals(item, _released) && time < _releasedUntil))
@@ -119,9 +136,9 @@ namespace SailwindCoop.Sync
                         Plugin.Logger.LogInfo("[Knockdown] hit by '" + item.name + "' at " + speed.ToString("F1") + " m/s");
                     }
                 }
-                _tracks[item] = new Track { Parent = parent, Pos = framed, Time = time, Seen = frame };
+                last.Pos = framed; last.Time = time; last.Seen = frame;
             }
-            Forget(frame);
+            if ((frame & 31) == 0) Forget(frame);
             if (hit) Fall(player, up, hitVel, hitAt);
         }
 

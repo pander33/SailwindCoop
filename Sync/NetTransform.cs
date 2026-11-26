@@ -91,6 +91,42 @@ namespace SailwindCoop.Sync
             t.rotation = rot;
         }
 
+        /// <summary>Direct local-space apply for objects already parented to their frame transform
+        /// (e.g. boat-local items parented to the hull). Avoids world round-trips and dirtying unchanged transforms.</summary>
+        internal bool ApplyLocalAt(Transform t, double renderTick, out bool settled)
+        {
+            settled = false;
+            if (t == null || !SampleAt(renderTick, out Vector3 localPos, out Quaternion localRot, out _, convertToWorld: false))
+                return false;
+            if ((t.localPosition - localPos).sqrMagnitude > 1e-8f || Quaternion.Angle(t.localRotation, localRot) > 0.01f)
+            {
+                t.localPosition = localPos;
+                t.localRotation = localRot;
+            }
+            settled = IsSettledAt(renderTick);
+            return true;
+        }
+
+        internal bool IsSettledAt(double renderTick)
+        {
+            if (_buf.Count == 0 || _recovering) return false;
+            var last = _buf[_buf.Count - 1];
+            if (renderTick < last.Tick) return false;
+            double gap = renderTick - last.Tick;
+            float velSqr = last.RealVel.sqrMagnitude;
+            if (velSqr > 0.0025f) return gap >= 1000.0;
+            if (gap >= MaxExtrapolateMs) return true;
+            if (velSqr > 1e-8f) return false;
+            if (SmoothUnderruns && _buf.Count >= 2)
+            {
+                var prev = _buf[_buf.Count - 2];
+                long span = last.Tick - prev.Tick;
+                if (span > 0 && span <= MaxExtrapolateMs && Quaternion.Angle(prev.Rot, last.Rot) > 0.01f)
+                    return false;
+            }
+            return true;
+        }
+
         /// <summary>Bridge nearby samples in different supports after converting each to local world space.</summary>
         internal bool TryApplyTransition(Transform target, NetTransform next, long fromTick, long toTick, double renderTick,
                                          NetTransform carrier = null)
@@ -142,7 +178,7 @@ namespace SailwindCoop.Sync
             => SampleAt(serverTickNow - InterpDelayMs, out pos, out rot, out realVel);
 
         internal bool SampleAt(double renderTick, out Vector3 pos, out Quaternion rot, out Vector3 realVel,
-                               bool trackRecovery = true, bool usePositionRecovery = true)
+                               bool trackRecovery = true, bool usePositionRecovery = true, bool convertToWorld = true)
         {
             pos = Vector3.zero; rot = Quaternion.identity; realVel = Vector3.zero;
             if (_buf.Count == 0) return false;
@@ -150,7 +186,7 @@ namespace SailwindCoop.Sync
             // Before the oldest sample: snap to oldest.
             if (renderTick <= _buf[0].Tick)
             {
-                ConvertSample(renderTick, _buf[0].RealPos, _buf[0].Rot, out pos, out rot, trackRecovery, usePositionRecovery);
+                ConvertSample(renderTick, _buf[0].RealPos, _buf[0].Rot, out pos, out rot, trackRecovery, usePositionRecovery, convertToWorld);
                 realVel = _buf[0].RealVel;
                 return true;
             }
@@ -161,7 +197,7 @@ namespace SailwindCoop.Sync
             {
                 var previous = SmoothUnderruns && _buf.Count >= 2 ? _buf[_buf.Count - 2] : last;
                 Predict(previous, last, renderTick, out var predictedPosition, out var predictedRotation);
-                ConvertSample(renderTick, predictedPosition, predictedRotation, out pos, out rot, trackRecovery, usePositionRecovery);
+                ConvertSample(renderTick, predictedPosition, predictedRotation, out pos, out rot, trackRecovery, usePositionRecovery, convertToWorld);
                 realVel = last.RealVel;
                 return true;
             }
@@ -176,7 +212,7 @@ namespace SailwindCoop.Sync
                     double span = b.Tick - a.Tick;
                     float f = span > 0 ? (float)((renderTick - a.Tick) / span) : 0f;
                     ConvertSample(renderTick, Vector3.Lerp(a.RealPos, b.RealPos, f), Quaternion.Slerp(a.Rot, b.Rot, f),
-                            out pos, out rot, trackRecovery, usePositionRecovery);
+                            out pos, out rot, trackRecovery, usePositionRecovery, convertToWorld);
                     realVel = Vector3.Lerp(a.RealVel, b.RealVel, f);
                     return true;
                 }
@@ -241,7 +277,7 @@ namespace SailwindCoop.Sync
         }
 
         private void ConvertSample(double tick, Vector3 storedPos, Quaternion storedRot, out Vector3 pos, out Quaternion rot,
-                                   bool trackRecovery, bool usePositionRecovery)
+                                   bool trackRecovery, bool usePositionRecovery, bool convertToWorld = true)
         {
             if (SmoothUnderruns && trackRecovery)
             {
@@ -286,8 +322,16 @@ namespace SailwindCoop.Sync
                 }
                 _lastRenderTick = tick;
             }
-            pos = ToWorldPos != null ? ToWorldPos(storedPos) : storedPos;
-            rot = ToWorldRot != null ? ToWorldRot(storedRot) : storedRot;
+            if (convertToWorld)
+            {
+                pos = ToWorldPos != null ? ToWorldPos(storedPos) : storedPos;
+                rot = ToWorldRot != null ? ToWorldRot(storedRot) : storedRot;
+            }
+            else
+            {
+                pos = storedPos;
+                rot = storedRot;
+            }
         }
 
         public void Clear()

@@ -45,7 +45,7 @@ namespace SailwindCoop.Sync
             hooks.Install(typeof(Shipyard), "CancelOrder", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreCancel)), postfix: Hook(nameof(PostCancel))));
             hooks.Install(typeof(Shipyard), "DischargeShip", Type.EmptyTypes, m => harmony.Patch(m, postfix: Hook(nameof(PostExit))));
             hooks.Install(typeof(Shipyard), "ConfirmOrder", Type.EmptyTypes, m => harmony.Patch(m,
-                prefix: Hook(nameof(PreOrder), Priority.First), postfix: Hook(nameof(EndOrder), Priority.Last), finalizer: Hook(nameof(EndFault))));
+                prefix: Hook(nameof(PreOrder), Priority.First), postfix: Hook(nameof(EndOrder), Priority.Last), finalizer: Hook(nameof(EndFault), Priority.Last)));
             hooks.Install(typeof(ShipyardSailInstaller), "InstallSails", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreInstall))));
             hooks.Install(typeof(Shipyard), "ResetOrder", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreResetOrder))));
             hooks.Install(typeof(SaveableBoatCustomization), "GetData", Type.EmptyTypes, m => harmony.Patch(m, prefix: Hook(nameof(PreData)),

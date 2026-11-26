@@ -283,6 +283,20 @@ namespace SailwindCoop.Sync
             if (_fleet != null) { foreach (var c in _fleet.Values) if (c.IndexOf(rope) >= 0) return c.SuppressCarryTrigger(rope); return false; }
             return _net.Role == Role.Client && _net.State == LinkState.Connected && IndexOf(rope) >= 0;
         }
+        /// <summary>Suppress vanilla <c>PickupableBoatMooringRope.OnTriggerEnter</c>: always on a client
+        /// (host owns mooring) and on the host while a remote player carries or slaves the rope end (moving
+        /// the proxy into a bollard near the remote hand must not silently re-moor it behind their back).</summary>
+        internal bool SuppressDockTrigger(PickupableBoatMooringRope rope)
+        {
+            if (_net.State != LinkState.Connected || rope == null) return false;
+            if (_fleet != null) { foreach (var c in _fleet.Values) if (c.IndexOf(rope) >= 0) return c.SuppressDockTrigger(rope); return false; }
+            int idx = IndexOf(rope);
+            if (idx < 0) return false;
+            if (_net.Role == Role.Client) return true;
+            if (_net.Role == Role.Host && _carries.TryGetValue(idx * 2, out var carry))
+                return (carry.Holder != 0 && carry.Holder != _net.MyNetId) || carry.Slaved;
+            return false;
+        }
         public void ClearRemoteActor(uint actor)
         {
             if (_fleet != null) { foreach (var c in _fleet.Existing) c.ClearRemoteActor(actor); return; }
