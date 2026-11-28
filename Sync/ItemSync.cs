@@ -3721,6 +3721,7 @@ namespace SailwindCoop.Sync
             _byInstanceId.Remove(instanceId);
             if (item != null)
             {
+                _destroyingItems.Add(item);
                 _byItem.Remove(item);
                 _localHeld.Remove(item);
                 _authoredIdentity.Remove(item);
@@ -4416,8 +4417,7 @@ namespace SailwindCoop.Sync
             {
                 if (item == null || _destroyingItems.Contains(item)) continue;
                 var saveable = item.GetComponent<SaveablePrefab>();
-                // Vanilla's floating spawner marks its finds sold and farLod, but
-                // Good.RegisterAsMissionless only sets the mission index.
+                // 0.41.1 registers floating finds during spawn. Older or modded spawners can still leave them without an id.
                 if (_net.Role == Role.Host && item.sold && saveable != null && saveable.prefabIndex > 0 &&
                     saveable.instanceId == 0 && FarLodFlag?.GetValue(item) is true && !InPersonalInventory(item))
                     saveable.RegisterToSave();
@@ -5498,6 +5498,7 @@ namespace SailwindCoop.Sync
             _poseScratch.Clear();
             _pendingDynamic.Clear();
             _suppressNextDrop.Clear();
+            ClearOperations();
             _hostIds.Clear();
             _tombstones.Clear();
             _pendingStates.Clear();
@@ -5529,7 +5530,6 @@ namespace SailwindCoop.Sync
             _pendingMissionGoods.Clear();
             _nextRequest = 0;
             ClearTradeSaleSession();
-            ClearOperations();
             _puppetAwaitingStart.Clear();
             _puppetStartScratch.Clear();
             ItemComponents.Clear();

@@ -73,6 +73,7 @@ namespace SailwindCoop.Sync
         private readonly Dictionary<ulong, PendingItemResult> _receivedOperations = new Dictionary<ulong, PendingItemResult>();
         private readonly List<PendingItemResult> _unfinishedResults = new List<PendingItemResult>();
         internal void MarkOperationDestroy(ShipItem item) { if (item != null) _destroyingItems.Add(item); }
+        internal bool IsOperationDestroying(ShipItem item) => item != null && _destroyingItems.Contains(item);
         private const float OperationRetryInterval = 0.1f;
         private const float WaitingOperationTimeoutSeconds = 20f;
         private sealed class WaitingOperation
@@ -91,17 +92,47 @@ namespace SailwindCoop.Sync
         }
         private readonly HashSet<ulong> _completedOperationResults = new HashSet<ulong>();
         private readonly OperationLedger<byte[]> _operationResults = new OperationLedger<byte[]>();
-        private readonly Dictionary<uint, Dictionary<int, ShipItem>> _operationLocalCreated = new Dictionary<uint, Dictionary<int, ShipItem>>();
+        private sealed class LocalOperation
+        {
+            internal Dictionary<int, ShipItem> Created;
+            internal int DeferredTarget;
+        }
+        private readonly Dictionary<uint, LocalOperation> _localOperations = new Dictionary<uint, LocalOperation>();
         private readonly Dictionary<ulong, WaitingOperation> _waitingOperations = new Dictionary<ulong, WaitingOperation>();
         private readonly List<WaitingOperation> _waitingOperationScratch = new List<WaitingOperation>();
         private float _nextOperationRetry;
 
         private bool IsOperationCreated(ShipItem item)
         {
-            foreach (var created in _operationLocalCreated.Values)
-                if (created.ContainsValue(item)) return true;
+            foreach (var operation in _localOperations.Values)
+                if (operation.Created.ContainsValue(item)) return true;
+            return IsPendingChopOutput(item);
+        }
+        internal bool IsPendingChopOutput(ShipItem item)
+        {
+            if (!IsClientSession || item == null || _localOperations.Count == 0) return false;
+            int id = InstanceIdOf(item);
+            if (_hostIds.Contains(id)) return false;
+            foreach (var operation in _localOperations.Values)
+                if (operation.DeferredTarget != 0 &&
+                    (operation.Created.ContainsKey(id) || operation.Created.ContainsValue(item))) return true;
             return false;
         }
+
+        internal bool IsPendingChopTarget(ShipItem item)
+        {
+            if (!IsClientSession || item == null || _localOperations.Count == 0) return false;
+            int id = InstanceIdOf(item);
+            if (id == 0) return false;
+            foreach (var operation in _localOperations.Values)
+                if (operation.DeferredTarget == id) return true;
+            return false;
+        }
+
+        internal bool IsAwaitingChopIdentity(ShipItem item)
+            => IsClientSession && HasStableIdentity(item) &&
+                (_pendingClientItems.Contains(item) || _pendingBeltWithdrawals.Contains(item) ||
+                 !_baselineReady || (_baselineItems.Contains(item) && !_hostIds.Contains(InstanceIdOf(item))));
 
         internal Dictionary<ShipItem, ItemStateMsg> CaptureOperationItems()
         {
@@ -138,7 +169,8 @@ namespace SailwindCoop.Sync
             return BuildState(e, _net.Clock.ServerTick);
         }
         internal void SendOperation(Dictionary<ShipItem, ItemStateMsg> before, HashSet<int> consumed,
-            HashSet<int> originalObjects, List<DamageRequestMsg> damage, string label, byte worldEffects, float totemAttraction)
+            HashSet<int> originalObjects, List<DamageRequestMsg> damage, string label, byte worldEffects, float totemAttraction,
+            ItemStateMsg creationFrame)
         {
             if (_net.State != LinkState.Connected) return;
             var changed = new List<ItemStateMsg>();
@@ -151,11 +183,22 @@ namespace SailwindCoop.Sync
             }
             var created = new List<CreatedItemState>();
             var localCreated = new Dictionary<int, ShipItem>();
+            var sourceBoat = creationFrame?.Frame == CoordFrame.Boat ? BoatLocator.FindByIndex(creationFrame.BoatIndex) : null;
             if (originalObjects != null)
                 foreach (var item in ShipItemRegistry.Active())
                     if (item != null && !originalObjects.Contains(item.GetInstanceID()) && HasStableIdentity(item))
                     {
                         var state = CaptureOperationItem(item);
+                        // ChopItem instantiates unparented wood. Until embark detection runs,
+                        // it still needs to travel in the source item's moving deck frame.
+                        if (state.Frame == CoordFrame.World && sourceBoat != null)
+                        {
+                            state.Frame = CoordFrame.Boat;
+                            state.BoatIndex = creationFrame.BoatIndex;
+                            state.Pos = sourceBoat.InverseTransformPoint(item.transform.position);
+                            state.Rot = UnityEngine.Quaternion.Inverse(sourceBoat.rotation) * item.transform.rotation;
+                            state.Vel = sourceBoat.InverseTransformDirection(state.Vel);
+                        }
                         created.Add(new CreatedItemState { LocalId = state.InstanceId, State = state });
                         localCreated[state.InstanceId] = item;
                     }
@@ -171,7 +214,10 @@ namespace SailwindCoop.Sync
             var dead = new List<int>(consumed).ToArray();
             if (_net.Role == Role.Client)
             {
-                _operationLocalCreated[operation] = localCreated;
+                _localOperations[operation] = new LocalOperation {
+                    Created = localCreated,
+                    DeferredTarget = creationFrame != null && consumed.Contains(creationFrame.InstanceId) ? creationFrame.InstanceId : 0
+                };
                 _net.Broadcast(new ItemOperationRequestMsg {
                     OperationId = operation, WorldEffects = worldEffects, TotemAttraction = totemAttraction, Changed = changed.ToArray(), Created = created.ToArray(),
                     Consumed = dead, Damage = damage.ToArray()
@@ -214,6 +260,13 @@ namespace SailwindCoop.Sync
             // A retry reuses the admitted payload and the objects staged for that payload.
             if (waiting != null) msg = waiting.Request;
             if (refreshItems) RefreshItems(force: true);
+            // Distinct actions can consume the same object. Once it is gone, a second
+            // conversion must not create another set of products from it.
+            if (msg.Created.Length != 0 && Array.Exists(msg.Consumed, _tombstones.Contains))
+            {
+                FinishMissingTarget(msg, key, "conversion source already consumed");
+                return;
+            }
             // Bind all existing targets before applying any effects; loading is a technical wait.
             foreach (var state in msg.Changed)
                 if (!_tombstones.Contains(state.InstanceId))
@@ -371,7 +424,7 @@ namespace SailwindCoop.Sync
             }
             return ready;
         }
-        private void ExpireWaitingOperation(ItemOperationRequestMsg msg, ulong key)
+        private void FinishMissingTarget(ItemOperationRequestMsg msg, ulong key, string reason)
         {
             if (_waitingOperations.TryGetValue(key, out var waiting)) waiting.DiscardStagedItems();
             _waitingOperations.Remove(key);
@@ -391,9 +444,8 @@ namespace SailwindCoop.Sync
             Buffer.BlockCopy(reply.Data, 0, retainedReply, 0, reply.Length);
             _operationResults.Replace(msg.Actor, msg.OperationId, retainedReply);
             _net.Broadcast(result, LiteNetLib.DeliveryMethod.ReliableOrdered);
-            Plugin.Logger.LogWarning("[ItemSync] Expired waiting operation actor=" + msg.Actor + " id=" + msg.OperationId +
-                " after " + WaitingOperationTimeoutSeconds + "s");
-            Remember("expired operation #" + msg.OperationId + " actor=" + msg.Actor);
+            Plugin.Logger.LogWarning("[ItemSync] Missing operation target actor=" + msg.Actor + " id=" + msg.OperationId + ": " + reason);
+            Remember("missing target for operation #" + msg.OperationId + " actor=" + msg.Actor);
         }
         /// <summary>Host: a request still waiting for its targets must not change the world after its
         /// author left. Results already applied stay in the ledger.</summary>
@@ -481,19 +533,35 @@ namespace SailwindCoop.Sync
                 using (InteractionContext.Begin(InteractionSource.RemoteApply))
                 {
                     Dictionary<int, ShipItem> local = null;
-                    if (msg.Actor == _net.MyNetId) _operationLocalCreated.TryGetValue(msg.OperationId, out local);
+                    bool chop = false;
+                    if (msg.Actor == _net.MyNetId && _localOperations.TryGetValue(msg.OperationId, out var operation))
+                    {
+                        local = operation.Created;
+                        chop = operation.DeferredTarget != 0;
+                    }
                     for (int index = 0; index < msg.Created.Length; index++)
                     {
                         var creation = msg.Created[index];
                         complete &= progress.TryApply(ItemResultSection.Identity, index, () => {
                             var state = creation.State;
-                            if (_tombstones.Contains(state.InstanceId)) return true;
-                            if (!_baselineReady) return false;
-                            if (local != null && local.TryGetValue(creation.LocalId, out var item) && item != null)
+                            bool consumed = _tombstones.Contains(state.InstanceId);
+                            if (consumed)
                             {
-                                RemapLocalItem(item, state.InstanceId);
-                                _hostIds.Add(state.InstanceId);
-                                RefreshItems(force: true);
+                                if (chop && local.TryGetValue(creation.LocalId, out var predicted))
+                                    DiscardOperationCreation(creation.LocalId, FindChopOutput(creation.LocalId, predicted));
+                                return true;
+                            }
+                            if (!_baselineReady) return false;
+                            if (local != null && local.TryGetValue(creation.LocalId, out var item))
+                            {
+                                if (chop) item = FindChopOutput(creation.LocalId, item);
+                                if (item != null)
+                                {
+                                    RemapLocalItem(item, state.InstanceId);
+                                    _hostIds.Add(state.InstanceId);
+                                    RefreshItems(force: true);
+                                }
+                                else if (chop) RemoveCachedLocalItem(creation.LocalId);
                             }
                             return ResolveClient(state.InstanceId, state.PrefabIndex, state.Frame, state.BoatIndex,
                                 state.Pos, state.Amount, state.Health, state.Sold, state.Nailed, true)?.Item != null;
@@ -545,15 +613,16 @@ namespace SailwindCoop.Sync
                                 bool committed = false;
                                 foreach (var creation in msg.Created)
                                     if (creation.LocalId == pair.Key) { committed = true; break; }
-                                if (!committed && pair.Value != null)
+                                if (!committed)
                                     complete &= progress.TryApply(ItemResultSection.RejectedCreation, pair.Key, () => {
-                                        ItemComponents.RemoveBindings(pair.Value);
-                                        UnityEngine.Object.Destroy(pair.Value.gameObject); return true;
+                                        var item = chop ? FindChopOutput(pair.Key, pair.Value) : pair.Value;
+                                        DiscardOperationCreation(pair.Key, item);
+                                        return true;
                                     }, fault);
                             }
                         }
                         if (!complete) return;
-                        _operationLocalCreated.Remove(msg.OperationId);
+                        _localOperations.Remove(msg.OperationId);
                         if (msg.Status != 0)
                             foreach (var entry in _items) entry.Gate.Cancel(msg.Actor, msg.OperationId, _net.MyNetId);
                     }
@@ -651,7 +720,7 @@ namespace SailwindCoop.Sync
                     if (!_waitingOperations.ContainsKey(key)) continue;
                     if (unpaused && waiting.Waited >= WaitingOperationTimeoutSeconds)
                     {
-                        ExpireWaitingOperation(waiting.Request, key);
+                        FinishMissingTarget(waiting.Request, key, "waited " + WaitingOperationTimeoutSeconds + "s");
                         continue;
                     }
                     ApplyOperation(waiting.Request, null, refreshItems: false);
@@ -659,10 +728,37 @@ namespace SailwindCoop.Sync
             }
             finally { _waitingOperationScratch.Clear(); }
         }
+        private ShipItem FindChopOutput(int provisionalId, ShipItem item)
+        {
+            // A boat or house can unload and reload before the operation completes.
+            if (item != null || _hostIds.Contains(provisionalId)) return item;
+            foreach (var candidate in ShipItemRegistry.Active())
+                if (candidate != null && InstanceIdOf(candidate) == provisionalId) return candidate;
+            return null;
+        }
+
+        private void DiscardOperationCreation(int provisionalId, ShipItem item)
+        {
+            RemoveCachedLocalItem(provisionalId);
+            if (item == null || _destroyingItems.Contains(item)) return;
+            ItemComponents.RemoveBindings(item);
+            item.GetComponent<SaveablePrefab>()?.Unregister();
+            _destroyingItems.Add(item);
+            UnityEngine.Object.Destroy(item.gameObject);
+        }
+
         private void ClearOperations()
         {
             foreach (var waiting in _waitingOperations.Values) waiting.DiscardStagedItems();
-            _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _waitingOperationScratch.Clear(); _nextOperationRetry = 0f; _operationLocalCreated.Clear();
+            // A disconnected actor may stay in its copy of the world. An unconfirmed chop
+            // left its source intact, so its predicted output must not become a local duplicate.
+            foreach (var operation in _localOperations.Values)
+                if (operation.DeferredTarget != 0)
+                    foreach (var pair in operation.Created)
+                        if (pair.Value == null || !_hostIds.Contains(InstanceIdOf(pair.Value)))
+                            Runtime.PatchGuard.Run(() => DiscardOperationCreation(pair.Key, FindChopOutput(pair.Key, pair.Value)), error =>
+                                Plugin.Logger.LogWarning("[ItemSync] Discarding unconfirmed firewood: " + error.Message));
+            _drainItem = null; _lastDrainSent = 0f; _operationApplying = false; _operationResults.Clear(); _waitingOperations.Clear(); _waitingOperationScratch.Clear(); _nextOperationRetry = 0f; _localOperations.Clear();
             _receivedOperations.Clear(); _completedOperationResults.Clear(); _unfinishedResults.Clear(); _destroyingItems.Clear();
             ItemOperationCapture.Clear();
         }

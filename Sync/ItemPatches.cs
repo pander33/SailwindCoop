@@ -99,11 +99,22 @@ namespace SailwindCoop.Sync
             try { Plugin.Logger?.LogWarning(message); } catch { }
         }
 
-        private static void PrePickup(PickupableItem item)
-        { try { MooringPatches.ForgetPickup(item as PickupableBoatMooringRope); }
-          catch (Exception e) { WarnPatch("[ItemPatches] PrePickup: " + e); } }
-        private static void PostPickup(GoPointer __instance, PickupableItem item)
+        private static bool PrePickup(PickupableItem item)
         {
+            try
+            {
+                var items = ItemSync.Instance;
+                if (item is ShipItem shipItem &&
+                    (items?.IsPendingChopOutput(shipItem) == true || items?.IsPendingChopTarget(shipItem) == true))
+                    return false;
+                MooringPatches.ForgetPickup(item as PickupableBoatMooringRope);
+            }
+            catch (Exception e) { WarnPatch("[ItemPatches] PrePickup: " + e); }
+            return true;
+        }
+        private static void PostPickup(GoPointer __instance, PickupableItem item, bool __runOriginal)
+        {
+            if (!__runOriginal) return;
             try { ItemSync.Instance?.NotifyPickup(__instance, item); }
             catch (Exception e) { WarnPatch("[ItemPatches] PostPickup: " + e.Message); }
         }

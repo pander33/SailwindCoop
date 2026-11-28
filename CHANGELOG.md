@@ -2,6 +2,21 @@
 
 All notable user-facing changes are documented in this file.
 
+## [0.12.2] - 2026-11-28
+
+Requires Sailwind 0.41.1. Wire protocol 118 is unchanged. Update the host and all guests
+to 0.12.2 for hatchet and mooring sync.
+
+### Changed
+
+- Hatchet actions sync the wooden item being broken up and the firewood it yields. Guests wait
+  for the host to confirm removal. Firewood spawned on a moving deck stays with the boat, and
+  simultaneous chops of the same item produce one batch.
+- Dropping a freshly untied mooring line follows the game's new rule. It can automatically tie
+  to a bollard strictly less than one metre away. A targeted throw still uses the chosen bollard.
+- Floating finds use Sailwind 0.41.1's native save registration. The co-op fallback still
+  assigns an ID when a spawner leaves an item unregistered.
+
 ## [0.12.1] - 2026-11-26
 
 Requires Sailwind 0.41. Wire protocol 118 is unchanged, so 0.12.0 and 0.12.1 can connect.

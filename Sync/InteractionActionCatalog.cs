@@ -71,6 +71,7 @@ namespace SailwindCoop.Sync
             "PickupableBoatMooringRope",
             "PickupableItem",
             "ShipItem",
+            "ShipItemAxe",
             "ShipItemBed",
             "ShipItemBottle",
             "ShipItemBroom",
@@ -214,6 +215,8 @@ namespace SailwindCoop.Sync
             new Input("ShipItem", "OnItemClick", "PickupableItem"),
             new Input("ShipItem", "OnAltActivate"),
             new Input("ShipItemBed", "OnAltActivate"),
+            new Input("ShipItemAxe", "OnAltActivate"),
+            new Input("ShipItemAxe", "OnAltHeld"),
             new Input("ShipItemBottle", "OnItemClick", "PickupableItem"),
             new Input("ShipItemBottle", "OnAltActivate"),
             new Input("ShipItemBottle", "OnAltHeld"),
@@ -323,6 +326,8 @@ namespace SailwindCoop.Sync
         }
         internal static readonly Route[] Routes = {
             new Route(new InteractionActionCatalog.Input("ShipItem", "OnAltActivate"), "Shop", "Shopkeeper.TryToSellItem; actor wallet/UI"),
+            new Route(new InteractionActionCatalog.Input("ShipItemAxe", "OnAltActivate"), "Shop", "Purchase or select the local chopping target"),
+            new Route(new InteractionActionCatalog.Input("ShipItemAxe", "OnAltHeld"), "Item results", "ChopItem consumes a target and creates registered firewood"),
             new Route(new InteractionActionCatalog.Input("ShipItemBed", "OnAltActivate"), "Sleep", "Addressed EnterBed lifecycle; unsold shop branch stays local"),
             new Route(new InteractionActionCatalog.Input("ShipItemBottle", "OnAltActivate"), "Shop", "Shopkeeper.TryToSellItem"),
             new Route(new InteractionActionCatalog.Input("ShipItemBottle", "OnAltHeld"), "Items", "Drink result; personal needs stay local"),

@@ -10,6 +10,7 @@ namespace SailwindCoop.Sync
     internal static class MooringCarryPatches
     {
         private static MethodInfo _returnRope;
+        private static FieldInfo _justUnmoored;
 
         internal static void Apply(Harmony harmony)
         {
@@ -22,6 +23,7 @@ namespace SailwindCoop.Sync
             if (typeof(PickupableBoatMooringRope).Assembly.GetType("BoatCustomColors") != null)
             {
                 _returnRope = AccessTools.Method(typeof(PickupableBoatMooringRope), "ThrowRopeSequenceLocal", new[] { typeof(Vector3) });
+                _justUnmoored = AccessTools.Field(typeof(PickupableBoatMooringRope), "justUnmoored");
                 hooks.Install(typeof(PickupableBoatMooringRope), "OnDrop", Type.EmptyTypes, m =>
                 {
                     if (_returnRope == null) throw new MissingMethodException("PickupableBoatMooringRope.ThrowRopeSequenceLocal");
@@ -80,9 +82,10 @@ namespace SailwindCoop.Sync
             var parent = ItemComponents.Read<Transform>(rope, "initialParent");
             if (parent == null) return null;
             var position = rope.transform.position;
-            float nearest = Vector3.Distance(position, parent.TransformPoint(initialPosition));
+            float nearest = _justUnmoored?.GetValue(rope) is true
+                ? 1f : Vector3.Distance(position, parent.TransformPoint(initialPosition));
             GPButtonDockMooring dock = null;
-            // Match Sailwind 0.41: only posts within 10 m and closer than the end's deck mount.
+            // 0.41.1 limits a freshly untied end to posts strictly within 1 m.
             foreach (var collider in Physics.OverlapSphere(position, 10f))
             {
                 var candidate = collider.GetComponent<GPButtonDockMooring>();

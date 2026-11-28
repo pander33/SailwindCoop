@@ -1,6 +1,6 @@
 # Runtime reference
 
-Current implementation: plugin 0.12.1, Protocol 118, Sailwind 0.41. The Hello handshake compares
+Current implementation: plugin 0.12.2, Protocol 118, Sailwind 0.41.1. The Hello handshake compares
 the players' game versions before the host sends the world.
 Architecture and mandatory development rules: [CLAUDE.md](../CLAUDE.md).
 Verification status and the only active task list: [СОСТОЯНИЕ.md](../СОСТОЯНИЕ.md).
@@ -44,6 +44,8 @@ Domain notes:
   released. An unavailable dock is acknowledged with `StateAvailable=false`; a client without the
   dock defers application. Rope ends and the length reel are carried through `MooringCarry`.
   In 0.41, dropping an end near a bollard uses the same Moor request as a targeted throw.
+  On 0.41.1, the drop of a freshly untied end only considers bollards closer than 1 m,
+  matching the game's `justUnmoored` rule. The explicit throw still selects its own target.
   A relayed drop returns the end to the deck if the Moor request is still waiting for its dock.
   Requests with a dock identity wait for that identity. Position lookup is used for messages
   without an identity.
@@ -368,9 +370,13 @@ Domain notes:
   item becomes shared through `NotifyClientAuthored` (as a bought good), the host's through its
   item scan. A client writes the takes it received again after `SaveLoadManager.LoadGame`, so a
   take made while it loads the host's save is not lost.
-- **Floating finds (game 0.41):** `RandomFloatingItemSpawner.Update` runs on the host and in
-  single-player. The host registers the finds when its item scan first sees them. Guests receive
-  the registered items and their long-range LOD through
+- **Hatchet (game 0.41.1):** `ShipItemAxe.ChopItem` consumes a wooden item and creates registered
+  firewood. The actor runs the game action and the item operation carries the consumed identity
+  and the firewood to the host. A conversion whose source was already consumed creates no
+  additional items on the host.
+- **Floating finds:** `RandomFloatingItemSpawner.Update` runs on the host and in single-player.
+  Sailwind 0.41.1 registers finds during spawn. The host's item scan assigns an identity to
+  unregistered finds from older or modded spawners. Guests receive the items and their long-range LOD through
   `ItemSync`'s normal spawn and late-join manifest.
 - **Teleport to boat:** `Sync/BoatTeleport.cs`, the F8 button. Local only, no message: it boards
   through `PlayerEmbarkerNew` (private `currentBoat`, `TeleportToWalkCol`, `PlayerEmbark`) and the

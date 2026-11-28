@@ -249,6 +249,7 @@ internal static class ItemReliabilityTests
             Assert(ledger.TryBegin(11, 42, null, out _), "other actor was treated as duplicate");
         });
         test("production T11 snapshot binding membership commit preflight and disconnect paths are wired", VerifyProductionPaths);
+        test("production hatchet waits for authoritative consumption and rejects duplicate conversion sources", VerifyHatchetPath);
         test("crate mutations wait for item and crate bodies on both network paths", VerifyCrateReadiness);
         test("superseded crate request can acknowledge a newer host state to its original guest", VerifyCancelledCrateRequest);
         test("save recovery hooks the iterator and guards both join paths", VerifySaveRecovery);
@@ -269,6 +270,30 @@ internal static class ItemReliabilityTests
         instruction.Operand is MethodReference called && called.Name == name);
     private static IEnumerable<MethodDefinition> Methods(TypeDefinition type)
         => type.Methods.Concat(type.NestedTypes.SelectMany(Methods));
+    private static void VerifyHatchetPath()
+    {
+        using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
+        {
+            var types = plugin.MainModule.Types.ToDictionary(type => type.Name);
+            var items = types["ItemSync"];
+            var capture = types["ItemOperationCapture"];
+            var patches = types["ItemOperationPatches"];
+            var apply = Method(items, "ApplyOperation").Body.Instructions.ToList();
+            int reject = apply.FindIndex(i => i.Operand is MethodReference call && call.Name == "FinishMissingTarget");
+            int create = apply.FindIndex(i => i.Operand is MethodReference call && call.Name == "CreateOperationItem");
+            Assert(Method(patches, "Apply").Body.Instructions.Any(i => Equals(i.Operand, "ChopItem")) &&
+                Method(patches, "PreDestroy").ReturnType.Name == "Boolean" &&
+                Method(capture, "Consume").Body.Instructions.Any(i =>
+                    i.Operand is FieldReference field && field.Name == "DeferConsumption"), "guest destruction is not deferred at chop completion");
+            Assert(reject >= 0 && create > reject && Calls(Method(items, "FinishMissingTarget"), "Replace"),
+                "host can create products before rejecting an already consumed source");
+            Assert(Calls(Method(items, "SendOperation"), "InverseTransformPoint") &&
+                Calls(Method(types["ItemPatches"], "PrePickup"), "IsPendingChopOutput") &&
+                Calls(Method(items, "DiscardOperationCreation"), "Unregister") &&
+                Calls(Method(items, "DiscardOperationCreation"), "RemoveCachedLocalItem"),
+                "firewood placement, pickup or cleanup lost its operation gate");
+        }
+    }
     private static void VerifyCrateReadiness()
     {
         using (var plugin = AssemblyDefinition.ReadAssembly(PluginPath()))
@@ -288,7 +313,7 @@ internal static class ItemReliabilityTests
             int prepare = body.FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "PrepareCreatedCrateItems");
             int begin = body.FindIndex(instruction => instruction.Operand is MethodReference called && called.Name == "TryBegin");
             Assert(prepare >= 0 && prepare < begin && Calls(Method(items, "PrepareCreatedCrateItems"), "GetBody") &&
-                Calls(Method(items, "ExpireWaitingOperation"), "DiscardStagedItems") &&
+                Calls(Method(items, "FinishMissingTarget"), "DiscardStagedItems") &&
                 Calls(Method(items, "ForgetWaitingOperations"), "DiscardStagedItems"),
                 "new crate item is applied before readiness or leaks from abandoned operation");
         }
@@ -448,7 +473,7 @@ internal static class ItemReliabilityTests
                 "ProcessPendingDynamic missing re-entry guard");
 
             var tickOps = Method(items, "TickOperations");
-            Assert(Calls(tickOps, "ExpireWaitingOperation") && Calls(tickOps, "get_timeScale"),
+            Assert(Calls(tickOps, "FinishMissingTarget") && Calls(tickOps, "get_timeScale"),
                 "TickOperations must gate waiting-operation expiration on unpaused time");
 
             var notifyDrop = Method(items, "NotifyDrop");

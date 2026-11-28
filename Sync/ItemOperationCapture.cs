@@ -35,27 +35,36 @@ namespace SailwindCoop.Sync
             _dropped.Remove(item);
             return Time.unscaledTime - at <= DropWindow;
         }
-        internal static void Consumed(ShipItem item)
+        internal static bool Consume(ShipItem item)
         {
-            if (_active == null || item == null) return;
-            ItemStateMsg before;
-            if (_active.Before.TryGetValue(item, out before))
-            { _active.Dead.Add(before.InstanceId); ItemSync.Instance?.MarkOperationDestroy(item); }
+            if (_active == null || item == null || !_active.Before.TryGetValue(item, out var before)) return true;
+            _active.Dead.Add(before.InstanceId);
+            // Leave the guest's source intact until the host confirms its removal.
+            if (_active.DeferConsumption) return false;
+            ItemSync.Instance?.MarkOperationDestroy(item);
+            return true;
         }
         internal static bool Damage(DamageRequestMsg damage)
         { if (_active == null) return false; _active.Hull.Add(damage); return true; }
         internal static void RainbowEffect() { if (_active != null && !InteractionContext.Suppressed) _active.WorldEffects |= 1; }
         internal static void TotemEffect()
         { if (_active != null && !InteractionContext.Suppressed) { _active.WorldEffects |= 2; _active.TotemAttraction = WeatherStorms.totemAttraction; } }
-        internal static Scope Begin(string label, bool creates, bool completedInput, ShipItem first, ShipItem second)
+        internal static Scope Begin(string label, bool creates, bool completedInput, ShipItem first, ShipItem second,
+            bool requiresTarget = false)
         {
             if (_active != null || InteractionContext.Suppressed || (!InteractionContext.HasInput && !completedInput) ||
                 ItemSync.Instance == null || !ItemSync.Instance.IsSessionActive) return null;
+            if (requiresTarget && first == null) return null;
+            var before = first != null ? ItemSync.Instance.CaptureOperationParticipants(first, second) :
+                ItemSync.Instance.CaptureOperationItems();
+            // Firewood from a local-only item has no shared source to consume.
+            if (requiresTarget && !before.ContainsKey(first)) return null;
             var scope = new Scope
             {
                 Label = label,
-                Before = first != null ? ItemSync.Instance.CaptureOperationParticipants(first, second) :
-                    ItemSync.Instance.CaptureOperationItems()
+                Before = before,
+                CreationFrame = requiresTarget ? before[first] : null,
+                DeferConsumption = requiresTarget && ItemSync.Instance.IsClientSession,
             };
             if (creates)
             {
@@ -68,6 +77,8 @@ namespace SailwindCoop.Sync
         {
             internal string Label;
             internal Dictionary<ShipItem, ItemStateMsg> Before;
+            internal ItemStateMsg CreationFrame;
+            internal bool DeferConsumption;
             internal HashSet<int> Original;
             internal readonly HashSet<int> Dead = new HashSet<int>();
             internal readonly List<DamageRequestMsg> Hull = new List<DamageRequestMsg>();
@@ -79,7 +90,7 @@ namespace SailwindCoop.Sync
                 if (_disposed) return;
                 _disposed = true;
                 if (_active == this) _active = null;
-                ItemSync.Instance?.SendOperation(Before, Dead, Original, Hull, Label, WorldEffects, TotemAttraction);
+                ItemSync.Instance?.SendOperation(Before, Dead, Original, Hull, Label, WorldEffects, TotemAttraction, CreationFrame);
             }
         }
     }
@@ -91,6 +102,8 @@ namespace SailwindCoop.Sync
             var hooks = new PatchHookCatalog();
             Install(harmony, hooks, typeof(ShipItemKnife), "CutFood", new[] { typeof(FoodState) });
             Install(harmony, hooks, typeof(ShipItemTobaccoPack), "CutPack", Type.EmptyTypes);
+            var axe = typeof(ShipItem).Assembly.GetType("ShipItemAxe");
+            if (axe != null) Install(harmony, hooks, axe, "ChopItem", new[] { typeof(ShipItem) });
             Install(harmony, hooks, typeof(ShipItemElixir), "OnAltActivate", Type.EmptyTypes);
             Install(harmony, hooks, typeof(ShipItemRandomElixir), "OnAltActivate", Type.EmptyTypes);
             Install(harmony, hooks, typeof(ShipItemOakum), "OnAltActivate", Type.EmptyTypes);
@@ -142,6 +155,7 @@ namespace SailwindCoop.Sync
                         !InteractionContext.HasInput && !completion && !InteractionContext.Suppressed) { run = false; return; }
                 }
                 var type = __originalMethod.DeclaringType;
+                bool chopping = name == "ChopItem";
                 ShipItem first = null, second = null;
                 // These vanilla methods mutate only the receiver, their explicit item argument,
                 // and (for cutting) the newly created items tracked by the scope.
@@ -163,13 +177,29 @@ namespace SailwindCoop.Sync
                     first = __instance as ShipItem;
                     second = (__args[0] as FoodState)?.GetComponent<ShipItem>();
                 }
+                else if (chopping)
+                {
+                    first = __args[0] as ShipItem;
+                    // Unity defers destruction until end of frame. The host can still see the
+                    // target here after applying a guest's operation in Update.
+                    var items = ItemSync.Instance;
+                    if (items?.IsOperationDestroying(first) == true || items?.IsPendingChopTarget(first) == true)
+                    { run = false; return; }
+                    if (InteractionContext.HasInput && !InteractionContext.Suppressed && items?.IsAwaitingChopIdentity(first) == true)
+                    {
+                        run = false;
+                        NotificationUi.instance?.ShowNotification("Waiting for this item to sync.");
+                        return;
+                    }
+                }
                 else if (name == "CutPack" || name == "Drink" || name == "EatFood" || name == "FinishCast" ||
                     ((type == typeof(ShipItemLight) || type == typeof(ShipItemOakum) ||
                       type == typeof(ShipItemElixir) || type == typeof(ShipItemRandomElixir)) && name == "OnAltActivate"))
                     first = __instance as ShipItem;
 
                 state = ItemOperationCapture.Begin(type.Name + "." + name,
-                    type == typeof(ShipItemKnife) || type == typeof(ShipItemTobaccoPack), completion, first, second);
+                    type == typeof(ShipItemKnife) || type == typeof(ShipItemTobaccoPack) || chopping,
+                    completion, first, second, requiresTarget: chopping);
             }, Report);
             __state = state;
             return run;
@@ -216,7 +246,7 @@ namespace SailwindCoop.Sync
             if (float.IsNaN(__state) || __instance == null || __state.Equals(__instance.currentWater)) return;
             PatchGuard.Run(() => ItemSync.Instance?.NotifyDrain(__instance), Report);
         }
-        private static void PreDestroy(ShipItem __instance) => PatchGuard.Run(() => ItemOperationCapture.Consumed(__instance), Report);
+        private static bool PreDestroy(ShipItem __instance) => PatchGuard.Prefix(() => ItemOperationCapture.Consume(__instance), Report);
         private static void PostRainbow() => PatchGuard.Run(ItemOperationCapture.RainbowEffect, Report);
     }
 }

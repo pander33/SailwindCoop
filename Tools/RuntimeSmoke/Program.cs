@@ -622,7 +622,7 @@ internal static class Program
                 }
                 finally { _fixtureClient = false; harmony.UnpatchSelf(); }
             });
-            Test("installed game matches all 96 types and 185 declared input signatures", VerifyGameInputCatalog);
+            Test("installed game matches all 97 types and 187 declared input signatures", VerifyGameInputCatalog);
             Test("installed game sleep and item actions use the catalogued overloads", VerifyGameActionEntries);
             Test("installed game recipe/component fields match typed adapters", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
@@ -851,7 +851,7 @@ internal static class Program
                     Assert(types["Shipyard"].Methods.Single(m => m.Name == "ConfirmOrder").Body.Instructions.Any(i => i.Operand is MethodReference method && method.Name == "CleanFully"), "confirmed cleaning domain entry changed");
                 }
             });
-            Test("Sailwind 0.41 exposes hull paint, extra dirt, automatic mooring and floating spawns", () => {
+            Test("Sailwind 0.41.1 exposes hull paint, extra dirt, automatic mooring and floating spawns", () => {
                 using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
                 {
                     var types = game.MainModule.Types.ToDictionary(t => t.Name);
@@ -864,6 +864,12 @@ internal static class Program
                         i.Operand is MethodReference method && method.Name == "ThrowRopeSequence"), "native auto-moor path changed");
                     Assert(rope.Methods.Any(m => m.Name == "ThrowRopeSequenceLocal" && m.Parameters.Count == 1 &&
                         m.Parameters[0].ParameterType.Name == "Vector3"), "local rope return signature changed");
+                    Assert(rope.Methods.Single(m => m.Name == "OnPickup").Body.Instructions.Any(i =>
+                        i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld && i.Operand is FieldReference field &&
+                        field.Name == "justUnmoored" && field.FieldType.Name == "Boolean") &&
+                        rope.Methods.Single(m => m.Name == "OnDrop").Body.Instructions.Any(i =>
+                            i.OpCode.Code == Mono.Cecil.Cil.Code.Ldfld && i.Operand is FieldReference field && field.Name == "justUnmoored"),
+                        "freshly untied rope flag changed");
                     var spawner = types["RandomFloatingItemSpawner"];
                     Assert(spawner.Methods.Any(m => m.Name == "Update" &&
                         m.Parameters.Count == 0 && m.HasBody), "random spawner hook changed");
@@ -871,9 +877,24 @@ internal static class Program
                     Assert(spawn.Any(i => i.OpCode.Code == Mono.Cecil.Cil.Code.Stfld &&
                         i.Operand is FieldReference field && field.Name == "farLod" && field.DeclaringType.Name == "ShipItem"),
                         "floating spawns no longer identify themselves via farLod");
-                    Assert(!spawn.Concat(types["Good"].Methods.Single(m => m.Name == "RegisterAsMissionless").Body.Instructions)
+                    Assert(spawn
                         .Any(i => i.Operand is MethodReference method && method.Name == "RegisterToSave"),
-                        "re-audit floating registration: the game now registers these items itself");
+                        "re-audit floating registration: the spawner no longer registers these items itself");
+                }
+            });
+            Test("installed hatchet completes through ChopItem and registers firewood before consuming its target", () => {
+                using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
+                {
+                    var axe = game.MainModule.Types.Single(t => t.Name == "ShipItemAxe");
+                    var chop = axe.Methods.Single(m => m.Name == "ChopItem");
+                    Assert(chop.Parameters.Count == 1 && chop.Parameters[0].ParameterType.Name == "ShipItem",
+                        "hatchet result hook signature changed");
+                    Assert(axe.Methods.Single(m => m.Name == "OnAltHeld").Body.Instructions.Any(i =>
+                        i.Operand is MethodReference method && method.Name == "ChopItem"), "held hatchet no longer calls ChopItem");
+                    var calls = chop.Body.Instructions.Select(i => i.Operand as MethodReference)
+                        .Where(m => m != null).Select(m => m.Name).ToList();
+                    int register = calls.IndexOf("RegisterToSave");
+                    Assert(register >= 0 && calls.IndexOf("DestroyItem") > register, "hatchet create/consume sequence changed");
                 }
             });
             Test("transform timeline replaces a same-tick final result including its first sample", () => {
@@ -1396,7 +1417,7 @@ internal static class Program
                 }
             }
             Assert(actual.SetEquals(InteractionActionCatalog.Types), "type inventory differs from installed game");
-            Assert(actual.Count == 96 && InteractionActionCatalog.Inputs.Length == 185, "audited baseline changed");
+            Assert(actual.Count == 97 && InteractionActionCatalog.Inputs.Length == 187, "audited baseline changed");
             foreach (var input in InteractionActionCatalog.Inputs)
                 Assert(Declares(types[input.TypeName], input), input.TypeName + "." + input.Method + " signature absent");
         }
@@ -1407,9 +1428,9 @@ internal static class Program
         using (var game = AssemblyDefinition.ReadAssembly(GameAssemblyPath()))
         {
             var types = game.MainModule.Types.ToDictionary(t => t.FullName);
-            Assert(ItemActionCatalog.Routes.Length == 30 &&
-                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltHeld" && r.Input.Parameters.Length == 0) == 9 &&
-                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltActivate" && r.Input.Parameters.Length == 0) == 19,
+            Assert(ItemActionCatalog.Routes.Length == 32 &&
+                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltHeld" && r.Input.Parameters.Length == 0) == 10 &&
+                ItemActionCatalog.Routes.Count(r => r.Input.Method == "OnAltActivate" && r.Input.Parameters.Length == 0) == 20,
                 "held/alt catalog incomplete");
             foreach (var route in ItemActionCatalog.Routes)
                 Assert(Declares(types[route.Input.TypeName], route.Input), route.Input.TypeName + " action signature absent");
